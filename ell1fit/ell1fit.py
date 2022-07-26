@@ -443,7 +443,7 @@ def safe_run_sampler(
     outroot="chain_results",
     labels=None,
     corner_labels=None,
-    n_autocorr=50,
+    n_autocorr=200,
 ):
 
     # https://emcee.readthedocs.io/en/stable/tutorials/monitor/?highlight=run_mcmc#saving-monitoring-progress
