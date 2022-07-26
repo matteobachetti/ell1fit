@@ -1,0 +1,994 @@
+from urllib.request import HTTPPasswordMgrWithDefaultRealm
+import warnings
+
+# mpl.use('Agg')
+import os
+import copy
+import matplotlib.pyplot as plt
+import numpy as np
+from hendrics.io import load_events
+from pint.models import get_model
+
+from hendrics.efsearch import _fast_phase_fdot, _fast_phase_fddot
+import matplotlib as mpl
+
+from scipy.interpolate import interp1d
+
+import emcee
+import corner
+from numba import njit, vectorize, int64, float32, float64, prange
+from astropy.table import Table
+import astropy.units as u
+from astropy.time import Time
+from scipy.ndimage import gaussian_filter
+from scipy.optimize import minimize
+
+from numpy.fft import ifft, fft, fftfreq
+
+import matplotlib as mpl
+params = {
+    'font.size': 7,
+    'xtick.major.size': 0,
+    'xtick.minor.size': 0,
+    'xtick.major.width': 0,
+    'xtick.minor.width': 0,
+    'ytick.major.size': 0,
+    'ytick.minor.size': 0,
+    'ytick.major.width': 0,
+    'ytick.minor.width': 0,
+    'figure.figsize': (6, 4),
+    "axes.grid" : True,
+    "grid.color": "grey",
+    "grid.linewidth": 0.3,
+    "grid.linestyle": ":",
+    "axes.grid.axis": "y",
+    "axes.grid.which": "both",
+    "axes.axisbelow": False,
+    'axes.labelsize': 8,
+    'xtick.labelsize': 8,
+    'ytick.labelsize': 8,
+    'legend.fontsize': 8,
+    'legend.title_fontsize': 8,
+    'figure.dpi': 300,  # the left side of the subplots of the figure
+    'figure.subplot.left': 0.195,  # the left side of the subplots of the figure
+    'figure.subplot.right': 0.97,   # the right side of the subplots of the figure
+    'figure.subplot.bottom': 0.145,   # the bottom of the subplots of the figure
+    'figure.subplot.top': 0.97,   # the top of the subplots of the figure
+    'figure.subplot.wspace': 0.2,    # the amount of width reserved for space between subplots,
+                                   # expressed as a fraction of the average axis width
+    'figure.subplot.hspace': 0.2,    # the amount of height reserved for space between subplots,
+                               # expressed as a fraction of the average axis height
+}
+mpl.rcParams.update(params)
+
+
+@njit
+def interp_nb(x_vals, x, y):
+    return np.interp(x_vals, x, y)
+
+
+def normalize_dyn_profile(dynprof, norm):
+    """Normalize a dynamical profile (e.g. a phaseogram).
+
+    Parameters
+    ----------
+    dynprof : np.ndarray
+        The dynamical profile has to be a 2d array structured as:
+        `dynprof = [profile0, profile1, profile2, ...]`
+        where each `profileX` is a pulse profile.
+    norm : str
+        The chosen normalization. If it ends with `_smooth`, a
+        simple Gaussian smoothing is applied to the image.
+        Besides the smoothing string, the options are:
+        1. to1: make each profile normalized between 0 and 1
+        2. std: subtract the mean and divide by standard deviation
+            in each row
+        3. ratios: divide by the average profile (particularly
+            useful in energy vs phase plots)
+        4. mediansub, meansub: just subtract the median or the mean
+            from each profile
+        5. mediannorm, meannorm: subtract the median or the norm
+            and divide by it to get fractional amplitude
+
+    Examples
+    --------
+    >>> hist = [[1, 2], [2, 3], [3, 4]]
+    >>> hnorm = normalize_dyn_profile(hist, "meansub")
+    >>> np.allclose(hnorm[0], [-0.5, 0.5])
+    True
+    >>> hnorm = normalize_dyn_profile(hist, "meannorm")
+    >>> np.allclose(hnorm[0], [-1/3, 1/3])
+    True
+    >>> hnorm = normalize_dyn_profile(hist, "ratios")
+    >>> np.allclose(hnorm[1], [1, 1])
+    True
+    """
+    dynprof = np.array(dynprof, dtype=float)
+
+    if norm is None:
+        norm = ""
+
+    if norm.endswith("_smooth"):
+        dynprof = gaussian_filter(dynprof, 1, mode=("constant", "wrap"))
+        norm = norm.replace("_smooth", "")
+
+    if norm.startswith("median"):
+        y_mean = np.median(dynprof, axis=1)
+        prof_mean = np.median(dynprof, axis=0)
+        norm = norm.replace("median", "")
+    else:
+        y_mean = np.mean(dynprof, axis=1)
+        prof_mean = np.mean(dynprof, axis=0)
+        norm = norm.replace("mean", "")
+
+    if "ratios" in norm:
+        dynprof /= prof_mean[np.newaxis, :]
+        norm = norm.replace("ratios", "")
+        y_mean = np.mean(dynprof, axis=1)
+
+    y_min = np.min(dynprof, axis=1)
+    y_max = np.max(dynprof, axis=1)
+    y_std = np.std(np.diff(dynprof, axis=0)) / np.sqrt(2)
+
+    if norm in ("", "none"):
+        pass
+    elif norm == "to1":
+        dynprof -= y_min[:, np.newaxis]
+        dynprof /= (y_max - y_min)[:, np.newaxis]
+    elif norm == "std":
+        dynprof -= y_mean[:, np.newaxis]
+        dynprof /= y_std
+    elif norm == "sub":
+        dynprof -= y_mean[:, np.newaxis]
+    elif norm == "norm":
+        dynprof -= y_mean[:, np.newaxis]
+        dynprof /= y_mean[:, np.newaxis]
+    else:
+        warnings.warn(f"Profile normalization {norm} not known. Using default")
+    return dynprof
+
+
+@vectorize([(int64,), (float32,), (float64,)])
+def phases_from_zero_to_one(phase):
+    """Normalize pulse phases from 0 to 1
+
+    Examples
+    --------
+    >>> phases_from_zero_to_one(0.1)
+    0.1
+    >>> phases_from_zero_to_one(-0.9)
+    0.1
+    >>> phases_from_zero_to_one(0.9)
+    0.9
+    >>> phases_from_zero_to_one(3.1)
+    0.1
+    >>> assert np.allclose(phases_from_zero_to_one([0.1, 3.1, -0.9]), 0.1)
+    True
+    """
+    while phase > 1:
+        phase -= 1.0
+    while phase <= 0:
+        phase += 1
+    return phase
+
+
+@vectorize([(int64,), (float32,), (float64,)])
+def phases_around_zero(phase):
+    """Normalize pulse phases from -0.5 to 0.5
+
+    Examples
+    --------
+    >>> phases_around_zero(0.6)
+    -0.4
+    >>> phases_around_zero(-0.9)
+    0.1
+    >>> phases_around_zero(3.9)
+    -0.1
+    >>> assert np.allclose(phases_from_zero_to_one([0.6, -0.4]), -0.4)
+    True
+    """
+    ph = phase
+    while ph >= 0.5:
+        ph -= 1.0
+    while ph < -0.5:
+        ph += 1.0
+    return ph
+
+
+def create_template_from_profile_harm(
+    profile,
+    imagefile="template.png",
+    nharm=None,
+    final_nbin=None,
+):
+    """
+    Parameters
+    ----------
+    phase: :class:`np.array`
+    profile: :class:`np.array`
+    imagefile: str
+    final_nbin: int
+    Returns
+    -------
+    template: :class:`np.array`
+        The calculated template
+    additional_phase: float
+    Examples
+    --------
+    >>> phase = np.arange(0.005, 1, 0.01)
+    >>> profile = np.cos(2 * np.pi * phase)
+    >>> profile_err = profile * 0
+    >>> template, additional_phase = create_template_from_profile_harm(
+    ...     profile)
+    ...
+    >>> np.allclose(template, profile, atol=0.001)
+    True
+    """
+    import matplotlib.pyplot as plt
+
+    nbin = profile.size
+    prof = np.concatenate((profile, profile, profile))
+    dph = 1 / profile.size
+    ft = fft(prof)
+    freq = fftfreq(prof.size, dph)
+
+    if nharm is None:
+        nharm = max(1, int(prof.size / 16))
+
+    if final_nbin is None:
+        final_nbin = nbin
+
+    if nharm == 1:
+        additional_phase = -np.angle(ft[3]) / 2 / np.pi
+        B = np.mean(profile)
+        A = np.abs(ft[3]) / prof.size * 2 / B
+        # np.abs(np.fft.fft(sine(x, a, b, ph + 0.7)))[1] / x.size * 2
+        template_func = lambda x: B * (1 + A * np.cos(2 * np.pi * x))
+    else:
+        oversample_factor = 10
+        dph_fine = 1 / final_nbin / oversample_factor
+        new_ft_fine = np.zeros(final_nbin * 3 * oversample_factor, dtype=complex)
+        new_ft_freq = fftfreq(final_nbin * 3 * oversample_factor, dph_fine)
+
+        new_ft_fine[np.abs(new_ft_freq) <= nharm] = ft[np.abs(freq) <= nharm]
+
+        template_fine = ifft(new_ft_fine).real * oversample_factor * final_nbin / nbin
+
+        phases_fine = np.arange(0.5 * dph_fine, 3, dph_fine)
+        # print(template_fine.size, phases_fine.size)
+
+        templ_func_fine = interp1d(phases_fine, template_fine, kind="cubic", assume_sorted=True)
+
+        additional_phase = np.argmax(template_fine[:final_nbin * oversample_factor]) / final_nbin / oversample_factor + dph_fine / 2
+        # phases_fine += 0.5 * dph_fine
+        template_func = lambda x: templ_func_fine(1 + x + additional_phase)
+        # print(additional_phase)
+
+    dph = 1 / final_nbin
+    phas = np.arange(dph / 2, 1, dph)
+
+    template = template_func(phas)
+
+    additional_phase = phases_around_zero(additional_phase)
+    template = template[:final_nbin].real
+
+    fig = plt.figure()
+    plt.plot(np.arange(0.5 / nbin, 1, 1 / nbin), profile, drawstyle="steps-mid", label="data")
+    # plt.plot(phases_fine, template_fine, label="template fine")
+    plt.plot(phas[:final_nbin], template, label="template values", ls="--", lw=2)
+    plt.plot(phas[:final_nbin], template_func(phas[:final_nbin]), label="template func", ls=":", lw=2)
+    plt.plot(phas[:final_nbin], template_func(phas[:final_nbin] - additional_phase), label="template aligned", lw=3)
+    plt.axvline(phases_from_zero_to_one(additional_phase))
+    plt.legend
+    plt.savefig(imagefile)
+    plt.close(fig)
+    return template * final_nbin / nbin, additional_phase
+
+
+def likelihood(phases, template_func, weights=None):
+    probs = template_func(phases)
+    if weights is None:
+        return np.log(probs).sum()
+    else:
+        return np.log(weights * probs + 1.0 - weights).sum()
+
+
+def get_template_func(template):
+    """Get a cubic interpolation function of a pulse template.
+
+    Parameters
+    ----------
+    template : array-like
+        The input template profile
+
+    Returns
+    -------
+    template_fun : function
+        This function accepts pulse phases (even not distributed
+        between 0 and 1) and returns the corresponding interpolated
+        value of the pulse profile)
+    """
+    dph = 1 / template.size
+    phases = np.linspace(0, 1, template.size + 1) + dph / 2
+
+    allph = np.concatenate(([-dph / 2], phases))
+    allt = np.concatenate((template[-1:], template, template[:1]))
+    allt /= np.sum(template) * dph
+
+    template_interp = interp1d(allph, allt, kind="cubic")
+
+    def template_fun(x):
+        ph = x - np.floor(x)
+        return template_interp(ph)
+
+    return template_fun
+
+
+@njit(fastmath=True, parallel=True)
+def simple_circular_deorbit_numba(times, PB, A1, TASC, tolerance=1e-8):
+    twopi = 2 * np.pi
+    omega = twopi / PB
+    out_times = np.empty_like(times)
+    for i in prange(times.size):
+        old_out = 0
+        t = times[i] - TASC
+        out_times[i] = t - A1 * np.sin(omega * t)
+        while np.abs(out_times[i] - old_out) > tolerance:
+            old_out = out_times[i]
+            out_times[i] = t - A1 * np.sin(omega * out_times[i])
+        out_times[i] += TASC
+
+        # out_times[i] = times[i] - A1 * np.sin(omega * (out_times[i] - TASC))
+    return out_times
+
+
+def add_circular_orbit_numba(times, PB, A1, TASC):
+    twopi = 2 * np.pi
+    omega = twopi / PB
+    return times + A1 * np.sin(omega * (times - TASC))
+
+
+@njit(fastmath=True, parallel=True)
+def simple_ell1_deorbit_numba(times, PB, A1, TASC, EPS1, EPS2, tolerance=1e-8):
+    twopi = 2 * np.pi
+    omega = twopi / PB
+    out_times = np.empty_like(times)
+    k1 = EPS1 / 2
+    k2 = EPS2 / 2
+    for i in prange(times.size):
+        old_out = 0
+        t = times[i] - TASC
+        out_times[i] = t - A1 * np.sin(omega * t)
+        while np.abs(out_times[i] - old_out) > tolerance:
+            old_out = out_times[i]
+            phase = omega * out_times[i]
+            twophase = 2 * phase
+            out_times[i] = t - A1 * (np.sin(phase) + k1 * np.sin(twophase) + k2 * np.cos(twophase))
+        out_times[i] += TASC
+
+        # out_times[i] = times[i] - A1 * np.sin(omega * (out_times[i] - TASC))
+    return out_times
+
+
+def add_ell1_orbit_numba(times, PB, A1, TASC, EPS1, EPS2):
+    twopi = 2 * np.pi
+    omega = twopi / PB
+    phase = omega * (times - TASC)
+    twophase = 2 * phase
+    k1 = EPS1 / 2
+    k2 = EPS2 / 2
+    return times + A1 * (np.sin(phase) + k1 * np.sin(twophase) + k2 * np.cos(twophase))
+
+
+def calculate_result_array_from_samples(sampler, labels):
+    tau = sampler.get_autocorr_time(quiet=True)
+    maxtau = np.max(tau)
+    burnin = int(2 * maxtau)
+    thin = int(0.5 * maxtau)
+    flat_samples = sampler.get_chain(discard=burnin, flat=True, thin=thin)
+    log_prob_samples = sampler.get_log_prob(discard=burnin, flat=True, thin=thin)
+    # log_prior_samples = sampler.get_blobs(discard=burnin, flat=True, thin=thin)
+    print("burn-in: {0}".format(burnin))
+    print("thin: {0}".format(thin))
+    print("flat chain shape: {0}".format(flat_samples.shape))
+    print("flat log prob shape: {0}".format(log_prob_samples.shape))
+    # print("flat log prior shape: {0}".format(log_prior_samples.shape))
+
+    result_dict = {}
+    ndim = flat_samples.shape[1]
+    percs = [1, 10, 16, 50, 84, 90, 99]
+    for i in range(ndim):
+        mcmc = np.percentile(flat_samples[:, i], percs)
+        for i_p, p in enumerate(percs):
+            result_dict[labels[i] + f"_{p:g}"] = mcmc[i_p]
+
+    result_dict["date"] = Time.now()
+    result_dict["nsamples"] = flat_samples.shape[0]
+    result_dict["maxtau"] = maxtau
+    result_dict["burnin"] = maxtau
+    result_dict["thin"] = maxtau
+
+    return result_dict, flat_samples
+
+
+def safe_run_sampler(
+    func_to_maximize,
+    starting_pars,
+    max_n=100_000,
+    outroot="chain_results",
+    labels=None,
+    corner_labels=None,
+    n_autocorr=50,
+):
+
+    # https://emcee.readthedocs.io/en/stable/tutorials/monitor/?highlight=run_mcmc#saving-monitoring-progress
+    # We'll track how the average autocorrelation time estimate changes
+
+    if labels is None:
+        labels = list(map(r"$\theta_{{{0}}}$".format, range(1, ndim + 1)))
+    if corner_labels is None:
+        corner_labels = list(map(r"$\theta_{{{0}}}$".format, range(1, ndim + 1)))
+
+    starting_pars = np.asarray(starting_pars)
+    backend_filename = outroot + ".h5"
+    backend = emcee.backends.HDFBackend(backend_filename)
+    initial_size = 0
+    if os.path.exists(backend_filename):
+        initial_size = backend.iteration
+
+    ndim = len(starting_pars)
+    print("Initial size: {0}".format(initial_size))
+    # backend.reset(nwalkers, ndim)
+    if initial_size < 100:
+        print("Starting from zero")
+        pos = np.array(starting_pars) + np.random.normal(
+            np.zeros((32, starting_pars.size)), 1e-5
+        )
+        nwalkers, ndim = pos.shape
+        backend.reset(nwalkers, ndim)
+    elif initial_size < max_n:
+        print("Starting from where we left")
+        reader = emcee.backends.HDFBackend(backend_filename)
+        samples = reader.get_chain(discard=initial_size // 2, flat=True)
+        pos = np.array(starting_pars) + np.zeros((32, starting_pars.size))
+
+        for i in range(ndim):
+            mcmc = np.percentile(samples[:, i], [16, 50, 84])
+            q = np.diff(mcmc)
+            # print(labels[i], mcmc[1], q[0], q[1])
+            delta = abs(q[1] - q[0]) / 2
+            pos[:, i] += np.random.normal(pos[:, i], delta)
+        nwalkers, ndim = pos.shape
+
+        max_n = max_n - initial_size
+    else:
+        print("Nothing to be done here")
+        return
+
+    # Initialize the sampler
+    sampler = emcee.EnsembleSampler(nwalkers, ndim, func_to_maximize, backend=backend)
+
+    index = 0
+    autocorr = np.empty(max_n)
+
+    # This will be useful to testing convergence
+    old_tau = np.inf
+
+    # Now we'll sample for up to max_n steps
+    for sample in sampler.sample(pos, iterations=max_n, progress=True):
+        # Only check convergence every 100 steps
+        if sampler.iteration % 100:
+            continue
+
+        # Compute the autocorrelation time so far
+        # Using tol=0 means that we'll always get an estimate even
+        # if it isn't trustworthy
+        tau = sampler.get_autocorr_time(tol=0)
+        autocorr[index] = np.mean(tau)
+        index += 1
+
+        # Check convergence
+        converged = np.all(tau * n_autocorr < sampler.iteration)
+        converged &= np.all(np.abs(old_tau - tau) / tau < 0.01)
+        if converged:
+            break
+        old_tau = tau
+
+    result_dict, flat_samples = calculate_result_array_from_samples(sampler, labels)
+
+    fig = corner.corner(flat_samples, labels=corner_labels, quantiles=[0.16, 0.5, 0.84])
+    fig.savefig(outroot + "_corner.jpg", dpi=300)
+
+    return result_dict
+
+
+def renormalize_results(results, name, result_name, mean, factor):
+    """
+
+    Examples
+    --------
+    >>> results = {"Bu0_mean": 0, "Bu0_ne": 0.1, "Bu0_pe": 0.2}
+    >>> mean = 13
+    >>> factor = 10
+    >>> res = renormalize_results(results, "Bu1", "Bu0", mean, factor)
+    >>> np.isclose(res["Bu1"], 13)
+    True
+    >>> np.isclose(res["Bu1_ne"], 1)
+    True
+    >>> np.isclose(res["Bu1_pe"], 2)
+    True
+    """
+    value = results[result_name + "_mean"]
+    error_n = results[result_name + "_ne"]
+    error_p = results[result_name + "_pe"]
+
+    results[name] = value * factor + mean
+    results[name + "_ne"] = error_n * factor
+    results[name + "_pe"] = error_p * factor
+
+    return results
+
+
+def _plot_phaseogram(phases, times, ax0, ax1, norm="meansub_smooth"):
+    ph = np.concatenate((phases, phases + 1)).astype(float)
+    tm = np.concatenate((times, times)).astype(float) / 86400
+
+    nbin = 32
+    bins=np.linspace(0, 2, nbin+1)
+    prof, _ = np.histogram(ph, bins=bins)
+
+    ax0.plot(bins[:-1] + 0.5/nbin, prof, color="k", alpha=0.5)
+    for num in (0.5, 1, 1.5):
+        ax1.axvline(num, color="grey", lw=2, ls="--")
+    H, xedges, yedges = np.histogram2d(ph, tm, bins=(bins, nbin))
+    X, Y = np.meshgrid(xedges, yedges)
+    H = normalize_dyn_profile(H.T, norm)
+    ax1.pcolormesh(X, Y, H, cmap="cubehelix")
+    for num in (0.5, 1, 1.5):
+        ax1.axvline(num, color="grey", lw=2, ls="--")
+
+    ax1.set_xlabel("Phase")
+    ax1.set_ylabel("Time from pepoch (d)")
+    ax1.set_xlim([0, 2])
+
+
+def _compare_phaseograms(phase1, phase2, times, fname):
+    fig = plt.figure(figsize=(10, 10))
+    gs = plt.GridSpec(2, 2, height_ratios=(1, 3))
+    ax00 = plt.subplot(gs[0, 0])
+    ax10 = plt.subplot(gs[1, 0], sharex=ax00)
+    ax01 = plt.subplot(gs[0, 1], sharey=ax00)
+    ax11 = plt.subplot(gs[1, 1], sharex=ax01, sharey=ax10)
+
+    _plot_phaseogram(phases_from_zero_to_one(phase1), times, ax00, ax10)
+    _plot_phaseogram(phases_from_zero_to_one(phase2), times, ax01, ax11)
+
+    plt.savefig(fname)
+    plt.close(fig)
+
+
+def _list_zoom_factors(input_fit_par_labels, zoom):
+    factors = []
+    for par in input_fit_par_labels:
+        if zoom is not None and par in zoom:
+            factors.append(zoom[par])
+        else:
+            factors.append(1)
+    return factors
+
+
+def _mjd_to_sec(mjd, mjdref):
+    return ((mjd - mjdref) * 86400).astype(float)
+
+
+def _sec_to_mjd(met, mjdref):
+    return met / 86400 + mjdref
+
+
+@njit(parallel=True)
+def _fast_phase(times, frequency_derivatives):
+    if len(frequency_derivatives) == 1:
+        return times / frequency_derivatives[0]
+
+    fact = 1
+    n = 0
+    ph = np.zeros_like(times)
+
+    t_pow = np.ones_like(times)
+
+    for f in frequency_derivatives:
+        t_pow *= times
+        n += 1
+        fact *= n
+        ph += 1 / fact * t_pow * f
+
+    return ph
+
+
+def fast_phase(times, frequency_derivatives):
+    """
+    Calculate pulse phase from the frequency and its derivatives.
+
+    Parameters
+    ----------
+    times : array of floats
+        The times at which the phase is calculated
+    *frequency_derivatives: floats
+        List of derivatives in increasing order, starting from zero.
+
+    Returns
+    -------
+    phases : array of floats
+        The absolute pulse phase
+
+    Examples
+    --------
+    >>> from stingray.pulse import pulse_phase
+    >>> times = np.random.uniform(0, 1000, 100)
+    >>> ph1 = fast_phase(times, [0.2123, 1e-5, 1e-9])
+    >>> ph2 = pulse_phase(times, 0.2123, 1e-5, 1e-9, ph0=0, to_1=False)
+    >>> np.allclose(ph1, ph2)
+    True
+    """
+    return _fast_phase(times, np.array(frequency_derivatives))
+
+
+def folded_profile(times, parameters):
+    phases = _calculate_phases(times, parameters)
+    profile, _ = np.histogram(phases, bins=np.linspace(0, 1, nharm * 8 + 1))
+    return profile
+
+
+def _calculate_phases(times_from_pepoch, pars_dict):
+    deorbit_times_from_pepoch = simple_ell1_deorbit_numba(
+        times_from_pepoch, pars_dict["PB"], pars_dict["A1"], pars_dict["TASC"], pars_dict["EPS1"], pars_dict["EPS2"]
+    )
+
+    freq_ders = []
+    count = 0
+    while hasattr(pars_dict, f"F{count}"):
+        freq_ders.append(pars_dict[f"F{count}"])
+        count += 1
+
+    phases = pars_dict["Phase"] + fast_phase(
+            deorbit_times_from_pepoch.astype(float), freq_ders
+        )
+
+    return phases_from_zero_to_one(phases)
+
+
+def _get_par_dict(model):
+    parameters = {
+        "Phase": 0,
+        "PB": model.PB.value.astype(float) * 86400,
+        "TASC": _mjd_to_sec(model.TASC.value, model.PEPOCH.value),
+        "A1": model.A1.value.astype(float),
+        "EPS1": model.EPS1.value.astype(float),
+        "EPS2": model.EPS2.value.astype(float),
+    }
+
+    count = 0
+    while hasattr(model, f"F{count}"):
+        parameters[f"F{count}"] = getattr(model, f"F{count}").value.astype(float)
+        count += 1
+    return parameters
+
+
+def _load_and_format_events(event_file, energy_range, pepoch, plotlc=True):
+    events = load_events(event_file)
+    if plotlc:
+        lc = events.to_lc(100)
+
+        fig = plt.figure("LC", figsize=(3.5, 2.65))
+        plt.plot(_sec_to_mjd(lc.time, events.mjdref), lc.counts / lc.dt)
+        GTI = _sec_to_mjd(events.gti, events.mjdref)
+        for g0, g1 in zip(GTI[:, 1], GTI[:, 0]):
+            plt.axvspan(g0, g1, color="r", alpha=0.5)
+        plt.xlabel("MJD")
+        plt.ylabel("Count rate")
+        plt.savefig(event_file.replace(".nc", "") + "_lightcurve.jpg")
+        plt.close(fig)
+
+    events.filter_energy_range(energy_range, inplace=True)
+    mjdref = events.mjdref
+    pepoch_met = _mjd_to_sec(pepoch, mjdref)
+    times_from_pepoch = (events.time - pepoch_met).astype(float)
+    return times_from_pepoch
+
+
+def optimize_solution(
+    times_from_pepoch, parameter_names, values, bounds, factors, template_func, nsteps=1000, minimize_first=False, nharm=1, outroot="out"
+):
+
+    final_results_file = outroot + "_results.hdf5"
+    if os.path.exists(final_results_file):
+        print("Found previous processing")
+        return Table.read(final_results_file)
+
+
+    def logprior(pars):
+        if np.any(np.isnan(pars)):
+            return -np.inf
+
+        for parname, initial, local_value, f in zip(output_fit_par_labels, input_mean_fit_pars, pars, all_factors):
+            value = local_value * f + initial
+            # Add correction for PB and TASC
+
+            if not (bounds[parname][0] < value < bounds[parname][1]):
+                print(parname, value, bounds[parname])
+                return -np.inf
+
+        return 0
+
+    def local_phases(pars):
+        allpars = copy.deepcopy(parameters)
+
+        for par, initial, value, f in zip(output_fit_par_labels, input_mean_fit_pars, pars, all_factors):
+            allpars[par] = value * f + initial
+
+        return _calculate_phases(times_from_pepoch, allpars)
+
+    def func_to_maximize(pars):
+        # print(pars)
+        phases = local_phases(pars)
+
+        ll = likelihood(phases, template_func) + logprior(pars)
+
+        return ll
+
+    def func_to_minimize(pars):
+        return -func_to_maximize(pars)
+
+    all_zeros = [0] * len(input_mean_fit_pars)
+    if minimize_first:
+        res = minimize(func_to_minimize, all_zeros)
+        fit_pars = res.x
+    else:
+        fit_pars = all_zeros
+
+    print(fit_pars)
+
+    pars_dict = copy.deepcopy(parameters)
+
+    for par, initial, value, f in zip(output_fit_par_labels, input_mean_fit_pars, fit_pars, all_factors):
+        print(par, initial, value, f)
+        pars_dict[par] = value * f + initial
+
+    phases = local_phases(fit_pars)
+
+    new_F = pars_dict["F0"]
+    rough_results = {"rough_TASC": pars_dict["TASC"] / 86400 + PEPOCH, "rough_TZRMJD": PEPOCH + (ph0 + fit_pars[0]) / new_F / 86400}
+    count = 0
+    while hasattr(model, f"F{count}"):
+        rough_results[f"rough_F{count}"] = pars_dict["F1"]
+        count += 1
+
+    _compare_phaseograms(
+        local_phases(all_zeros) - additional_phase,
+        phases_from_zero_to_one(phases),
+        times_from_pepoch,
+        fname=outroot + ".jpg"
+    )
+
+    # return
+    corner_labels = ["d" + par + f"{np.log10(fac):+g}" for (par, fac) in zip(output_fit_par_labels, all_factors)]
+
+    results = safe_run_sampler(
+        func_to_maximize,
+        fit_pars,
+        max_n=nsteps,
+        outroot=outroot,
+        labels=output_fit_par_labels,
+        corner_labels=corner_labels,
+        n_autocorr=0,
+    )
+
+    results["additional_phase"] = additional_phase
+
+    results.update(rough_results)
+
+    for par, initial, f in zip(output_fit_par_labels, input_mean_fit_pars, all_factors):
+        print(par, initial, f)
+        results[par + "_mean"] = results[par + "_50"]
+        results[par + "_initial"] = initial
+        results[par + "_factor"] = f
+
+    fit_pars = [results[par + "_50"] for par in output_fit_par_labels]
+    phases = local_phases(fit_pars)
+
+    _compare_phaseograms(
+        local_phases(all_zeros) - additional_phase,
+        phases_from_zero_to_one(phases),
+        times_from_pepoch,
+        fname=outroot + "_final.jpg"
+    )
+
+    results["Start"] = times_from_pepoch[0] / 86400 + PEPOCH
+    results["Stop"] = times_from_pepoch[-1] / 86400 + PEPOCH
+    results["PEPOCH"] = PEPOCH
+
+    results = Table(rows=[results])
+
+    results.write(final_results_file, append=True, serialized_meta=True)
+    return results
+
+
+def create_bounds(parnames):
+    bounds = []
+    for par in parnames:
+        if par.startswith("EPS"):
+            bounds.append((-1, 1))
+        else:
+            bounds.append((-np.inf, np.inf))
+    return bounds
+
+
+def order_of_magnitude(value):
+    return 10**np.int(np.log10(value))
+
+
+def get_factors(parnames, model, observation_length):
+    import re
+    freq_re = re.compile(r"^F([0-9]+)$")
+    zoom = []
+    P = model.PB.value * 86400
+    X = model.A1.value
+    F = model.F0.value
+    for par in parnames:
+        if freq_re.match(par):
+            order = int(freq_re.group(1))
+            zoom.append(1 / observation_length**(order + 1))
+        elif par == "A1":
+            zoom.append(min(1, order_of_magnitude(1 / np.pi / 2 / F)))
+        elif par == "PB":
+            dp = np.sqrt(3) / (2 * np.pi**2 * F) * P**2 / X / observation_length
+            zoom.append(min(1, order_of_magnitude(dp)))
+        else:
+            zoom.append(1)
+    return zoom
+
+
+def main(args=None):
+    """Main function called by the `ell1fit` script"""
+    import argparse
+
+    description = (
+        "Fit an ELL1 model and frequency derivatives to an X-ray "
+        "pulsar observation."
+    )
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument("files", help="List of files", nargs="+")
+    parser.add_argument("-p", "--parfile", type=str, default=None, help="Input parameter file. Must contain a simple ELL1 binary model, with no orbital derivatives, and a number of spin derivatives (F0, F1, ...). All other models will be ignored.")
+    parser.add_argument("-o", "--outroot", type=str, default=None, help="Root of output file names")
+    parser.add_argument(
+        "-N",
+        "--nharm",
+        type=int,
+        help="Number of harmonics to describe the pulse profile",
+        default=1,
+    )
+    parser.add_argument(
+        "-E",
+        "--erange",
+        nargs=2,
+        type=int
+        help="Energy range",
+        default=[3, 30],
+    )
+    parser.add_argument(
+        "--nsteps",
+        type=int,
+        help="Maximum number of MCMC steps",
+        default=100_000,
+    )
+    parser.add_arguments("-P", "--parameters", type=str, help="Comma-separated list of parameters to fit",
+    default="F0,F1")
+
+    args = parser.parse_args(args)
+    files = args.files
+    parfile = args.parfile
+    model = get_model(parfile)
+    pepoch = model.PEPOCH.value
+    if hasattr(model, "T0") or model.BINARY.value != "ELL1":
+        raise ValueError("This script wants an ELL1 model, with TASC, not T0, defined")
+
+    model.change_binary_epoch(pepoch)
+
+    nsteps = args.nsteps
+    nharm = args.nharm
+    energy_range = args.erange
+    parameters = _get_par_dict(model)
+    parameter_names = ["Phase"] + args.parameters.split(",")
+
+    for fname in files:
+        outroot = fname.replace(".nc", "")
+        times_from_pepoch = _load_and_format_events(fname, energy_range, pepoch)
+        observation_length = times_from_pepoch[-1] - times_from_pepoch[0]
+
+        bounds = create_bounds(parameter_names)
+        factors = get_factors(parameter_names, model, observation_length)
+
+        profile = folded_profile(times_from_pepoch, parameters)
+        template, additional_phase = create_template_from_profile_harm(
+            profile, nharm=nharm, final_nbin=200, imagefile=outroot + "_template.jpg"
+        )
+        template_func = get_template_func(template)
+        ph0 = phases_around_zero(additional_phase)
+        parameters["Phase"] = ph0
+
+        input_mean_fit_pars = [parameters[par] for par in parameter_names]
+        bounds[0] = (ph0 - 0.5, ph0 + 0.5)
+        print(parameter_names)
+        print(input_mean_fit_pars)
+        print(bounds)
+        print(factors)
+
+
+
+
+
+if __name__ == "__main__":
+    import sys
+
+    fname = sys.argv[1]
+    parfile = sys.argv[2]
+    nsteps=100_000
+    if len(sys.argv) > 3:
+        nsteps = int(sys.argv[3])
+
+    print(f"Processing {fname}")
+    initial_pars = {"F0": (-np.inf, np.inf), "F1": (-np.inf, np.inf), "TASC": (-np.inf, np.inf), "A1": (-np.inf, np.inf), "EPS1": (-1, 1), "EPS2": (-1, 1)}
+    zoom = {"F0": 1.e-5, "F1": 1e-12, "TASC": 1, "A1": 1e-4, "EPS1": 1e-3, "EPS2": 1e-3}
+
+    minimize_first=True
+    nharm=1
+    energy_range = [3, 30]
+    if "3010" in fname or "80002092004" in fname:
+        energy_range = [8, 30]
+        nharm=2
+    if "80002092006" in fname:
+        initial_pars["F2"] = (-np.inf, np.inf)
+        zoom["F2"] = 1e-17
+
+    results = optimize_solution(
+        fname, parfile, initial_pars, zoom=zoom, nsteps=nsteps, energy_range=energy_range, minimize_first=minimize_first,
+        nharm=2
+    )
+
+    from scinum import Number
+
+    results = results[-1]
+    eps1 = eps2 = 0
+    for par in initial_pars.keys():
+        mean = results[par + "_50"] * results[par + "_factor"] + results[par + "_initial"]
+        errp = (results[par + "_84"] - results[par + "_50"]) * results[par + "_factor"]
+        errn = (results[par + "_50"] - results[par + "_16"]) * results[par + "_factor"]
+        if np.abs(errp - errn) / errp < 0.1:
+            errp = errn
+
+        lim = np.array([results[par + "_1"], results[par + "_99"]]) * results[par + "_factor"] + results[par + "_initial"]
+
+        if par == "TASC":
+            mean = float(results["PEPOCH"] + mean / 86400)
+        elif par == "PB":
+            mean = mean / 86400
+
+        if par in ("PB", "TASC"):
+            errp = errp / 86400
+            errn = errn / 86400
+            lim = lim / 86400
+
+        additional_label = ""
+        if lim[0] < 0 and lim[1] > 0:
+            additional_label = rf"({lim[0]:g} \le {par} \le {lim[1]:g})"
+
+        meas = Number(mean, (errn, errp), additional_label)
+        meas_str = meas.str("pdg", style="latex")
+        print(par, meas_str, additional_label)
+
+        if par == "EPS1":
+            eps1_uplim = np.max(np.abs(lim))
+        if par == "EPS2":
+            eps2_uplim = np.max(np.abs(lim))
+
+    print("ECC <", np.sqrt(eps1_uplim **2 + eps2_uplim**2))
