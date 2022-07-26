@@ -17,13 +17,14 @@ from scipy.interpolate import interp1d
 import emcee
 import corner
 from numba import njit, vectorize, int64, float32, float64, prange
-from astropy.table import Table
+from astropy.table import Table, vstack
 import astropy.units as u
 from astropy.time import Time
 from scipy.ndimage import gaussian_filter
 from scipy.optimize import minimize
 
 from numpy.fft import ifft, fft, fftfreq
+from . import version
 
 import matplotlib as mpl
 params = {
@@ -60,6 +61,30 @@ params = {
                                # expressed as a fraction of the average axis height
 }
 mpl.rcParams.update(params)
+
+
+def splitext_improved(path):
+    """
+    Examples
+    --------
+    >>> np.all(splitext_improved("a.tar.gz") ==  ('a', '.tar.gz'))
+    True
+    >>> np.all(splitext_improved("a.tar") ==  ('a', '.tar'))
+    True
+    >>> np.all(splitext_improved("a.f/a.tar") ==  ('a.f/a', '.tar'))
+    True
+    >>> np.all(splitext_improved("a.a.a.f/a.tar.gz") ==  ('a.a.a.f/a', '.tar.gz'))
+    True
+    """
+    import os
+    dir, file = os.path.split(path)
+
+    if len(file.split('.')) > 2:
+        froot, ext = file.split('.')[0],'.' + '.'.join(file.split('.')[-2:])
+    else:
+        froot, ext = os.path.splitext(file)
+
+    return os.path.join(dir, froot), ext
 
 
 @njit
@@ -450,22 +475,18 @@ def safe_run_sampler(
         print("Starting from where we left")
         reader = emcee.backends.HDFBackend(backend_filename)
         samples = reader.get_chain(discard=initial_size // 2, flat=True)
-        print(samples[-1], samples.shape)
-        pos = np.array(starting_pars) + np.zeros((32, starting_pars.size))
-        print(pos.shape)
 
-        for i in range(ndim):
-            mcmc = np.percentile(samples[:, i], [16, 50, 84])
-            q = np.diff(mcmc)
-            # print(labels[i], mcmc[1], q[0], q[1])
-            delta = abs(q[1] - q[0]) / 2
-            pos[:, i] += np.random.normal(pos[:, i], delta)
+        pos = samples[-32:, :]
+
         nwalkers, ndim = pos.shape
 
         max_n = max_n - initial_size
     else:
+        reader = emcee.backends.HDFBackend(backend_filename)
+
+        result_dict, flat_samples = calculate_result_array_from_samples(reader, labels)
         print("Nothing to be done here")
-        return
+        return result_dict
 
     # Initialize the sampler
     sampler = emcee.EnsembleSampler(nwalkers, ndim, func_to_maximize, backend=backend)
@@ -731,12 +752,6 @@ def optimize_solution(
     times_from_pepoch, model_parameters, fit_parameters, values, bounds, factors, template_func, nsteps=1000, minimize_first=False, nharm=1, outroot="out"
 ):
 
-    final_results_file = outroot + "_results.hdf5"
-    if os.path.exists(final_results_file):
-        print(f"Found previous processing in {final_results_file}")
-        return Table.read(final_results_file)
-
-
     def logprior(pars):
         if np.any(np.isnan(pars)):
             return -np.inf
@@ -783,13 +798,6 @@ def optimize_solution(
         pars_dict[par] = value * f + initial
 
     phases = local_phases(fit_pars)
-
-    # new_F = pars_dict["F0"]
-    # rough_results = {"rough_TASC": pars_dict["TASC"] / 86400 + PEPOCH, "rough_TZRMJD": PEPOCH + (ph0 + fit_pars[0]) / new_F / 86400}
-    # count = 0
-    # while hasattr(model, f"F{count}"):
-    #     rough_results[f"rough_F{count}"] = pars_dict["F1"]
-    #     count += 1
 
     rough_results = {}
     for par, value, f in zip(fit_parameters, fit_pars, factors):
@@ -920,6 +928,11 @@ def main(args=None):
     model.change_binary_epoch(pepoch)
 
     outroot = args.outroot
+    if outroot is None and len(files) == 1:
+        outroot = splitext_improved(files[0])[0]
+    else:
+        outroot = "out"
+
     nsteps = args.nsteps
     nharm = args.nharm
     nbin = max(16, nharm * 8)
@@ -929,41 +942,56 @@ def main(args=None):
     parameter_names = ["Phase"] + args.parameters.split(",")
     minimize_first= args.minimize_first
 
-    rows = []
+    alltimes = []
     for fname in files:
-        times_from_pepoch = _load_and_format_events(fname, energy_range, pepoch)
-        observation_length = times_from_pepoch[-1] - times_from_pepoch[0]
+        alltimes.append(_load_and_format_events(fname, energy_range, pepoch))
 
-        bounds = create_bounds(parameter_names)
-        factors = get_factors(parameter_names, model, observation_length)
+    times_from_pepoch = np.sort(np.concatenate(alltimes))
+    observation_length = times_from_pepoch[-1] - times_from_pepoch[0]
 
-        profile = folded_profile(times_from_pepoch, parameters, nbin=nbin)
-        template, additional_phase = create_template_from_profile_harm(
-            profile, nharm=nharm, final_nbin=200, imagefile=outroot + "_template.jpg"
+    bounds = create_bounds(parameter_names)
+    factors = get_factors(parameter_names, model, observation_length)
+
+    profile = folded_profile(times_from_pepoch, parameters, nbin=nbin)
+    template, additional_phase = create_template_from_profile_harm(
+        profile, nharm=nharm, final_nbin=200, imagefile=outroot + "_template.jpg"
+    )
+    template_func = get_template_func(template)
+    ph0 = phases_around_zero(additional_phase)
+    parameters["Phase"] = ph0
+    try:
+        input_mean_fit_pars = [parameters[par] for par in parameter_names]
+    except KeyError:
+        raise ValueError("One or more parameters are missing from the parameter file")
+    bounds[0] = (ph0 - 0.5, ph0 + 0.5)
+
+    results = optimize_solution(
+            times_from_pepoch, parameters, parameter_names, input_mean_fit_pars, bounds, factors, template_func, nsteps=nsteps, minimize_first=minimize_first, nharm=nharm, outroot=outroot
         )
-        template_func = get_template_func(template)
-        ph0 = phases_around_zero(additional_phase)
-        parameters["Phase"] = ph0
-        try:
-            input_mean_fit_pars = [parameters[par] for par in parameter_names]
-        except KeyError:
-            raise ValueError("One or more parameters are missing from the parameter file")
-        bounds[0] = (ph0 - 0.5, ph0 + 0.5)
 
-        results = optimize_solution(
-                times_from_pepoch, parameters, parameter_names, input_mean_fit_pars, bounds, factors, template_func, nsteps=nsteps, minimize_first=minimize_first, nharm=nharm, outroot=outroot
-            )
+    results["Start"] = times_from_pepoch[0] / 86400 + pepoch
+    results["Stop"] = times_from_pepoch[-1] / 86400 + pepoch
+    results["PEPOCH"] = pepoch
+    results["fname"] = fname
+    results["nharm"] = nharm
+    results["emin"] = energy_range[0]
+    results["emax"] = energy_range[1]
+    results["nsteps"] = nsteps
+    results["ell1fit_version"] = version.version
+    results["nharm"] = nharm
 
-        results["Start"] = times_from_pepoch[0] / 86400 + pepoch
-        results["Stop"] = times_from_pepoch[-1] / 86400 + pepoch
-        results["PEPOCH"] = pepoch
-        results["fname"] = fname
+    results = Table(rows=[results])
 
-        rows.append(results)
+    output_file = outroot + "_results.ecsv"
 
-    results = Table(rows=rows)
+    if os.path.exists(output_file):
+        old = Table.read(output_file)
+        old.write("old_" + output_file, overwrite=True)
+        results = vstack([old, results])
 
-    results.write(outroot + "_results.hdf5", append=True, serialized_meta=True)
+    print(results)
+
+    results.write(output_file, overwrite=True)
 
 
 # if __name__ == "__main__":
