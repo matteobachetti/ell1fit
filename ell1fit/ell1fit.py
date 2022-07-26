@@ -9,7 +9,7 @@ import numpy as np
 from hendrics.io import load_events
 from pint.models import get_model
 
-from hendrics.efsearch import _fast_phase_fdot, _fast_phase_fddot
+# from hendrics.efsearch import _fast_phase_fdot, _fast_phase_fddot
 import matplotlib as mpl
 
 from scipy.interpolate import interp1d
@@ -450,7 +450,9 @@ def safe_run_sampler(
         print("Starting from where we left")
         reader = emcee.backends.HDFBackend(backend_filename)
         samples = reader.get_chain(discard=initial_size // 2, flat=True)
+        print(samples[-1], samples.shape)
         pos = np.array(starting_pars) + np.zeros((32, starting_pars.size))
+        print(pos.shape)
 
         for i in range(ndim):
             mcmc = np.percentile(samples[:, i], [16, 50, 84])
@@ -586,12 +588,34 @@ def _sec_to_mjd(met, mjdref):
 
 
 @njit(parallel=True)
-def _fast_phase(times, frequency_derivatives):
+def _fast_phase_fdot(ts, mean_f, mean_fdot=0):
+    phases = ts * mean_f + 0.5 * ts * ts * mean_fdot
+    return phases - np.floor(phases)
+
+
+ONE_SIXTH = 1 / 6
+
+
+@njit(parallel=True)
+def _fast_phase_fddot(ts, mean_f, mean_fdot=0, mean_fddot=0):
+    tssq = ts * ts
+    phases = ts * mean_f + 0.5 * tssq * mean_fdot + ONE_SIXTH * tssq * ts * mean_fddot
+    return phases - np.floor(phases)
+
+
+@njit(parallel=True)
+def _fast_phase(ts, mean_f):
+    phases = ts * mean_f
+    return phases - np.floor(phases)
+
+
+@njit(parallel=True)
+def _fast_phase_generic(times, frequency_derivatives):
     if len(frequency_derivatives) == 1:
         return times / frequency_derivatives[0]
 
-    fact = 1
-    n = 0
+    fact = 1.
+    n = 0.
     ph = np.zeros_like(times)
 
     t_pow = np.ones_like(times)
@@ -600,7 +624,7 @@ def _fast_phase(times, frequency_derivatives):
         t_pow *= times
         n += 1
         fact *= n
-        ph += 1 / fact * t_pow * f
+        ph += (1 / fact * f) * t_pow
 
     return ph
 
@@ -624,19 +648,20 @@ def fast_phase(times, frequency_derivatives):
     Examples
     --------
     >>> from stingray.pulse import pulse_phase
-    >>> times = np.random.uniform(0, 1000, 100)
-    >>> ph1 = fast_phase(times, [0.2123, 1e-5, 1e-9])
-    >>> ph2 = pulse_phase(times, 0.2123, 1e-5, 1e-9, ph0=0, to_1=False)
+    >>> times = np.random.uniform(0, 100000, 100)
+    >>> ph1 = fast_phase(times, [0.2123, 1e-5, 1e-9, 1e-15])
+    >>> ph2 = pulse_phase(times, 0.2123, 1e-5, 1e-9, 1e-15, ph0=0, to_1=False)
     >>> np.allclose(ph1, ph2)
     True
     """
-    return _fast_phase(times, np.array(frequency_derivatives))
+    if len(frequency_derivatives) == 1:
+        return _fast_phase(times, frequency_derivatives[0])
+    elif len(frequency_derivatives) == 2:
+        return _fast_phase_fdot(times, frequency_derivatives[0], frequency_derivatives[1])
+    elif len(frequency_derivatives) == 3:
+        return _fast_phase_fddot(times, frequency_derivatives[0], frequency_derivatives[1], frequency_derivatives[2])
 
-
-def folded_profile(times, parameters):
-    phases = _calculate_phases(times, parameters)
-    profile, _ = np.histogram(phases, bins=np.linspace(0, 1, nharm * 8 + 1))
-    return profile
+    return _fast_phase_generic(times, np.array(frequency_derivatives))
 
 
 def _calculate_phases(times_from_pepoch, pars_dict):
@@ -646,7 +671,7 @@ def _calculate_phases(times_from_pepoch, pars_dict):
 
     freq_ders = []
     count = 0
-    while hasattr(pars_dict, f"F{count}"):
+    while f"F{count}" in pars_dict:
         freq_ders.append(pars_dict[f"F{count}"])
         count += 1
 
@@ -655,6 +680,12 @@ def _calculate_phases(times_from_pepoch, pars_dict):
         )
 
     return phases_from_zero_to_one(phases)
+
+
+def folded_profile(times, parameters, nbin=16):
+    phases = _calculate_phases(times, parameters)
+    profile, _ = np.histogram(phases, bins=np.linspace(0, 1, nbin + 1))
+    return profile
 
 
 def _get_par_dict(model):
@@ -697,12 +728,12 @@ def _load_and_format_events(event_file, energy_range, pepoch, plotlc=True):
 
 
 def optimize_solution(
-    times_from_pepoch, parameter_names, values, bounds, factors, template_func, nsteps=1000, minimize_first=False, nharm=1, outroot="out"
+    times_from_pepoch, model_parameters, fit_parameters, values, bounds, factors, template_func, nsteps=1000, minimize_first=False, nharm=1, outroot="out"
 ):
 
     final_results_file = outroot + "_results.hdf5"
     if os.path.exists(final_results_file):
-        print("Found previous processing")
+        print(f"Found previous processing in {final_results_file}")
         return Table.read(final_results_file)
 
 
@@ -710,20 +741,20 @@ def optimize_solution(
         if np.any(np.isnan(pars)):
             return -np.inf
 
-        for parname, initial, local_value, f in zip(output_fit_par_labels, input_mean_fit_pars, pars, all_factors):
+        for parname, bound, initial, local_value, f in zip(fit_parameters, bounds, values, pars, factors):
             value = local_value * f + initial
             # Add correction for PB and TASC
 
-            if not (bounds[parname][0] < value < bounds[parname][1]):
-                print(parname, value, bounds[parname])
+            if not (bound[0] < value < bound[1]):
+                print(f"Value out of bound: {parname}={value}")
                 return -np.inf
 
         return 0
 
     def local_phases(pars):
-        allpars = copy.deepcopy(parameters)
+        allpars = copy.deepcopy(model_parameters)
 
-        for par, initial, value, f in zip(output_fit_par_labels, input_mean_fit_pars, pars, all_factors):
+        for par, initial, value, f in zip(fit_parameters, values, pars, factors):
             allpars[par] = value * f + initial
 
         return _calculate_phases(times_from_pepoch, allpars)
@@ -739,77 +770,69 @@ def optimize_solution(
     def func_to_minimize(pars):
         return -func_to_maximize(pars)
 
-    all_zeros = [0] * len(input_mean_fit_pars)
+    all_zeros = [0] * len(values)
     if minimize_first:
         res = minimize(func_to_minimize, all_zeros)
         fit_pars = res.x
     else:
         fit_pars = all_zeros
 
-    print(fit_pars)
+    pars_dict = copy.deepcopy(model_parameters)
 
-    pars_dict = copy.deepcopy(parameters)
-
-    for par, initial, value, f in zip(output_fit_par_labels, input_mean_fit_pars, fit_pars, all_factors):
-        print(par, initial, value, f)
+    for par, initial, value, f in zip(fit_parameters, values, fit_pars, factors):
         pars_dict[par] = value * f + initial
 
     phases = local_phases(fit_pars)
 
-    new_F = pars_dict["F0"]
-    rough_results = {"rough_TASC": pars_dict["TASC"] / 86400 + PEPOCH, "rough_TZRMJD": PEPOCH + (ph0 + fit_pars[0]) / new_F / 86400}
-    count = 0
-    while hasattr(model, f"F{count}"):
-        rough_results[f"rough_F{count}"] = pars_dict["F1"]
-        count += 1
+    # new_F = pars_dict["F0"]
+    # rough_results = {"rough_TASC": pars_dict["TASC"] / 86400 + PEPOCH, "rough_TZRMJD": PEPOCH + (ph0 + fit_pars[0]) / new_F / 86400}
+    # count = 0
+    # while hasattr(model, f"F{count}"):
+    #     rough_results[f"rough_F{count}"] = pars_dict["F1"]
+    #     count += 1
+
+    rough_results = {}
+    for par, value, f in zip(fit_parameters, fit_pars, factors):
+        rough_results["rough_" + par] = value
 
     _compare_phaseograms(
-        local_phases(all_zeros) - additional_phase,
+        local_phases(all_zeros) + pars_dict["Phase"],
         phases_from_zero_to_one(phases),
         times_from_pepoch,
         fname=outroot + ".jpg"
     )
 
-    # return
-    corner_labels = ["d" + par + f"{np.log10(fac):+g}" for (par, fac) in zip(output_fit_par_labels, all_factors)]
+    corner_labels = ["d" + par + f"{np.log10(fac):+g}" for (par, fac) in zip(fit_parameters, factors)]
 
     results = safe_run_sampler(
         func_to_maximize,
         fit_pars,
         max_n=nsteps,
         outroot=outroot,
-        labels=output_fit_par_labels,
+        labels=["d" + par for par in fit_parameters],
         corner_labels=corner_labels,
         n_autocorr=0,
     )
 
-    results["additional_phase"] = additional_phase
+    results["additional_phase"] = pars_dict["Phase"]
 
     results.update(rough_results)
 
-    for par, initial, f in zip(output_fit_par_labels, input_mean_fit_pars, all_factors):
-        print(par, initial, f)
-        results[par + "_mean"] = results[par + "_50"]
-        results[par + "_initial"] = initial
-        results[par + "_factor"] = f
+    for par, initial, f in zip(fit_parameters, values, factors):
+        results["d" + par + "_mean"] = results["d" + par + "_50"]
+        results["d" + par + "_initial"] = initial
+        results["d" + par + "_factor"] = f
 
-    fit_pars = [results[par + "_50"] for par in output_fit_par_labels]
+    fit_pars = [results["d" + par + "_50"] for par in fit_parameters]
     phases = local_phases(fit_pars)
 
     _compare_phaseograms(
-        local_phases(all_zeros) - additional_phase,
+        local_phases(all_zeros) + pars_dict["Phase"],
         phases_from_zero_to_one(phases),
         times_from_pepoch,
         fname=outroot + "_final.jpg"
     )
 
-    results["Start"] = times_from_pepoch[0] / 86400 + PEPOCH
-    results["Stop"] = times_from_pepoch[-1] / 86400 + PEPOCH
-    results["PEPOCH"] = PEPOCH
-
-    results = Table(rows=[results])
-
-    results.write(final_results_file, append=True, serialized_meta=True)
     return results
 
 
@@ -824,7 +847,7 @@ def create_bounds(parnames):
 
 
 def order_of_magnitude(value):
-    return 10**np.int(np.log10(value))
+    return 10**np.int(np.log10(value) - 1)
 
 
 def get_factors(parnames, model, observation_length):
@@ -835,16 +858,17 @@ def get_factors(parnames, model, observation_length):
     X = model.A1.value
     F = model.F0.value
     for par in parnames:
-        if freq_re.match(par):
-            order = int(freq_re.group(1))
-            zoom.append(1 / observation_length**(order + 1))
+        matchobj = freq_re.match(par)
+        if matchobj:
+            order = int(matchobj.group(1))
+            zoom.append(order_of_magnitude(1 / observation_length**(order + 1)))
         elif par == "A1":
             zoom.append(min(1, order_of_magnitude(1 / np.pi / 2 / F)))
         elif par == "PB":
             dp = np.sqrt(3) / (2 * np.pi**2 * F) * P**2 / X / observation_length
-            zoom.append(min(1, order_of_magnitude(dp)))
+            zoom.append(min(1., order_of_magnitude(dp)))
         else:
-            zoom.append(1)
+            zoom.append(1.)
     return zoom
 
 
@@ -871,7 +895,7 @@ def main(args=None):
         "-E",
         "--erange",
         nargs=2,
-        type=int
+        type=int,
         help="Energy range",
         default=[3, 30],
     )
@@ -881,8 +905,9 @@ def main(args=None):
         help="Maximum number of MCMC steps",
         default=100_000,
     )
-    parser.add_arguments("-P", "--parameters", type=str, help="Comma-separated list of parameters to fit",
+    parser.add_argument("-P", "--parameters", type=str, help="Comma-separated list of parameters to fit",
     default="F0,F1")
+    parser.add_argument("--minimize-first", action="store_true", default=False)
 
     args = parser.parse_args(args)
     files = args.files
@@ -894,101 +919,115 @@ def main(args=None):
 
     model.change_binary_epoch(pepoch)
 
+    outroot = args.outroot
     nsteps = args.nsteps
     nharm = args.nharm
+    nbin = max(16, nharm * 8)
+
     energy_range = args.erange
     parameters = _get_par_dict(model)
     parameter_names = ["Phase"] + args.parameters.split(",")
+    minimize_first= args.minimize_first
 
+    rows = []
     for fname in files:
-        outroot = fname.replace(".nc", "")
         times_from_pepoch = _load_and_format_events(fname, energy_range, pepoch)
         observation_length = times_from_pepoch[-1] - times_from_pepoch[0]
 
         bounds = create_bounds(parameter_names)
         factors = get_factors(parameter_names, model, observation_length)
 
-        profile = folded_profile(times_from_pepoch, parameters)
+        profile = folded_profile(times_from_pepoch, parameters, nbin=nbin)
         template, additional_phase = create_template_from_profile_harm(
             profile, nharm=nharm, final_nbin=200, imagefile=outroot + "_template.jpg"
         )
         template_func = get_template_func(template)
         ph0 = phases_around_zero(additional_phase)
         parameters["Phase"] = ph0
-
-        input_mean_fit_pars = [parameters[par] for par in parameter_names]
+        try:
+            input_mean_fit_pars = [parameters[par] for par in parameter_names]
+        except KeyError:
+            raise ValueError("One or more parameters are missing from the parameter file")
         bounds[0] = (ph0 - 0.5, ph0 + 0.5)
-        print(parameter_names)
-        print(input_mean_fit_pars)
-        print(bounds)
-        print(factors)
+
+        results = optimize_solution(
+                times_from_pepoch, parameters, parameter_names, input_mean_fit_pars, bounds, factors, template_func, nsteps=nsteps, minimize_first=minimize_first, nharm=nharm, outroot=outroot
+            )
+
+        results["Start"] = times_from_pepoch[0] / 86400 + pepoch
+        results["Stop"] = times_from_pepoch[-1] / 86400 + pepoch
+        results["PEPOCH"] = pepoch
+        results["fname"] = fname
+
+        rows.append(results)
+
+    results = Table(rows=rows)
+
+    results.write(outroot + "_results.hdf5", append=True, serialized_meta=True)
 
 
+# if __name__ == "__main__":
+#     import sys
 
+#     fname = sys.argv[1]
+#     parfile = sys.argv[2]
+#     nsteps=100_000
+#     if len(sys.argv) > 3:
+#         nsteps = int(sys.argv[3])
 
+#     print(f"Processing {fname}")
+#     initial_pars = {"F0": (-np.inf, np.inf), "F1": (-np.inf, np.inf), "TASC": (-np.inf, np.inf), "A1": (-np.inf, np.inf), "EPS1": (-1, 1), "EPS2": (-1, 1)}
+#     zoom = {"F0": 1.e-5, "F1": 1e-12, "TASC": 1, "A1": 1e-4, "EPS1": 1e-3, "EPS2": 1e-3}
 
-if __name__ == "__main__":
-    import sys
+#     minimize_first=True
+#     nharm=1
+#     energy_range = [3, 30]
+#     if "3010" in fname or "80002092004" in fname:
+#         energy_range = [8, 30]
+#         nharm=2
+#     if "80002092006" in fname:
+#         initial_pars["F2"] = (-np.inf, np.inf)
+#         zoom["F2"] = 1e-17
 
-    fname = sys.argv[1]
-    parfile = sys.argv[2]
-    nsteps=100_000
-    if len(sys.argv) > 3:
-        nsteps = int(sys.argv[3])
+#     results = optimize_solution(
+#         fname, parfile, initial_pars, zoom=zoom, nsteps=nsteps, energy_range=energy_range, minimize_first=minimize_first,
+#         nharm=2
+#     )
 
-    print(f"Processing {fname}")
-    initial_pars = {"F0": (-np.inf, np.inf), "F1": (-np.inf, np.inf), "TASC": (-np.inf, np.inf), "A1": (-np.inf, np.inf), "EPS1": (-1, 1), "EPS2": (-1, 1)}
-    zoom = {"F0": 1.e-5, "F1": 1e-12, "TASC": 1, "A1": 1e-4, "EPS1": 1e-3, "EPS2": 1e-3}
+#     from scinum import Number
 
-    minimize_first=True
-    nharm=1
-    energy_range = [3, 30]
-    if "3010" in fname or "80002092004" in fname:
-        energy_range = [8, 30]
-        nharm=2
-    if "80002092006" in fname:
-        initial_pars["F2"] = (-np.inf, np.inf)
-        zoom["F2"] = 1e-17
+#     results = results[-1]
+#     eps1 = eps2 = 0
+#     for par in initial_pars.keys():
+#         mean = results[par + "_50"] * results[par + "_factor"] + results[par + "_initial"]
+#         errp = (results[par + "_84"] - results[par + "_50"]) * results[par + "_factor"]
+#         errn = (results[par + "_50"] - results[par + "_16"]) * results[par + "_factor"]
+#         if np.abs(errp - errn) / errp < 0.1:
+#             errp = errn
 
-    results = optimize_solution(
-        fname, parfile, initial_pars, zoom=zoom, nsteps=nsteps, energy_range=energy_range, minimize_first=minimize_first,
-        nharm=2
-    )
+#         lim = np.array([results[par + "_1"], results[par + "_99"]]) * results[par + "_factor"] + results[par + "_initial"]
 
-    from scinum import Number
+#         if par == "TASC":
+#             mean = float(results["PEPOCH"] + mean / 86400)
+#         elif par == "PB":
+#             mean = mean / 86400
 
-    results = results[-1]
-    eps1 = eps2 = 0
-    for par in initial_pars.keys():
-        mean = results[par + "_50"] * results[par + "_factor"] + results[par + "_initial"]
-        errp = (results[par + "_84"] - results[par + "_50"]) * results[par + "_factor"]
-        errn = (results[par + "_50"] - results[par + "_16"]) * results[par + "_factor"]
-        if np.abs(errp - errn) / errp < 0.1:
-            errp = errn
+#         if par in ("PB", "TASC"):
+#             errp = errp / 86400
+#             errn = errn / 86400
+#             lim = lim / 86400
 
-        lim = np.array([results[par + "_1"], results[par + "_99"]]) * results[par + "_factor"] + results[par + "_initial"]
+#         additional_label = ""
+#         if lim[0] < 0 and lim[1] > 0:
+#             additional_label = rf"({lim[0]:g} \le {par} \le {lim[1]:g})"
 
-        if par == "TASC":
-            mean = float(results["PEPOCH"] + mean / 86400)
-        elif par == "PB":
-            mean = mean / 86400
+#         meas = Number(mean, (errn, errp), additional_label)
+#         meas_str = meas.str("pdg", style="latex")
+#         print(par, meas_str, additional_label)
 
-        if par in ("PB", "TASC"):
-            errp = errp / 86400
-            errn = errn / 86400
-            lim = lim / 86400
+#         if par == "EPS1":
+#             eps1_uplim = np.max(np.abs(lim))
+#         if par == "EPS2":
+#             eps2_uplim = np.max(np.abs(lim))
 
-        additional_label = ""
-        if lim[0] < 0 and lim[1] > 0:
-            additional_label = rf"({lim[0]:g} \le {par} \le {lim[1]:g})"
-
-        meas = Number(mean, (errn, errp), additional_label)
-        meas_str = meas.str("pdg", style="latex")
-        print(par, meas_str, additional_label)
-
-        if par == "EPS1":
-            eps1_uplim = np.max(np.abs(lim))
-        if par == "EPS2":
-            eps2_uplim = np.max(np.abs(lim))
-
-    print("ECC <", np.sqrt(eps1_uplim **2 + eps2_uplim**2))
+#     print("ECC <", np.sqrt(eps1_uplim **2 + eps2_uplim**2))
