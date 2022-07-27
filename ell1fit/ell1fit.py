@@ -266,6 +266,7 @@ def create_template_from_profile_harm(
         B = np.mean(profile)
         A = np.abs(ft[3]) / prof.size * 2 / B
         # np.abs(np.fft.fft(sine(x, a, b, ph + 0.7)))[1] / x.size * 2
+
         def template_func(x):
             return B * (1 + A * np.cos(2 * np.pi * x))
 
@@ -291,6 +292,7 @@ def create_template_from_profile_harm(
             + dph_fine / 2
         )
         # phases_fine += 0.5 * dph_fine
+
         def template_func(x):
             return templ_func_fine(1 + x + additional_phase)
 
@@ -1088,7 +1090,8 @@ def main(args=None):
 #         nsteps = int(sys.argv[3])
 
 #     print(f"Processing {fname}")
-#     initial_pars = {"F0": (-np.inf, np.inf), "F1": (-np.inf, np.inf), "TASC": (-np.inf, np.inf), "A1": (-np.inf, np.inf), "EPS1": (-1, 1), "EPS2": (-1, 1)}
+#     initial_pars = {"F0": (-np.inf, np.inf), "F1": (-np.inf, np.inf),
+# "TASC": (-np.inf, np.inf), "A1": (-np.inf, np.inf), "EPS1": (-1, 1), "EPS2": (-1, 1)}
 #     zoom = {"F0": 1.e-5, "F1": 1e-12, "TASC": 1, "A1": 1e-4, "EPS1": 1e-3, "EPS2": 1e-3}
 
 #     minimize_first=True
@@ -1102,7 +1105,8 @@ def main(args=None):
 #         zoom["F2"] = 1e-17
 
 #     results = optimize_solution(
-#         fname, parfile, initial_pars, zoom=zoom, nsteps=nsteps, energy_range=energy_range, minimize_first=minimize_first,
+#         fname, parfile, initial_pars, zoom=zoom, nsteps=nsteps, energy_range=energy_range,
+# minimize_first=minimize_first,
 #         nharm=2
 #     )
 
@@ -1117,7 +1121,8 @@ def main(args=None):
 #         if np.abs(errp - errn) / errp < 0.1:
 #             errp = errn
 
-#         lim = np.array([results[par + "_1"], results[par + "_99"]]) * results[par + "_factor"] + results[par + "_initial"]
+#         lim = np.array([results[par + "_1"], results[par + "_99"]]) * results[par + "_factor"] +
+# results[par + "_initial"]
 
 #         if par == "TASC":
 #             mean = float(results["PEPOCH"] + mean / 86400)
