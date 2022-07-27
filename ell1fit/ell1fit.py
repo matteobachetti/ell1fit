@@ -647,7 +647,7 @@ def _fast_phase_generic(times, frequency_derivatives):
         fact *= n
         ph += (1 / fact * f) * t_pow
 
-    return ph
+    return ph - np.floor(ph)
 
 
 def fast_phase(times, frequency_derivatives):
@@ -793,6 +793,7 @@ def optimize_solution(
     else:
         fit_pars = all_zeros
 
+    print(fit_pars)
     pars_dict = copy.deepcopy(model_parameters)
 
     for par, initial, value, f in zip(fit_parameters, values, fit_pars, factors):
@@ -805,7 +806,7 @@ def optimize_solution(
         rough_results["rough_" + par] = value
 
     _compare_phaseograms(
-        local_phases(all_zeros) + pars_dict["Phase"],
+        local_phases(all_zeros),
         phases_from_zero_to_one(phases),
         times_from_pepoch,
         fname=outroot + ".jpg"
@@ -836,11 +837,13 @@ def optimize_solution(
     phases = local_phases(fit_pars)
 
     _compare_phaseograms(
-        local_phases(all_zeros) + pars_dict["Phase"],
+        local_phases(all_zeros),
         phases_from_zero_to_one(phases),
         times_from_pepoch,
         fname=outroot + "_final.jpg"
     )
+
+    print(fit_pars)
 
     return results
 
@@ -888,7 +891,7 @@ def _format_energy_string(energy_range):
         return ""
     lower = "**" if energy_range[0] is None else f"{energy_range[0]:g}"
     upper = "**" if energy_range[1] is None else f"{energy_range[1]:g}"
-    
+
     return f"{lower}-{upper}keV"
 
 
@@ -969,7 +972,8 @@ def main(args=None):
         profile, nharm=nharm, final_nbin=200, imagefile=outroot + "_template.jpg"
     )
     template_func = get_template_func(template)
-    ph0 = phases_around_zero(additional_phase)
+    ph0 = -phases_around_zero(additional_phase)
+    print(ph0)
     parameters["Phase"] = ph0
     try:
         input_mean_fit_pars = [parameters[par] for par in parameter_names]
