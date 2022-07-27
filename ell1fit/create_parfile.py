@@ -31,6 +31,16 @@ def update_model(model, value_dict):
     return new_model
 
 
+def create_new_parfile(fname, parfile, newfile=None):
+    model = get_model(parfile)
+    row = Table.read(fname)[-1]
+    new_model = update_model(model, row)
+    if newfile is None:
+        newfile = splitext_improved(fname)[0] + ".par"
+    with open(newfile, "w") as fobj:
+        print(new_model.as_parfile(), file=fobj)
+
+
 def main(args=None):
     """Main function called by the `ell1par` script"""
     import argparse
@@ -46,10 +56,6 @@ def main(args=None):
 
     args = parser.parse_args(args)
 
-    model = get_model(args.parfile)
     for fname in args.files:
         # Read latest measurement
-        row = Table.read(fname)[-1]
-        new_model = update_model(model, row)
-        with open(splitext_improved(fname)[0] + ".par", "w") as fobj:
-            print(new_model.as_parfile(), file=fobj)
+        create_new_parfile(fname, args.parfile)

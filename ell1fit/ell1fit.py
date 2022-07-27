@@ -1014,6 +1014,7 @@ def main(args=None):
     print(results)
 
     results.write(output_file, overwrite=True)
+    return output_file
 
 
 # if __name__ == "__main__":
