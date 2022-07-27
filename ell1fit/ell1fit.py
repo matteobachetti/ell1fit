@@ -765,7 +765,8 @@ def _load_and_format_events(
     mjdref = events.mjdref
     pepoch_met = _mjd_to_sec(pepoch, mjdref)
     times_from_pepoch = (events.time - pepoch_met).astype(float)
-    return times_from_pepoch
+    gtis_from_pepoch = (events.gti - pepoch_met).astype(float)
+    return times_from_pepoch, gtis_from_pepoch
 
 
 def optimize_solution(
@@ -1004,12 +1005,13 @@ def main(args=None):
         outroot = "out" + "_" + "_".join(args.parameters.split(",")) + energy_str
 
     alltimes = []
+    expo = 0.
     for fname in files:
-        alltimes.append(
-            _load_and_format_events(
+        ts, gtis = _load_and_format_events(
                 fname, energy_range, pepoch, plotfile=outroot + "_lightcurve.jpg"
             )
-        )
+        alltimes.append(ts)
+        expo += np.sum(np.diff(gtis, axis=1))
 
     times_from_pepoch = np.sort(np.concatenate(alltimes))
     observation_length = times_from_pepoch[-1] - times_from_pepoch[0]
@@ -1022,6 +1024,10 @@ def main(args=None):
         profile, nharm=nharm, final_nbin=200, imagefile=outroot + "_template.jpg"
     )
     template_func = get_template_func(template)
+    mint = template.min()
+    maxt = template.max()
+    pulsed_frac = (maxt - mint) / (maxt + mint)
+
     ph0 = -phases_around_zero(additional_phase)
     print(ph0)
     parameters["Phase"] = ph0
@@ -1062,6 +1068,8 @@ def main(args=None):
     results["nsteps"] = nsteps
     results["ell1fit_version"] = version.version
     results["nharm"] = nharm
+    results["pf"] = pulsed_frac
+    results["ctrate"] = times_from_pepoch.size / expo
 
     results = Table(rows=[results])
 
