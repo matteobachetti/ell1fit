@@ -55,7 +55,11 @@ def main(args=None):
         "--parfile",
         type=str,
         default=None,
-        help="Parameter file to be updated with new information. Must contain a simple ELL1 binary model, with no orbital derivatives, and a number of spin derivatives (F0, F1, ...). ",
+        help=(
+            "Input parameter file. Must contain a simple ELL1 binary model, "
+            "with no orbital derivatives, and a number of spin derivatives (F0, F1, ...). "
+            "All other models will be ignored."
+        ),
         required=True,
     )
 

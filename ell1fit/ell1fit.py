@@ -939,7 +939,11 @@ def main(args=None):
         "--parfile",
         type=str,
         default=None,
-        help="Input parameter file. Must contain a simple ELL1 binary model, with no orbital derivatives, and a number of spin derivatives (F0, F1, ...). All other models will be ignored.",
+        help=(
+            "Input parameter file. Must contain a simple ELL1 binary model, "
+            "with no orbital derivatives, and a number of spin derivatives (F0, F1, ...). "
+            "All other models will be ignored."
+        ),
     )
     parser.add_argument("-o", "--outroot", type=str, default=None, help="Root of output file names")
     parser.add_argument(
