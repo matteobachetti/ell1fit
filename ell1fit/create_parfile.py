@@ -39,6 +39,7 @@ def create_new_parfile(fname, parfile, newfile=None):
         newfile = splitext_improved(fname)[0] + ".par"
     with open(newfile, "w") as fobj:
         print(new_model.as_parfile(), file=fobj)
+    return newfile
 
 
 def main(args=None):
