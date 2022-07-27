@@ -186,11 +186,8 @@ def phases_from_zero_to_one(phase):
     >>> assert np.allclose(phases_from_zero_to_one([0.1, 3.1, -0.9]), 0.1)
     True
     """
-    while phase > 1:
-        phase -= 1.0
-    while phase <= 0:
-        phase += 1
-    return phase
+
+    return phase - np.floor(phase)
 
 
 @vectorize([(int64,), (float32,), (float64,)])
@@ -208,7 +205,7 @@ def phases_around_zero(phase):
     >>> assert np.allclose(phases_from_zero_to_one([0.6, -0.4]), -0.4)
     True
     """
-    ph = phase
+    ph = phase - np.floor(phase)
     while ph >= 0.5:
         ph -= 1.0
     while ph < -0.5:
@@ -621,16 +618,16 @@ def _sec_to_mjd(met, mjdref):
 
 
 @njit(parallel=True)
-def _fast_phase_fdot(ts, mean_f, mean_fdot=0):
+def _fast_phase_fdot(ts, mean_f, mean_fdot):
     phases = ts * mean_f + 0.5 * ts * ts * mean_fdot
-    return phases - np.floor(phases)
+    return phases
 
 
 ONE_SIXTH = 1 / 6
 
 
 @njit(parallel=True)
-def _fast_phase_fddot(ts, mean_f, mean_fdot=0, mean_fddot=0):
+def _fast_phase_fddot(ts, mean_f, mean_fdot, mean_fddot):
     tssq = ts * ts
     phases = ts * mean_f + 0.5 * tssq * mean_fdot + ONE_SIXTH * tssq * ts * mean_fddot
     return phases
@@ -875,8 +872,6 @@ def optimize_solution(
         fname=outroot + "_final.jpg",
     )
 
-    print(fit_pars)
-
     return results
 
 
@@ -1029,7 +1024,6 @@ def main(args=None):
     pulsed_frac = (maxt - mint) / (maxt + mint)
 
     ph0 = -phases_around_zero(additional_phase)
-    print(ph0)
     parameters["Phase"] = ph0
     try:
         input_mean_fit_pars = [parameters[par] for par in parameter_names]
@@ -1079,8 +1073,6 @@ def main(args=None):
         old = Table.read(output_file)
         old.write("old_" + output_file, overwrite=True)
         results = vstack([old, results])
-
-    print(results)
 
     results.write(output_file, overwrite=True)
     return output_file
