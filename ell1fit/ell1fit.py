@@ -891,7 +891,7 @@ def _format_energy_string(energy_range):
     lower = "**" if energy_range[0] is None else f"{energy_range[0]:g}"
     upper = "**" if energy_range[1] is None else f"{energy_range[1]:g}"
 
-    return f"{lower}-{upper}keV"
+    return f"_{lower}-{upper}keV"
 
 
 def main(args=None):
@@ -997,7 +997,7 @@ def main(args=None):
     results["fname"] = fname
     results["nharm"] = nharm
     results["emin"] = 0 if energy_range is None else energy_range[0]
-    results["emax"] = np.inf if energy_range is None else energy_range[0]
+    results["emax"] = np.inf if energy_range is None else energy_range[1]
     results["nsteps"] = nsteps
     results["ell1fit_version"] = version.version
     results["nharm"] = nharm
