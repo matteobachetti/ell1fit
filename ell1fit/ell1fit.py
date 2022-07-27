@@ -741,7 +741,8 @@ def _load_and_format_events(event_file, energy_range, pepoch, plotlc=True, plotf
         plt.savefig(plotfile)
         plt.close(fig)
 
-    events.filter_energy_range(energy_range, inplace=True)
+    if energy_range is not None:
+        events.filter_energy_range(energy_range, inplace=True)
     mjdref = events.mjdref
     pepoch_met = _mjd_to_sec(pepoch, mjdref)
     times_from_pepoch = (events.time - pepoch_met).astype(float)
