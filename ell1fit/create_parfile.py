@@ -46,14 +46,18 @@ def main(args=None):
     """Main function called by the `ell1par` script"""
     import argparse
 
-    description = (
-        "Fit an ELL1 model and frequency derivatives to an X-ray "
-        "pulsar observation."
-    )
+    description = "Fit an ELL1 model and frequency derivatives to an X-ray " "pulsar observation."
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("files", help="List of ecsv or hdf5 files produced by `ell1fit`", nargs="+")
 
-    parser.add_argument("-p", "--parfile", type=str, default=None, help="Parameter file to be updated with new information. Must contain a simple ELL1 binary model, with no orbital derivatives, and a number of spin derivatives (F0, F1, ...). ", required=True)
+    parser.add_argument(
+        "-p",
+        "--parfile",
+        type=str,
+        default=None,
+        help="Parameter file to be updated with new information. Must contain a simple ELL1 binary model, with no orbital derivatives, and a number of spin derivatives (F0, F1, ...). ",
+        required=True,
+    )
 
     args = parser.parse_args(args)
 

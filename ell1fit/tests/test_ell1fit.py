@@ -26,5 +26,3 @@ def test_ell1_orbit(PB, A1, E1, E2):
     orbited = add_ell1_orbit_numba(times, PB, A1, TASC, E1, E2)
     deorbited = simple_ell1_deorbit_numba(orbited, PB, A1, TASC, E1, E2, tolerance=1e-8)
     assert np.all(np.abs(deorbited - times) < 1e-8)
-
-

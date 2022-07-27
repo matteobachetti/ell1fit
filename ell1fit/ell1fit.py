@@ -27,38 +27,39 @@ from numpy.fft import ifft, fft, fftfreq
 from . import version
 
 import matplotlib as mpl
+
 params = {
-    'font.size': 7,
-    'xtick.major.size': 0,
-    'xtick.minor.size': 0,
-    'xtick.major.width': 0,
-    'xtick.minor.width': 0,
-    'ytick.major.size': 0,
-    'ytick.minor.size': 0,
-    'ytick.major.width': 0,
-    'ytick.minor.width': 0,
-    'figure.figsize': (6, 4),
-    "axes.grid" : True,
+    "font.size": 7,
+    "xtick.major.size": 0,
+    "xtick.minor.size": 0,
+    "xtick.major.width": 0,
+    "xtick.minor.width": 0,
+    "ytick.major.size": 0,
+    "ytick.minor.size": 0,
+    "ytick.major.width": 0,
+    "ytick.minor.width": 0,
+    "figure.figsize": (6, 4),
+    "axes.grid": True,
     "grid.color": "grey",
     "grid.linewidth": 0.3,
     "grid.linestyle": ":",
     "axes.grid.axis": "y",
     "axes.grid.which": "both",
     "axes.axisbelow": False,
-    'axes.labelsize': 8,
-    'xtick.labelsize': 8,
-    'ytick.labelsize': 8,
-    'legend.fontsize': 8,
-    'legend.title_fontsize': 8,
-    'figure.dpi': 300,  # the left side of the subplots of the figure
-    'figure.subplot.left': 0.195,  # the left side of the subplots of the figure
-    'figure.subplot.right': 0.97,   # the right side of the subplots of the figure
-    'figure.subplot.bottom': 0.145,   # the bottom of the subplots of the figure
-    'figure.subplot.top': 0.97,   # the top of the subplots of the figure
-    'figure.subplot.wspace': 0.2,    # the amount of width reserved for space between subplots,
-                                   # expressed as a fraction of the average axis width
-    'figure.subplot.hspace': 0.2,    # the amount of height reserved for space between subplots,
-                               # expressed as a fraction of the average axis height
+    "axes.labelsize": 8,
+    "xtick.labelsize": 8,
+    "ytick.labelsize": 8,
+    "legend.fontsize": 8,
+    "legend.title_fontsize": 8,
+    "figure.dpi": 300,  # the left side of the subplots of the figure
+    "figure.subplot.left": 0.195,  # the left side of the subplots of the figure
+    "figure.subplot.right": 0.97,  # the right side of the subplots of the figure
+    "figure.subplot.bottom": 0.145,  # the bottom of the subplots of the figure
+    "figure.subplot.top": 0.97,  # the top of the subplots of the figure
+    "figure.subplot.wspace": 0.2,  # the amount of width reserved for space between subplots,
+    # expressed as a fraction of the average axis width
+    "figure.subplot.hspace": 0.2,  # the amount of height reserved for space between subplots,
+    # expressed as a fraction of the average axis height
 }
 mpl.rcParams.update(params)
 
@@ -77,10 +78,11 @@ def splitext_improved(path):
     True
     """
     import os
+
     dir, file = os.path.split(path)
 
-    if len(file.split('.')) > 2:
-        froot, ext = file.split('.')[0],'.' + '.'.join(file.split('.')[-2:])
+    if len(file.split(".")) > 2:
+        froot, ext = file.split(".")[0], "." + ".".join(file.split(".")[-2:])
     else:
         froot, ext = os.path.splitext(file)
 
@@ -284,7 +286,12 @@ def create_template_from_profile_harm(
 
         templ_func_fine = interp1d(phases_fine, template_fine, kind="cubic", assume_sorted=True)
 
-        additional_phase = np.argmax(template_fine[:final_nbin * oversample_factor]) / final_nbin / oversample_factor + dph_fine / 2
+        additional_phase = (
+            np.argmax(template_fine[: final_nbin * oversample_factor])
+            / final_nbin
+            / oversample_factor
+            + dph_fine / 2
+        )
         # phases_fine += 0.5 * dph_fine
         template_func = lambda x: templ_func_fine(1 + x + additional_phase)
         # print(additional_phase)
@@ -301,8 +308,15 @@ def create_template_from_profile_harm(
     plt.plot(np.arange(0.5 / nbin, 1, 1 / nbin), profile, drawstyle="steps-mid", label="data")
     # plt.plot(phases_fine, template_fine, label="template fine")
     plt.plot(phas[:final_nbin], template, label="template values", ls="--", lw=2)
-    plt.plot(phas[:final_nbin], template_func(phas[:final_nbin]), label="template func", ls=":", lw=2)
-    plt.plot(phas[:final_nbin], template_func(phas[:final_nbin] - additional_phase), label="template aligned", lw=3)
+    plt.plot(
+        phas[:final_nbin], template_func(phas[:final_nbin]), label="template func", ls=":", lw=2
+    )
+    plt.plot(
+        phas[:final_nbin],
+        template_func(phas[:final_nbin] - additional_phase),
+        label="template aligned",
+        lw=3,
+    )
     plt.axvline(phases_from_zero_to_one(additional_phase))
     plt.legend
     plt.savefig(imagefile)
@@ -466,9 +480,7 @@ def safe_run_sampler(
     # backend.reset(nwalkers, ndim)
     if initial_size < 100:
         print("Starting from zero")
-        pos = np.array(starting_pars) + np.random.normal(
-            np.zeros((32, starting_pars.size)), 1e-5
-        )
+        pos = np.array(starting_pars) + np.random.normal(np.zeros((32, starting_pars.size)), 1e-5)
         nwalkers, ndim = pos.shape
         backend.reset(nwalkers, ndim)
     elif initial_size < max_n:
@@ -557,10 +569,10 @@ def _plot_phaseogram(phases, times, ax0, ax1, norm="meansub_smooth"):
     tm = np.concatenate((times, times)).astype(float) / 86400
 
     nbin = 32
-    bins=np.linspace(0, 2, nbin+1)
+    bins = np.linspace(0, 2, nbin + 1)
     prof, _ = np.histogram(ph, bins=bins)
 
-    ax0.plot(bins[:-1] + 0.5/nbin, prof, color="k", alpha=0.5)
+    ax0.plot(bins[:-1] + 0.5 / nbin, prof, color="k", alpha=0.5)
     for num in (0.5, 1, 1.5):
         ax1.axvline(num, color="grey", lw=2, ls="--")
     H, xedges, yedges = np.histogram2d(ph, tm, bins=(bins, nbin))
@@ -635,8 +647,8 @@ def _fast_phase_generic(times, frequency_derivatives):
     if len(frequency_derivatives) == 1:
         return times / frequency_derivatives[0]
 
-    fact = 1.
-    n = 0.
+    fact = 1.0
+    n = 0.0
     ph = np.zeros_like(times)
 
     t_pow = np.ones_like(times)
@@ -680,14 +692,21 @@ def fast_phase(times, frequency_derivatives):
     elif len(frequency_derivatives) == 2:
         return _fast_phase_fdot(times, frequency_derivatives[0], frequency_derivatives[1])
     elif len(frequency_derivatives) == 3:
-        return _fast_phase_fddot(times, frequency_derivatives[0], frequency_derivatives[1], frequency_derivatives[2])
+        return _fast_phase_fddot(
+            times, frequency_derivatives[0], frequency_derivatives[1], frequency_derivatives[2]
+        )
 
     return _fast_phase_generic(times, np.array(frequency_derivatives))
 
 
 def _calculate_phases(times_from_pepoch, pars_dict):
     deorbit_times_from_pepoch = simple_ell1_deorbit_numba(
-        times_from_pepoch, pars_dict["PB"], pars_dict["A1"], pars_dict["TASC"], pars_dict["EPS1"], pars_dict["EPS2"]
+        times_from_pepoch,
+        pars_dict["PB"],
+        pars_dict["A1"],
+        pars_dict["TASC"],
+        pars_dict["EPS1"],
+        pars_dict["EPS2"],
     )
 
     freq_ders = []
@@ -696,9 +715,7 @@ def _calculate_phases(times_from_pepoch, pars_dict):
         freq_ders.append(pars_dict[f"F{count}"])
         count += 1
 
-    phases = pars_dict["Phase"] + fast_phase(
-            deorbit_times_from_pepoch.astype(float), freq_ders
-        )
+    phases = pars_dict["Phase"] + fast_phase(deorbit_times_from_pepoch.astype(float), freq_ders)
 
     return phases_from_zero_to_one(phases)
 
@@ -726,7 +743,9 @@ def _get_par_dict(model):
     return parameters
 
 
-def _load_and_format_events(event_file, energy_range, pepoch, plotlc=True, plotfile="lightcurve.jpg"):
+def _load_and_format_events(
+    event_file, energy_range, pepoch, plotlc=True, plotfile="lightcurve.jpg"
+):
     events = load_events(event_file)
     if plotlc:
         lc = events.to_lc(100)
@@ -750,14 +769,25 @@ def _load_and_format_events(event_file, energy_range, pepoch, plotlc=True, plotf
 
 
 def optimize_solution(
-    times_from_pepoch, model_parameters, fit_parameters, values, bounds, factors, template_func, nsteps=1000, minimize_first=False, nharm=1, outroot="out"
+    times_from_pepoch,
+    model_parameters,
+    fit_parameters,
+    values,
+    bounds,
+    factors,
+    template_func,
+    nsteps=1000,
+    minimize_first=False,
+    nharm=1,
+    outroot="out",
 ):
-
     def logprior(pars):
         if np.any(np.isnan(pars)):
             return -np.inf
 
-        for parname, bound, initial, local_value, f in zip(fit_parameters, bounds, values, pars, factors):
+        for parname, bound, initial, local_value, f in zip(
+            fit_parameters, bounds, values, pars, factors
+        ):
             value = local_value * f + initial
             # Add correction for PB and TASC
 
@@ -808,10 +838,12 @@ def optimize_solution(
         local_phases(all_zeros),
         phases_from_zero_to_one(phases),
         times_from_pepoch,
-        fname=outroot + ".jpg"
+        fname=outroot + ".jpg",
     )
 
-    corner_labels = ["d" + par + f"{np.log10(fac):+g}" for (par, fac) in zip(fit_parameters, factors)]
+    corner_labels = [
+        "d" + par + f"{np.log10(fac):+g}" for (par, fac) in zip(fit_parameters, factors)
+    ]
 
     results = safe_run_sampler(
         func_to_maximize,
@@ -839,7 +871,7 @@ def optimize_solution(
         local_phases(all_zeros),
         phases_from_zero_to_one(phases),
         times_from_pepoch,
-        fname=outroot + "_final.jpg"
+        fname=outroot + "_final.jpg",
     )
 
     print(fit_pars)
@@ -858,11 +890,12 @@ def create_bounds(parnames):
 
 
 def order_of_magnitude(value):
-    return 10**np.int(np.log10(value) - 1)
+    return 10 ** np.int(np.log10(value) - 1)
 
 
 def get_factors(parnames, model, observation_length):
     import re
+
     freq_re = re.compile(r"^F([0-9]+)$")
     zoom = []
     P = model.PB.value * 86400
@@ -872,14 +905,14 @@ def get_factors(parnames, model, observation_length):
         matchobj = freq_re.match(par)
         if matchobj:
             order = int(matchobj.group(1))
-            zoom.append(order_of_magnitude(1 / observation_length**(order + 1)))
+            zoom.append(order_of_magnitude(1 / observation_length ** (order + 1)))
         elif par == "A1":
             zoom.append(min(1, order_of_magnitude(1 / np.pi / 2 / F)))
         elif par == "PB":
             dp = np.sqrt(3) / (2 * np.pi**2 * F) * P**2 / X / observation_length
-            zoom.append(min(1., order_of_magnitude(dp)))
+            zoom.append(min(1.0, order_of_magnitude(dp)))
         else:
-            zoom.append(1.)
+            zoom.append(1.0)
     return zoom
 
 
@@ -898,13 +931,16 @@ def main(args=None):
     """Main function called by the `ell1fit` script"""
     import argparse
 
-    description = (
-        "Fit an ELL1 model and frequency derivatives to an X-ray "
-        "pulsar observation."
-    )
+    description = "Fit an ELL1 model and frequency derivatives to an X-ray " "pulsar observation."
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("files", help="List of files", nargs="+")
-    parser.add_argument("-p", "--parfile", type=str, default=None, help="Input parameter file. Must contain a simple ELL1 binary model, with no orbital derivatives, and a number of spin derivatives (F0, F1, ...). All other models will be ignored.")
+    parser.add_argument(
+        "-p",
+        "--parfile",
+        type=str,
+        default=None,
+        help="Input parameter file. Must contain a simple ELL1 binary model, with no orbital derivatives, and a number of spin derivatives (F0, F1, ...). All other models will be ignored.",
+    )
     parser.add_argument("-o", "--outroot", type=str, default=None, help="Root of output file names")
     parser.add_argument(
         "-N",
@@ -927,8 +963,13 @@ def main(args=None):
         help="Maximum number of MCMC steps",
         default=100_000,
     )
-    parser.add_argument("-P", "--parameters", type=str, help="Comma-separated list of parameters to fit",
-    default="F0,F1")
+    parser.add_argument(
+        "-P",
+        "--parameters",
+        type=str,
+        help="Comma-separated list of parameters to fit",
+        default="F0,F1",
+    )
     parser.add_argument("--minimize-first", action="store_true", default=False)
 
     args = parser.parse_args(args)
@@ -948,17 +989,23 @@ def main(args=None):
     energy_str = _format_energy_string(energy_range)
     parameters = _get_par_dict(model)
     parameter_names = ["Phase"] + args.parameters.split(",")
-    minimize_first= args.minimize_first
+    minimize_first = args.minimize_first
 
     outroot = args.outroot
     if outroot is None and len(files) == 1:
-        outroot = splitext_improved(files[0])[0] + "_" + "_".join(args.parameters.split(",")) + energy_str
+        outroot = (
+            splitext_improved(files[0])[0] + "_" + "_".join(args.parameters.split(",")) + energy_str
+        )
     elif outroot is None:
         outroot = "out" + "_" + "_".join(args.parameters.split(",")) + energy_str
 
     alltimes = []
     for fname in files:
-        alltimes.append(_load_and_format_events(fname, energy_range, pepoch, plotfile=outroot + "_lightcurve.jpg"))
+        alltimes.append(
+            _load_and_format_events(
+                fname, energy_range, pepoch, plotfile=outroot + "_lightcurve.jpg"
+            )
+        )
 
     times_from_pepoch = np.sort(np.concatenate(alltimes))
     observation_length = times_from_pepoch[-1] - times_from_pepoch[0]
@@ -981,8 +1028,18 @@ def main(args=None):
     bounds[0] = (ph0 - 0.5, ph0 + 0.5)
 
     results = optimize_solution(
-            times_from_pepoch, parameters, parameter_names, input_mean_fit_pars, bounds, factors, template_func, nsteps=nsteps, minimize_first=minimize_first, nharm=nharm, outroot=outroot
-        )
+        times_from_pepoch,
+        parameters,
+        parameter_names,
+        input_mean_fit_pars,
+        bounds,
+        factors,
+        template_func,
+        nsteps=nsteps,
+        minimize_first=minimize_first,
+        nharm=nharm,
+        outroot=outroot,
+    )
 
     if hasattr(model, "START"):
         results["Start"] = model.START.value
