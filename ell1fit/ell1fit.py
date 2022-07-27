@@ -726,7 +726,7 @@ def _get_par_dict(model):
     return parameters
 
 
-def _load_and_format_events(event_file, energy_range, pepoch, plotlc=True):
+def _load_and_format_events(event_file, energy_range, pepoch, plotlc=True, plotfile="lightcurve.jpg"):
     events = load_events(event_file)
     if plotlc:
         lc = events.to_lc(100)
@@ -738,7 +738,7 @@ def _load_and_format_events(event_file, energy_range, pepoch, plotlc=True):
             plt.axvspan(g0, g1, color="r", alpha=0.5)
         plt.xlabel("MJD")
         plt.ylabel("Count rate")
-        plt.savefig(event_file.replace(".nc", "") + "_lightcurve.jpg")
+        plt.savefig(plotfile)
         plt.close(fig)
 
     events.filter_energy_range(energy_range, inplace=True)
@@ -929,9 +929,9 @@ def main(args=None):
 
     outroot = args.outroot
     if outroot is None and len(files) == 1:
-        outroot = splitext_improved(files[0])[0]
+        outroot = splitext_improved(files[0])[0] + "_" + "_".join(args.parameters.split(","))
     elif outroot is None:
-        outroot = "out"
+        outroot = "out" + "_" + "_".join(args.parameters.split(","))
 
     nsteps = args.nsteps
     nharm = args.nharm
@@ -944,7 +944,7 @@ def main(args=None):
 
     alltimes = []
     for fname in files:
-        alltimes.append(_load_and_format_events(fname, energy_range, pepoch))
+        alltimes.append(_load_and_format_events(fname, energy_range, pepoch, plotfile=outroot + "_lightcurve.jpg"))
 
     times_from_pepoch = np.sort(np.concatenate(alltimes))
     observation_length = times_from_pepoch[-1] - times_from_pepoch[0]
