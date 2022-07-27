@@ -66,9 +66,13 @@ def splitext_improved(path):
     True
     >>> np.all(splitext_improved("a.tar") ==  ('a', '.tar'))
     True
-    >>> np.all(splitext_improved("a.f/a.tar") ==  ('a.f/a', '.tar'))
+    >>> path_with_dirs = os.path.join("a.f", "a.tar")
+    >>> path_without_ext = os.path.join("a.f", "a")
+    >>> np.all(splitext_improved(path_with_dirs) ==  (path_without_ext, '.tar'))
     True
-    >>> np.all(splitext_improved("a.a.a.f/a.tar.gz") ==  ('a.a.a.f/a', '.tar.gz'))
+    >>> path_with_dirs = os.path.join("a.a.a.f", "a.tar.gz")
+    >>> path_without_ext = os.path.join("a.a.a.f", "a")
+    >>> np.all(splitext_improved(path_with_dirs) ==  (path_without_ext, '.tar.gz'))
     True
     """
     import os
