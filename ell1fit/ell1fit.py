@@ -793,7 +793,6 @@ def optimize_solution(
     else:
         fit_pars = all_zeros
 
-    print(fit_pars)
     pars_dict = copy.deepcopy(model_parameters)
 
     for par, initial, value, f in zip(fit_parameters, values, fit_pars, factors):
@@ -803,7 +802,7 @@ def optimize_solution(
 
     rough_results = {}
     for par, value, f in zip(fit_parameters, fit_pars, factors):
-        rough_results["rough_" + par] = value
+        rough_results["rough_d" + par] = value
 
     _compare_phaseograms(
         local_phases(all_zeros),
@@ -826,8 +825,8 @@ def optimize_solution(
 
     results["additional_phase"] = pars_dict["Phase"]
 
+    results.update(model_parameters)
     results.update(rough_results)
-
     for par, initial, f in zip(fit_parameters, values, factors):
         results["d" + par + "_mean"] = results["d" + par + "_50"]
         results["d" + par + "_initial"] = initial
@@ -985,8 +984,15 @@ def main(args=None):
             times_from_pepoch, parameters, parameter_names, input_mean_fit_pars, bounds, factors, template_func, nsteps=nsteps, minimize_first=minimize_first, nharm=nharm, outroot=outroot
         )
 
-    results["Start"] = times_from_pepoch[0] / 86400 + pepoch
-    results["Stop"] = times_from_pepoch[-1] / 86400 + pepoch
+    if hasattr(model, "START"):
+        results["Start"] = model.START.value
+    else:
+        results["Start"] = times_from_pepoch[0] / 86400 + pepoch
+    if hasattr(model, "STOP"):
+        results["Stop"] = model.STOP.value
+    else:
+        results["Stop"] = times_from_pepoch[0] / 86400 + pepoch
+
     results["PEPOCH"] = pepoch
     results["fname"] = fname
     results["nharm"] = nharm
