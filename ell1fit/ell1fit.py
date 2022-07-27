@@ -427,7 +427,7 @@ def calculate_result_array_from_samples(sampler, labels):
         for i_p, p in enumerate(percs):
             result_dict[labels[i] + f"_{p:g}"] = mcmc[i_p]
 
-    result_dict["date"] = Time.now()
+    result_dict["date"] = Time.now().date
     result_dict["nsamples"] = flat_samples.shape[0]
     result_dict["maxtau"] = maxtau
     result_dict["burnin"] = maxtau
