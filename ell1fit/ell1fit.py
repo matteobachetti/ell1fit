@@ -880,6 +880,17 @@ def get_factors(parnames, model, observation_length):
     return zoom
 
 
+def _format_energy_string(energy_range):
+    if energy_range is None:
+        return ""
+    if energy_range[0] is None and energy_range[1] is None:
+        return ""
+    lower = "**" if energy_range[0] is None else f"{energy_range[0]:g}"
+    upper = "**" if energy_range[1] is None else f"{energy_range[1]:g}"
+    
+    return f"{lower}-{upper}keV"
+
+
 def main(args=None):
     """Main function called by the `ell1fit` script"""
     import argparse
@@ -905,7 +916,7 @@ def main(args=None):
         nargs=2,
         type=int,
         help="Energy range",
-        default=[None, None],
+        default=None,
     )
     parser.add_argument(
         "--nsteps",
@@ -931,15 +942,16 @@ def main(args=None):
     nbin = max(16, nharm * 8)
 
     energy_range = args.erange
+    energy_str = _format_energy_string(energy_range)
     parameters = _get_par_dict(model)
     parameter_names = ["Phase"] + args.parameters.split(",")
     minimize_first= args.minimize_first
 
     outroot = args.outroot
     if outroot is None and len(files) == 1:
-        outroot = splitext_improved(files[0])[0] + "_" + "_".join(args.parameters.split(",")) + f"_{energy_range[0]}-{energy_range[1]}keV"
+        outroot = splitext_improved(files[0])[0] + "_" + "_".join(args.parameters.split(",")) + energy_str
     elif outroot is None:
-        outroot = "out" + "_" + "_".join(args.parameters.split(","))
+        outroot = "out" + "_" + "_".join(args.parameters.split(",")) + energy_str
 
     alltimes = []
     for fname in files:
