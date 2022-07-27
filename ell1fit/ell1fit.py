@@ -905,7 +905,7 @@ def main(args=None):
         nargs=2,
         type=int,
         help="Energy range",
-        default=[3, 30],
+        default=[None, None],
     )
     parser.add_argument(
         "--nsteps",
@@ -926,13 +926,6 @@ def main(args=None):
         raise ValueError("This script wants an ELL1 model, with TASC, not T0, defined")
 
     model.change_binary_epoch(pepoch)
-
-    outroot = args.outroot
-    if outroot is None and len(files) == 1:
-        outroot = splitext_improved(files[0])[0] + "_" + "_".join(args.parameters.split(","))
-    elif outroot is None:
-        outroot = "out" + "_" + "_".join(args.parameters.split(","))
-
     nsteps = args.nsteps
     nharm = args.nharm
     nbin = max(16, nharm * 8)
@@ -941,6 +934,12 @@ def main(args=None):
     parameters = _get_par_dict(model)
     parameter_names = ["Phase"] + args.parameters.split(",")
     minimize_first= args.minimize_first
+
+    outroot = args.outroot
+    if outroot is None and len(files) == 1:
+        outroot = splitext_improved(files[0])[0] + "_" + "_".join(args.parameters.split(",")) + f"_{energy_range[0]}-{energy_range[1]}keV"
+    elif outroot is None:
+        outroot = "out" + "_" + "_".join(args.parameters.split(","))
 
     alltimes = []
     for fname in files:
