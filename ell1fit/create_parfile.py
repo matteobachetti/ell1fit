@@ -5,6 +5,8 @@ from .ell1fit import splitext_improved
 
 
 def update_model(model, value_dict):
+    if hasattr(value_dict, "colnames"):
+        value_dict = dict((key, value_dict[key]) for key in value_dict.colnames)
     new_model = copy.deepcopy(model)
     pars = "F0,TASC,PB,A1,EPS1,EPS2"
     count = 1
@@ -13,7 +15,7 @@ def update_model(model, value_dict):
         count += 1
 
     for par in pars.split(","):
-        if not f"d{par}_mean" in value_dict.colnames:
+        if not f"d{par}_mean" in value_dict:
             continue
         print(f"Updating {par}")
         mean = value_dict[f"d{par}_mean"]
