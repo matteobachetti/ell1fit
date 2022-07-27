@@ -1,4 +1,3 @@
-from urllib.request import HTTPPasswordMgrWithDefaultRealm
 import warnings
 
 # mpl.use('Agg')
@@ -18,15 +17,12 @@ import emcee
 import corner
 from numba import njit, vectorize, int64, float32, float64, prange
 from astropy.table import Table, vstack
-import astropy.units as u
 from astropy.time import Time
 from scipy.ndimage import gaussian_filter
 from scipy.optimize import minimize
 
 from numpy.fft import ifft, fft, fftfreq
 from . import version
-
-import matplotlib as mpl
 
 params = {
     "font.size": 7,
@@ -270,7 +266,9 @@ def create_template_from_profile_harm(
         B = np.mean(profile)
         A = np.abs(ft[3]) / prof.size * 2 / B
         # np.abs(np.fft.fft(sine(x, a, b, ph + 0.7)))[1] / x.size * 2
-        template_func = lambda x: B * (1 + A * np.cos(2 * np.pi * x))
+        def template_func(x):
+            return B * (1 + A * np.cos(2 * np.pi * x))
+
     else:
         oversample_factor = 10
         dph_fine = 1 / final_nbin / oversample_factor
@@ -293,7 +291,9 @@ def create_template_from_profile_harm(
             + dph_fine / 2
         )
         # phases_fine += 0.5 * dph_fine
-        template_func = lambda x: templ_func_fine(1 + x + additional_phase)
+        def template_func(x):
+            return templ_func_fine(1 + x + additional_phase)
+
         # print(additional_phase)
 
     dph = 1 / final_nbin
@@ -462,20 +462,20 @@ def safe_run_sampler(
 
     # https://emcee.readthedocs.io/en/stable/tutorials/monitor/?highlight=run_mcmc#saving-monitoring-progress
     # We'll track how the average autocorrelation time estimate changes
+    starting_pars = np.asarray(starting_pars)
+    ndim = len(starting_pars)
 
     if labels is None:
         labels = list(map(r"$\theta_{{{0}}}$".format, range(1, ndim + 1)))
     if corner_labels is None:
         corner_labels = list(map(r"$\theta_{{{0}}}$".format, range(1, ndim + 1)))
 
-    starting_pars = np.asarray(starting_pars)
     backend_filename = outroot + ".h5"
     backend = emcee.backends.HDFBackend(backend_filename)
     initial_size = 0
     if os.path.exists(backend_filename):
         initial_size = backend.iteration
 
-    ndim = len(starting_pars)
     print("Initial size: {0}".format(initial_size))
     # backend.reset(nwalkers, ndim)
     if initial_size < 100:

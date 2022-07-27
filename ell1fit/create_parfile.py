@@ -15,7 +15,7 @@ def update_model(model, value_dict):
         count += 1
 
     for par in pars.split(","):
-        if not f"d{par}_mean" in value_dict:
+        if f"d{par}_mean" not in value_dict:
             continue
         print(f"Updating {par}")
         mean = value_dict[f"d{par}_mean"]

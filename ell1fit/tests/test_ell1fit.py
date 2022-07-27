@@ -1,5 +1,7 @@
 import pytest
-from ..ell1fit import *
+import numpy as np
+from ..ell1fit import add_circular_orbit_numba, add_ell1_orbit_numba
+from ..ell1fit import simple_circular_deorbit_numba, simple_ell1_deorbit_numba
 
 
 @pytest.mark.parametrize("A1", [1, 10, 40])
