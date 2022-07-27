@@ -1,6 +1,5 @@
 import warnings
 
-# mpl.use('Agg')
 import os
 import copy
 import matplotlib.pyplot as plt
@@ -8,7 +7,6 @@ import numpy as np
 from hendrics.io import load_events
 from pint.models import get_model
 
-# from hendrics.efsearch import _fast_phase_fdot, _fast_phase_fddot
 import matplotlib as mpl
 
 from scipy.interpolate import interp1d
@@ -635,13 +633,13 @@ ONE_SIXTH = 1 / 6
 def _fast_phase_fddot(ts, mean_f, mean_fdot=0, mean_fddot=0):
     tssq = ts * ts
     phases = ts * mean_f + 0.5 * tssq * mean_fdot + ONE_SIXTH * tssq * ts * mean_fddot
-    return phases - np.floor(phases)
+    return phases
 
 
 @njit(parallel=True)
 def _fast_phase(ts, mean_f):
     phases = ts * mean_f
-    return phases - np.floor(phases)
+    return phases
 
 
 @njit(parallel=True)
@@ -661,7 +659,7 @@ def _fast_phase_generic(times, frequency_derivatives):
         fact *= n
         ph += (1 / fact * f) * t_pow
 
-    return ph - np.floor(ph)
+    return ph
 
 
 def fast_phase(times, frequency_derivatives):
