@@ -1066,10 +1066,10 @@ def main(args=None):
     results["emin"] = 0 if energy_range is None else energy_range[0]
     results["emax"] = np.inf if energy_range is None else energy_range[1]
     results["nsteps"] = nsteps
-    results["ell1fit_version"] = version.version
     results["nharm"] = nharm
     results["pf"] = pulsed_frac
     results["ctrate"] = times_from_pepoch.size / expo
+    results["ell1fit_version"] = version.version
 
     results = Table(rows=[results])
 
