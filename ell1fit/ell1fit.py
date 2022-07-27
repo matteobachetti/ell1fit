@@ -930,7 +930,7 @@ def main(args=None):
     outroot = args.outroot
     if outroot is None and len(files) == 1:
         outroot = splitext_improved(files[0])[0]
-    else:
+    elif outroot is None:
         outroot = "out"
 
     nsteps = args.nsteps
