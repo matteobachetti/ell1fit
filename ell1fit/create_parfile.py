@@ -8,11 +8,17 @@ def update_model(model, value_dict):
     if hasattr(value_dict, "colnames"):
         value_dict = dict((key, value_dict[key]) for key in value_dict.colnames)
     new_model = copy.deepcopy(model)
-    pars = "F0,TASC,PB,A1,EPS1,EPS2"
+    # Note: phase must be after F0
+    pars = "F0,Phase,TASC,PB,A1,EPS1,EPS2"
     count = 1
     while hasattr(new_model, f"F{count}"):
         pars += f",F{count}"
         count += 1
+
+    PEPOCH = value_dict["PEPOCH"]
+    if PEPOCH != new_model.PEPOCH.value:
+        new_model.PEPOCH.value = PEPOCH
+    print(PEPOCH)
 
     for par in pars.split(","):
         if f"d{par}_mean" not in value_dict:
@@ -22,10 +28,16 @@ def update_model(model, value_dict):
         initial = value_dict[f"d{par}_initial"]
         factor = value_dict[f"d{par}_factor"]
         value = mean * factor + initial
+        print(value, mean, factor, initial)
+        if par == "Phase":
+            print(value, new_model.F0.value, PEPOCH, value / new_model.F0.value / 86400)
+            new_model.TZRMJD.value = value / new_model.F0.value / 86400 + PEPOCH
+            # new_model.TZRMJD.value =  PEPOCH
+            continue
         if par == "PB":
             value /= 86400
-        if par == "TASC":
-            value = value / 86400 + value_dict["PEPOCH"]
+        elif par == "TASC":
+            value = value / 86400 + PEPOCH
 
         getattr(new_model, par).value = value
     return new_model

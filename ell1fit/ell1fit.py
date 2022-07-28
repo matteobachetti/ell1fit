@@ -1058,7 +1058,7 @@ def main(args=None):
     if hasattr(model, "STOP"):
         results["Stop"] = model.STOP.value
     else:
-        results["Stop"] = times_from_pepoch[0] / 86400 + pepoch
+        results["Stop"] = times_from_pepoch[-1] / 86400 + pepoch
 
     results["PEPOCH"] = pepoch
     results["fname"] = fname
