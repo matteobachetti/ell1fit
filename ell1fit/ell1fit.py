@@ -911,6 +911,8 @@ def get_factors(parnames, model, observation_length):
         elif par == "PB":
             dp = np.sqrt(3) / (2 * np.pi**2 * F) * P**2 / X / observation_length
             zoom.append(min(1.0, order_of_magnitude(dp)))
+        elif par.startswith("EPS"):
+            zoom.append(0.001)
         else:
             zoom.append(1.0)
     return zoom
