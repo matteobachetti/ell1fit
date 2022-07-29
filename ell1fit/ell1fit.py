@@ -457,9 +457,10 @@ def calculate_result_array_from_samples(sampler, labels):
 def plot_mcmc_results(
     sampler=None, backend=None, flat_samples=None, labels=None, fname="results.jpg", **plot_kwargs
 ):
-    assert np.any(
-        [a is not None for a in [sampler, backend, flat_samples]]
-    ), "At least one between backend, sampler, or flat_samples, should be specified, in increasing order of priority"
+    assert np.any([a is not None for a in [sampler, backend, flat_samples]]), (
+        "At least one between backend, sampler, or flat_samples, should be specified, in",
+        "increasing order of priority",
+    )
 
     if flat_samples is None:
         if sampler is None:
