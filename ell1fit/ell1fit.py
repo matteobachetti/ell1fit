@@ -463,7 +463,7 @@ def plot_mcmc_results(sampler=None, backend=None, flat_samples=None, labels=None
             sampler = emcee.backends.HDFBackend(backend)
             assert sampler.iteration > 0, "Backend is empty"
 
-        flat_samples = get_flat_samples(sampler)
+        flat_samples, _ = get_flat_samples(sampler)
 
     fig = corner.corner(flat_samples, labels=labels, quantiles=[0.16, 0.5, 0.84])
     fig.savefig(fname, dpi=300)
