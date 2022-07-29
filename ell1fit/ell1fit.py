@@ -305,7 +305,7 @@ def create_template_from_profile_harm(
     additional_phase = phases_around_zero(additional_phase)
     template = template[:final_nbin].real
 
-    fig = plt.figure(figsize=(3.5,2.65))
+    fig = plt.figure(figsize=(3.5, 2.65))
     plt.plot(np.arange(0.5 / nbin, 1, 1 / nbin), profile, drawstyle="steps-mid", label="data")
     # plt.plot(phases_fine, template_fine, label="template fine")
     plt.plot(phas[:final_nbin], template, label="template values", ls="--", lw=2)
@@ -454,8 +454,12 @@ def calculate_result_array_from_samples(sampler, labels):
     return result_dict, flat_samples
 
 
-def plot_mcmc_results(sampler=None, backend=None, flat_samples=None, labels=None, fname="results.jpg", **plot_kwargs):
-    assert np.any([a is not None for a in [sampler, backend, flat_samples]]), "At least one between backend, sampler, or flat_samples, should be specified, in increasing order of priority"
+def plot_mcmc_results(
+    sampler=None, backend=None, flat_samples=None, labels=None, fname="results.jpg", **plot_kwargs
+):
+    assert np.any(
+        [a is not None for a in [sampler, backend, flat_samples]]
+    ), "At least one between backend, sampler, or flat_samples, should be specified, in increasing order of priority"
 
     if flat_samples is None:
         if sampler is None:
@@ -465,7 +469,7 @@ def plot_mcmc_results(sampler=None, backend=None, flat_samples=None, labels=None
 
         flat_samples, _ = get_flat_samples(sampler)
 
-    fig = corner.corner(flat_samples, labels=labels, quantiles=[0.16, 0.5, 0.84],**plot_kwargs)
+    fig = corner.corner(flat_samples, labels=labels, quantiles=[0.16, 0.5, 0.84], **plot_kwargs)
     fig.savefig(fname, dpi=300)
 
 
@@ -1022,11 +1026,11 @@ def main(args=None):
         outroot = "out" + "_" + "_".join(args.parameters.split(",")) + energy_str
 
     alltimes = []
-    expo = 0.
+    expo = 0.0
     for fname in files:
         ts, gtis = _load_and_format_events(
-                fname, energy_range, pepoch, plotfile=outroot + "_lightcurve.jpg"
-            )
+            fname, energy_range, pepoch, plotfile=outroot + "_lightcurve.jpg"
+        )
         alltimes.append(ts)
         expo += np.sum(np.diff(gtis, axis=1))
 
