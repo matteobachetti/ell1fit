@@ -32,7 +32,7 @@ params = {
     "ytick.minor.size": 0,
     "ytick.major.width": 0,
     "ytick.minor.width": 0,
-    "figure.figsize": (6, 4),
+    "figure.figsize": (3.5, 3.5),
     "axes.grid": True,
     "grid.color": "grey",
     "grid.linewidth": 0.3,
@@ -305,7 +305,7 @@ def create_template_from_profile_harm(
     additional_phase = phases_around_zero(additional_phase)
     template = template[:final_nbin].real
 
-    fig = plt.figure()
+    fig = plt.figure(figsize=(3.5,2.65))
     plt.plot(np.arange(0.5 / nbin, 1, 1 / nbin), profile, drawstyle="steps-mid", label="data")
     # plt.plot(phases_fine, template_fine, label="template fine")
     plt.plot(phas[:final_nbin], template, label="template values", ls="--", lw=2)
@@ -420,7 +420,7 @@ def add_ell1_orbit_numba(times, PB, A1, TASC, EPS1, EPS2):
     return times + A1 * (np.sin(phase) + k1 * np.sin(twophase) + k2 * np.cos(twophase))
 
 
-def calculate_result_array_from_samples(sampler, labels):
+def get_flat_samples(sampler):
     tau = sampler.get_autocorr_time(quiet=True)
     maxtau = np.max(tau)
     burnin = int(2 * maxtau)
@@ -432,8 +432,11 @@ def calculate_result_array_from_samples(sampler, labels):
     print("thin: {0}".format(thin))
     print("flat chain shape: {0}".format(flat_samples.shape))
     print("flat log prob shape: {0}".format(log_prob_samples.shape))
-    # print("flat log prior shape: {0}".format(log_prior_samples.shape))
+    return flat_samples, maxtau
 
+
+def calculate_result_array_from_samples(sampler, labels):
+    flat_samples, maxtau = get_flat_samples(sampler)
     result_dict = {}
     ndim = flat_samples.shape[1]
     percs = [1, 10, 16, 50, 84, 90, 99]
@@ -449,6 +452,21 @@ def calculate_result_array_from_samples(sampler, labels):
     result_dict["thin"] = maxtau
 
     return result_dict, flat_samples
+
+
+def plot_mcmc_results(sampler=None, backend=None, flat_samples=None, labels=None, fname="results.jpg"):
+    assert np.any([a is not None for a in [sampler, backend, flat_samples]]), "At least one between backend, sampler, or flat_samples, should be specified, in increasing order of priority"
+
+    if flat_samples is None:
+        if sampler is None:
+            assert os.path.exists(backend), "Backend file does not exist"
+            sampler = emcee.backends.HDFBackend(backend)
+            assert sampler.iteration > 0, "Backend is empty"
+
+        flat_samples = get_flat_samples(sampler)
+
+    fig = corner.corner(flat_samples, labels=labels, quantiles=[0.16, 0.5, 0.84])
+    fig.savefig(fname, dpi=300)
 
 
 def safe_run_sampler(
@@ -531,9 +549,7 @@ def safe_run_sampler(
         old_tau = tau
 
     result_dict, flat_samples = calculate_result_array_from_samples(sampler, labels)
-
-    fig = corner.corner(flat_samples, labels=corner_labels, quantiles=[0.16, 0.5, 0.84])
-    fig.savefig(outroot + "_corner.jpg", dpi=300)
+    plot_mcmc_results(flat_samples, labels, fname="results.jpg")
 
     return result_dict
 
@@ -589,7 +605,7 @@ def _plot_phaseogram(phases, times, ax0, ax1, norm="meansub_smooth"):
 
 
 def _compare_phaseograms(phase1, phase2, times, fname):
-    fig = plt.figure(figsize=(10, 10))
+    fig = plt.figure(figsize=(7, 7))
     gs = plt.GridSpec(2, 2, height_ratios=(1, 3))
     ax00 = plt.subplot(gs[0, 0])
     ax10 = plt.subplot(gs[1, 0], sharex=ax00)
