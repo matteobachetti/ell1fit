@@ -454,7 +454,7 @@ def calculate_result_array_from_samples(sampler, labels):
     return result_dict, flat_samples
 
 
-def plot_mcmc_results(sampler=None, backend=None, flat_samples=None, labels=None, fname="results.jpg"):
+def plot_mcmc_results(sampler=None, backend=None, flat_samples=None, labels=None, fname="results.jpg", **plot_kwargs):
     assert np.any([a is not None for a in [sampler, backend, flat_samples]]), "At least one between backend, sampler, or flat_samples, should be specified, in increasing order of priority"
 
     if flat_samples is None:
@@ -465,7 +465,7 @@ def plot_mcmc_results(sampler=None, backend=None, flat_samples=None, labels=None
 
         flat_samples, _ = get_flat_samples(sampler)
 
-    fig = corner.corner(flat_samples, labels=labels, quantiles=[0.16, 0.5, 0.84])
+    fig = corner.corner(flat_samples, labels=labels, quantiles=[0.16, 0.5, 0.84],**plot_kwargs)
     fig.savefig(fname, dpi=300)
 
 
