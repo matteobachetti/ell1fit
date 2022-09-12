@@ -554,7 +554,7 @@ def safe_run_sampler(
         old_tau = tau
 
     result_dict, flat_samples = calculate_result_array_from_samples(sampler, labels)
-    plot_mcmc_results(flat_samples, labels, fname="results.jpg")
+    plot_mcmc_results(flat_samples=flat_samples, labels=labels, fname=outroot + "_corner.jpg", backend=backend)
 
     return result_dict
 
