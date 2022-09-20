@@ -554,7 +554,9 @@ def safe_run_sampler(
         old_tau = tau
 
     result_dict, flat_samples = calculate_result_array_from_samples(sampler, labels)
-    plot_mcmc_results(flat_samples=flat_samples, labels=labels, fname=outroot + "_corner.jpg", backend=backend)
+    plot_mcmc_results(
+        flat_samples=flat_samples, labels=labels, fname=outroot + "_corner.jpg", backend=backend
+    )
 
     return result_dict
 
@@ -1023,7 +1025,11 @@ def main(args=None):
     outroot = args.outroot
     if outroot is None and len(files) == 1:
         outroot = (
-            splitext_improved(files[0])[0] + "_" + "_".join(args.parameters.split(",")) + energy_str + nharm_str
+            splitext_improved(files[0])[0]
+            + "_"
+            + "_".join(args.parameters.split(","))
+            + energy_str
+            + nharm_str
         )
     elif outroot is None:
         outroot = "out" + "_" + "_".join(args.parameters.split(",")) + energy_str + nharm_str
