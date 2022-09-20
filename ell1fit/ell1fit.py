@@ -1014,6 +1014,8 @@ def main(args=None):
 
     energy_range = args.erange
     energy_str = _format_energy_string(energy_range)
+    if args.nharm > 1:
+        nharm_str = f"_N{args.nharm}"
     parameters = _get_par_dict(model)
     parameter_names = ["Phase"] + args.parameters.split(",")
     minimize_first = args.minimize_first
@@ -1021,10 +1023,10 @@ def main(args=None):
     outroot = args.outroot
     if outroot is None and len(files) == 1:
         outroot = (
-            splitext_improved(files[0])[0] + "_" + "_".join(args.parameters.split(",")) + energy_str
+            splitext_improved(files[0])[0] + "_" + "_".join(args.parameters.split(",")) + energy_str + nharm_str
         )
     elif outroot is None:
-        outroot = "out" + "_" + "_".join(args.parameters.split(",")) + energy_str
+        outroot = "out" + "_" + "_".join(args.parameters.split(",")) + energy_str + nharm_str
 
     alltimes = []
     expo = 0.0
