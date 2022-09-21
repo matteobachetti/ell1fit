@@ -1021,7 +1021,7 @@ def main(args=None):
     parameters = _get_par_dict(model)
     parameter_names = ["Phase"] + args.parameters.split(",")
     minimize_first = args.minimize_first
-
+    
     outroot = args.outroot
     if outroot is None and len(files) == 1:
         outroot = (
