@@ -724,16 +724,17 @@ def fast_phase(times, frequency_derivatives):
 
 
 def _calculate_phases(times_from_pepoch, pars_dict):
-    phases=[]
-    list_phases_from_zero_to_one=[]
+    n_files = len(times_from_pepoch)
+    phases = []
+    list_phases_from_zero_to_one = []
     for i in range(n_files):
-        tasc=_mjd_to_sec(pars_dict.TASC.value, pars_dict.PEPOCH_f"{i}".value)
+        tasc = _mjd_to_sec(pars_dict["TASC"].value, pars_dict[f"PEPOCH_{i}"].value)
         deorbit_times_from_pepoch = simple_ell1_deorbit_numba(
             times_from_pepoch[i],
             pars_dict["PB"],
             pars_dict["A1"],
-            #pars_dict["TASC"],
-            tasc
+            # pars_dict["TASC"],
+            tasc,
             pars_dict["EPS1"],
             pars_dict["EPS2"],
         )
@@ -744,16 +745,19 @@ def _calculate_phases(times_from_pepoch, pars_dict):
             freq_ders.append(pars_dict[f"F{count}_{i}"])
             count += 1
 
-        phases.append(pars_dict["Phase"] + fast_phase(deorbit_times_from_pepoch.astype(float), freq_ders))
+        phases.append(
+            pars_dict["Phase"] + fast_phase(deorbit_times_from_pepoch.astype(float), freq_ders)
+        )
         list_phases_from_zero_to_one.append(phases_from_zero_to_one(phases[i]))
     return list_phases_from_zero_to_one
 
 
 def folded_profile(times, parameters, nbin=16):
+    n_files = len(times)
     phases = _calculate_phases(times, parameters)
-    profile=[]
+    profile = []
     for i in range(n_files):
-        profile.append( np.histogram(phases[i], bins=np.linspace(0, 1, nbin + 1))[0])
+        profile.append(np.histogram(phases[i], bins=np.linspace(0, 1, nbin + 1))[0])
     return profile
 
 
@@ -926,11 +930,12 @@ def order_of_magnitude(value):
 def get_factors(parnames, model, observation_length):
     import re
 
+    n_files = len(observation_length)
     freq_re = re.compile(r"^F([0-9]+)$")
-    zoom = [ [] for j in range(n_files) ]
+    zoom = [[] for j in range(n_files)]
     P = model[0].PB.value * 86400
     X = model[0].A1.value
-    for i in range(n_files):        
+    for i in range(n_files):
         F = model[i].F0.value
         for par in parnames:
             matchobj = freq_re.match(par)
@@ -1014,19 +1019,20 @@ def main(args=None):
     files = args.files
     parfile = args.parfile
     n_files = len(files)
-    assert len(parfiles) == len(files), "The number of parameter files must match that of event files."
-    model=[None] * n_files
-    pepoch=[None] * n_files
+    assert len(parfile) == len(
+        files
+    ), "The number of parameter files must match that of event files."
+    model = [None] * n_files
+    pepoch = [None] * n_files
 
     for i in range(n_files):
-        model[i] = get_model(parfile[i])   
+        model[i] = get_model(parfile[i])
         pepoch[i] = model[i].PEPOCH.value
 
         if hasattr(model[i], "T0") or model.BINARY.value != "ELL1":
             raise ValueError("This script wants an ELL1 model, with TASC, not T0, defined")
 
         model[i].change_binary_epoch(pepoch[i])
-
 
     nsteps = args.nsteps
     nharm = args.nharm
@@ -1039,8 +1045,7 @@ def main(args=None):
 
     general_tasc = np.min([mod.TASC.value for mod in model])
 
-    sc_ind=0                                     #scelta dell'indice del file da cui copiare A1,TASC, etc. 
-
+    sc_ind = 0  # scelta dell'indice del file da cui copiare A1,TASC, etc.
 
     parameters = _get_par_dict(model[sc_ind])
     parameters["TASC"] = general_tasc
@@ -1048,30 +1053,24 @@ def main(args=None):
     count = 0
     while f"F{count}" in model[sc_ind]:
         del parameters[f"F{count}"]
-        count +=1
+        count += 1
 
     del parameters[f"PEPOCH"]
 
-
     for i in range(n_files):
-        
+
         count = 0
         while f"F{count}" in _get_par_dict(model[i]):
-            parameters[f"F{count}_{i}"] = _get_par_dict(model[i])[f"F{count}"]   
+            parameters[f"F{count}_{i}"] = _get_par_dict(model[i])[f"F{count}"]
             count += 1
 
         parameters[f"PEPOCH_{i}"] = _get_par_dict(model[i])[f"PEPOCH"]
 
-        
-
-
-    parameter_names=[f"Phases_{j}" for j in range(count)]
+    parameter_names = [f"Phases_{j}" for j in range(count)]
     parameter_names += list(parameters.keys())
-    
-
 
     minimize_first = args.minimize_first
-    
+
     outroot = args.outroot
     if outroot is None and len(files) == 1:
         outroot = (
@@ -1085,10 +1084,10 @@ def main(args=None):
         outroot = "out" + "_" + "_".join(args.parameters.split(",")) + energy_str + nharm_str
 
     alltimes = []
-    ts=[]
-    gtis=[]
-    times_from_pepoch=[]
-    observation_length=[]
+    ts = []
+    gtis = []
+    times_from_pepoch = []
+    observation_length = []
     expo = np.zeros(n_files)
     for i in range(n_files):
         for fname in files[i]:
@@ -1102,29 +1101,31 @@ def main(args=None):
         observation_length[i] = times_from_pepoch[i][-1] - times_from_pepoch[i][0]
 
     bounds = create_bounds(parameter_names)
-    factors = get_factors(parameter_names, model, observation_length)   
+    factors = get_factors(parameter_names, model, observation_length)
 
     profile = folded_profile(times_from_pepoch, parameters, nbin=nbin)
 
-    create_template=[]
-    template=[]
-    additional_phase=[]
-    template_func=[]
-    mint=[]
-    maxt=[]
-    pulsed_frac=[]
-    ph0=[]
+    create_template = []
+    template = []
+    additional_phase = []
+    template_func = []
+    mint = []
+    maxt = []
+    pulsed_frac = []
+    ph0 = []
 
     for i in range(n_files):
-        create_template.append(create_template_from_profile_harm(
-            profile[i], nharm=nharm, final_nbin=200, imagefile=outroot + "_template.jpg"
-        ))
+        create_template.append(
+            create_template_from_profile_harm(
+                profile[i], nharm=nharm, final_nbin=200, imagefile=outroot + "_template.jpg"
+            )
+        )
         template.append(create_template[i][0])
         additional_phase.append(create_template[i][1])
         template_func.append(get_template_func(template[i]))
         mint.append(template[i].min())
         maxt.append(template[i].max())
-        pulsed_frac.append( (maxt[i] - mint[i]) / (maxt[i] + mint[i]))
+        pulsed_frac.append((maxt[i] - mint[i]) / (maxt[i] + mint[i]))
 
         ph0.append(-phases_around_zero(additional_phase[i]))
         parameters["Phase_{i}"] = ph0[i]
