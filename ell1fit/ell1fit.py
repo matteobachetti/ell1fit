@@ -1,3 +1,4 @@
+from itertools import count
 import warnings
 
 import os
@@ -725,8 +726,9 @@ def fast_phase(times, frequency_derivatives):
 
 def _calculate_phases(times_from_pepoch, pars_dict):
     n_files = len(times_from_pepoch)
-    phases = []
+    phases = [None] * n_files
     list_phases_from_zero_to_one = []
+    freq_ders = [None] * n_files
     for i in range(n_files):
         tasc = _mjd_to_sec(pars_dict["TASC"].value, pars_dict[f"PEPOCH_{i}"].value)
         deorbit_times_from_pepoch = simple_ell1_deorbit_numba(
@@ -739,14 +741,14 @@ def _calculate_phases(times_from_pepoch, pars_dict):
             pars_dict["EPS2"],
         )
 
-        freq_ders = []
         count = 0
         while f"F{count}_{i}" in pars_dict:
-            freq_ders.append(pars_dict[f"F{count}_{i}"])
+            freq_ders[i].append(pars_dict[f"F{count}_{i}"])
             count += 1
-
-        phases.append(
-            pars_dict["Phase"] + fast_phase(deorbit_times_from_pepoch.astype(float), freq_ders)
+        ######forse era giusto prima
+        phases[i].append(
+            pars_dict[f"Phase_{i}"]
+            + fast_phase(deorbit_times_from_pepoch.astype(float), freq_ders[i])
         )
         list_phases_from_zero_to_one.append(phases_from_zero_to_one(phases[i]))
     return list_phases_from_zero_to_one
@@ -843,11 +845,16 @@ def optimize_solution(
 
     def func_to_maximize(pars):
         # print(pars)
+        lp = logprior(pars)
+        if np.isinf(lp):
+            return lp
         phases = local_phases(pars)
 
-        ll = likelihood(phases, template_func) + logprior(pars)
+        ll = 0
+        for i in len(phases):
+            ll += likelihood(phases[i], template_func[i])
 
-        return ll
+        return ll + lp
 
     def func_to_minimize(pars):
         return -func_to_maximize(pars)
@@ -870,12 +877,13 @@ def optimize_solution(
     for par, value, f in zip(fit_parameters, fit_pars, factors):
         rough_results["rough_d" + par] = value
 
-    _compare_phaseograms(
-        local_phases(all_zeros),
-        phases_from_zero_to_one(phases),
-        times_from_pepoch,
-        fname=outroot + ".jpg",
-    )
+    for i in len(times_from_pepoch):
+        _compare_phaseograms(
+            local_phases(all_zeros),
+            phases_from_zero_to_one(phases[i]),
+            times_from_pepoch[i],
+            fname=outroot + f"{i}.jpg",
+        )
 
     corner_labels = [
         "d" + par + f"{np.log10(fac):+g}" for (par, fac) in zip(fit_parameters, factors)
@@ -891,7 +899,10 @@ def optimize_solution(
         n_autocorr=0,
     )
 
-    results["additional_phase"] = pars_dict["Phase"]
+    count = 0
+    while f"Phase_{count}" in pars_dict:
+        results[f"additional_phase_{count}"] = pars_dict[f"Phase_{count}"]
+        count += 1
 
     results.update(model_parameters)
     results.update(rough_results)
@@ -931,26 +942,29 @@ def get_factors(parnames, model, observation_length):
     import re
 
     n_files = len(observation_length)
-    freq_re = re.compile(r"^F([0-9]+)$")
-    zoom = [[] for j in range(n_files)]
+    freq_re = re.compile(r"^F([0-9]+)_([0-9]+)$")
+    zoom = []
     P = model[0].PB.value * 86400
     X = model[0].A1.value
-    for i in range(n_files):
-        F = model[i].F0.value
-        for par in parnames:
-            matchobj = freq_re.match(par)
-            if matchobj:
-                order = int(matchobj.group(1))
-                zoom[i].append(order_of_magnitude(1 / observation_length[i] ** (order + 1)))
-            elif par == "A1":
-                zoom[i].append(min(1, order_of_magnitude(1 / np.pi / 2 / F)))
-            elif par == "PB":
-                dp = np.sqrt(3) / (2 * np.pi**2 * F) * P**2 / X / observation_length[i]
-                zoom[i].append(min(1.0, order_of_magnitude(dp)))
-            elif par.startswith("EPS"):
-                zoom[i].append(0.001)
-            else:
-                zoom[i].append(1.0)
+
+    F = np.max([model[i].F0.value for i in range(n_files)])
+    obs_length = np.max(observation_length)
+
+    for par in parnames:
+        matchobj = freq_re.match(par)
+        if matchobj:
+            order = int(matchobj.group(1))
+            file_n = int(matchobj.group(2))
+            zoom.append(order_of_magnitude(1 / obs_length ** (order + 1)))
+        elif par == "A1":
+            zoom.append(min(1, order_of_magnitude(1 / np.pi / 2 / F)))
+        elif par == "PB":
+            dp = np.sqrt(3) / (2 * np.pi**2 * F) * P**2 / X / obs_length
+            zoom.append(min(1.0, order_of_magnitude(dp)))
+        elif par.startswith("EPS"):
+            zoom.append(0.001)
+        else:
+            zoom.append(1.0)
     return zoom
 
 
@@ -1066,8 +1080,7 @@ def main(args=None):
 
         parameters[f"PEPOCH_{i}"] = _get_par_dict(model[i])[f"PEPOCH"]
 
-    parameter_names = [f"Phases_{j}" for j in range(count)]
-    parameter_names += list(parameters.keys())
+    parameter_names = list(parameters.keys()) + [f"Phases_{j}" for j in range(count)]
 
     minimize_first = args.minimize_first
 
@@ -1083,11 +1096,11 @@ def main(args=None):
     elif outroot is None:
         outroot = "out" + "_" + "_".join(args.parameters.split(",")) + energy_str + nharm_str
 
-    alltimes = []
-    ts = []
-    gtis = []
-    times_from_pepoch = []
-    observation_length = []
+    alltimes = [None] * n_files
+    ts = [None] * n_files
+    gtis = [None] * n_files
+    times_from_pepoch = [None] * n_files
+    observation_length = [None] * n_files
     expo = np.zeros(n_files)
     for i in range(n_files):
         for fname in files[i]:
@@ -1113,6 +1126,10 @@ def main(args=None):
     maxt = []
     pulsed_frac = []
     ph0 = []
+    try:
+        input_mean_fit_pars = [parameters[par] for par in parameter_names]
+    except KeyError:
+        raise ValueError("One or more parameters are missing from the parameter file")
 
     for i in range(n_files):
         create_template.append(
@@ -1128,12 +1145,12 @@ def main(args=None):
         pulsed_frac.append((maxt[i] - mint[i]) / (maxt[i] + mint[i]))
 
         ph0.append(-phases_around_zero(additional_phase[i]))
-        parameters["Phase_{i}"] = ph0[i]
-        try:
-            input_mean_fit_pars = [parameters[par] for par in parameter_names]
-        except KeyError:
-            raise ValueError("One or more parameters are missing from the parameter file")
-        bounds[i] = (ph0[i] - 0.5, ph0[i] + 0.5)
+        parameters[f"Phase_{i}"] = ph0[i]
+
+        for j, par in enumerate(parameter_names):
+            if par == f"Phase_{i}":
+                bounds[j] = (ph0[i] - 0.5, ph0[i] + 0.5)
+                break
 
     results = optimize_solution(
         times_from_pepoch,
