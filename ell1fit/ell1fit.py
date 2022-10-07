@@ -726,7 +726,7 @@ def fast_phase(times, frequency_derivatives):
 
 def _calculate_phases(times_from_pepoch, pars_dict):
     n_files = len(times_from_pepoch)
-    phases = [[]] * n_files
+    phases = []
     list_phases_from_zero_to_one = []
     freq_ders = [[]] * n_files
     for i in range(n_files):
@@ -746,8 +746,7 @@ def _calculate_phases(times_from_pepoch, pars_dict):
             freq_ders[i].append(pars_dict[f"F{count}_{i}"])
             count += 1
 
-        print(pars_dict)  ###prova
-        phases[i].append(
+        phases.append(
             pars_dict[f"Phase_{i}"]
             + fast_phase(deorbit_times_from_pepoch.astype(float), freq_ders[i])
         )
@@ -878,10 +877,9 @@ def optimize_solution(
     rough_results = {}
     for par, value, f in zip(fit_parameters, fit_pars, factors):
         rough_results["rough_d" + par] = value
-
-    for i in len(times_from_pepoch):
+    for i in range(len(times_from_pepoch)):
         _compare_phaseograms(
-            local_phases(all_zeros),
+            local_phases(all_zeros)[i],
             phases_from_zero_to_one(phases[i]),
             times_from_pepoch[i],
             fname=outroot + f"{i}.jpg",
@@ -1083,8 +1081,13 @@ def main(args=None):
             count += 1
 
         parameters[f"PEPOCH_{i}"] = _get_par_dict(model[i])["PEPOCH"]
+        parameters[
+            f"Phase_{i}"
+        ] = 0  ###ho inizializzato le fasi perchè _calculate_phases chiama parameters[f"Phase_{i}"]
 
-    parameter_names = list(parameters.keys()) + [f"Phase_{j}" for j in range(count)]
+    parameter_names = list(
+        parameters.keys()
+    )  ###+ [f"Phase_{j}" for j in range(count)] (non serve per questa --^ modifica)
 
     minimize_first = args.minimize_first
 
