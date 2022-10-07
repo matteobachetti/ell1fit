@@ -1,4 +1,4 @@
-from itertools import count
+# from itertools import count
 import warnings
 
 import os
@@ -726,11 +726,11 @@ def fast_phase(times, frequency_derivatives):
 
 def _calculate_phases(times_from_pepoch, pars_dict):
     n_files = len(times_from_pepoch)
-    phases = [None] * n_files
+    phases = [[]] * n_files
     list_phases_from_zero_to_one = []
-    freq_ders = [None] * n_files
+    freq_ders = [[]] * n_files
     for i in range(n_files):
-        tasc = _mjd_to_sec(pars_dict["TASC"].value, pars_dict[f"PEPOCH_{i}"].value)
+        tasc = _mjd_to_sec(pars_dict["TASC"], pars_dict[f"PEPOCH_{i}"])
         deorbit_times_from_pepoch = simple_ell1_deorbit_numba(
             times_from_pepoch[i],
             pars_dict["PB"],
@@ -745,7 +745,8 @@ def _calculate_phases(times_from_pepoch, pars_dict):
         while f"F{count}_{i}" in pars_dict:
             freq_ders[i].append(pars_dict[f"F{count}_{i}"])
             count += 1
-        ######forse era giusto prima
+
+        print(pars_dict)  ###prova
         phases[i].append(
             pars_dict[f"Phase_{i}"]
             + fast_phase(deorbit_times_from_pepoch.astype(float), freq_ders[i])
@@ -771,6 +772,7 @@ def _get_par_dict(model):
         "A1": model.A1.value.astype(float),
         "EPS1": model.EPS1.value.astype(float),
         "EPS2": model.EPS2.value.astype(float),
+        "PEPOCH": model.PEPOCH.value.astype(float),  ### ho aggiunto pepoch
     }
 
     count = 0
@@ -1043,7 +1045,7 @@ def main(args=None):
         model[i] = get_model(parfile[i])
         pepoch[i] = model[i].PEPOCH.value
 
-        if hasattr(model[i], "T0") or model.BINARY.value != "ELL1":
+        if hasattr(model[i], "T0") or model[i].BINARY.value != "ELL1":
             raise ValueError("This script wants an ELL1 model, with TASC, not T0, defined")
 
         model[i].change_binary_epoch(pepoch[i])
@@ -1056,6 +1058,8 @@ def main(args=None):
     energy_str = _format_energy_string(energy_range)
     if args.nharm > 1:
         nharm_str = f"_N{args.nharm}"
+    else:
+        nharm_str = ""
 
     general_tasc = np.min([mod.TASC.value for mod in model])
 
@@ -1069,7 +1073,7 @@ def main(args=None):
         del parameters[f"F{count}"]
         count += 1
 
-    del parameters[f"PEPOCH"]
+    del parameters["PEPOCH"]
 
     for i in range(n_files):
 
@@ -1078,9 +1082,9 @@ def main(args=None):
             parameters[f"F{count}_{i}"] = _get_par_dict(model[i])[f"F{count}"]
             count += 1
 
-        parameters[f"PEPOCH_{i}"] = _get_par_dict(model[i])[f"PEPOCH"]
+        parameters[f"PEPOCH_{i}"] = _get_par_dict(model[i])["PEPOCH"]
 
-    parameter_names = list(parameters.keys()) + [f"Phases_{j}" for j in range(count)]
+    parameter_names = list(parameters.keys()) + [f"Phase_{j}" for j in range(count)]
 
     minimize_first = args.minimize_first
 
@@ -1096,19 +1100,19 @@ def main(args=None):
     elif outroot is None:
         outroot = "out" + "_" + "_".join(args.parameters.split(",")) + energy_str + nharm_str
 
-    alltimes = [None] * n_files
-    ts = [None] * n_files
-    gtis = [None] * n_files
-    times_from_pepoch = [None] * n_files
-    observation_length = [None] * n_files
+    alltimes = [[]] * n_files
+    ts = [[]] * n_files
+    gtis = [[]] * n_files
+    times_from_pepoch = [[]] * n_files
+    observation_length = [[]] * n_files
     expo = np.zeros(n_files)
     for i in range(n_files):
-        for fname in files[i]:
-            ts[i], gtis[i] = _load_and_format_events(
-                fname, energy_range, pepoch[i], plotfile=outroot + "_lightcurve.jpg"
-            )
-            alltimes[i].append(ts[i])
-            expo[i] += np.sum(np.diff(gtis, axis=1))
+        fname = files[i]
+        ts[i], gtis[i] = _load_and_format_events(
+            fname, energy_range, pepoch[i], plotfile=outroot + "_lightcurve.jpg"
+        )
+        alltimes[i].append(ts[i])
+        expo[i] += np.sum(np.diff(gtis, axis=1))
 
         times_from_pepoch[i] = np.sort(np.concatenate(alltimes[i]))
         observation_length[i] = times_from_pepoch[i][-1] - times_from_pepoch[i][0]
