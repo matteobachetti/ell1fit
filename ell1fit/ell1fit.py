@@ -1016,6 +1016,7 @@ def main(args=None):
 
     energy_range = args.erange
     energy_str = _format_energy_string(energy_range)
+    nharm_str = ""
     if args.nharm > 1:
         nharm_str = f"_N{args.nharm}"
     parameters = _get_par_dict(model)
