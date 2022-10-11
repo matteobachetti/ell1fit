@@ -1,4 +1,3 @@
-# from itertools import count
 import warnings
 
 import os
@@ -852,7 +851,7 @@ def optimize_solution(
         phases = local_phases(pars)
 
         ll = 0
-        for i in len(phases):
+        for i in range(len(phases)):
             ll += likelihood(phases[i], template_func[i])
 
         return ll + lp
@@ -888,7 +887,6 @@ def optimize_solution(
     corner_labels = [
         "d" + par + f"{np.log10(fac):+g}" for (par, fac) in zip(fit_parameters, factors)
     ]
-
     results = safe_run_sampler(
         func_to_maximize,
         fit_pars,
@@ -1081,13 +1079,22 @@ def main(args=None):
             count += 1
 
         parameters[f"PEPOCH_{i}"] = _get_par_dict(model[i])["PEPOCH"]
-        parameters[
-            f"Phase_{i}"
-        ] = 0  ###ho inizializzato le fasi perchè _calculate_phases chiama parameters[f"Phase_{i}"]
+        parameters[f"Phase_{i}"] = 0
+        ###^----- ho inizializzato le fasi perchè _calculate_phases chiama parameters[f"Phase_{i}"]
 
-    parameter_names = list(
-        parameters.keys()
-    )  ###+ [f"Phase_{j}" for j in range(count)] (non serve per questa --^ modifica)
+    parameter_names = []
+    count = 0
+    while f"Phase_{count}" in parameters:
+        parameter_names.append(f"Phase_{count}")
+        count += 1
+
+    list_parameter_names = args.parameters.split(",")
+
+    for f in list_parameter_names:
+        count = 0
+        while f + f"_{count}" in parameters:
+            parameter_names.append(f + f"_{count}")
+            count += 1
 
     minimize_first = args.minimize_first
 
