@@ -912,12 +912,13 @@ def optimize_solution(
     fit_pars = [results["d" + par + "_50"] for par in fit_parameters]
     phases = local_phases(fit_pars)
 
-    _compare_phaseograms(
-        local_phases(all_zeros),
-        phases_from_zero_to_one(phases),
-        times_from_pepoch,
-        fname=outroot + "_final.jpg",
-    )
+    for i in range(len(times_from_pepoch)):
+        _compare_phaseograms(
+            local_phases(all_zeros)[i],
+            phases_from_zero_to_one(phases[i]),
+            times_from_pepoch[i],
+            fname=outroot + "_final.jpg",
+        )
 
     return results
 
@@ -1179,25 +1180,27 @@ def main(args=None):
         nharm=nharm,
         outroot=outroot,
     )
+    results["Start"] = []
+    results["Stop"] = []
+    for i in range(n_files):
+        if hasattr(model[i], "START"):
+            results["Start"].append(model[i].START.value)
+        else:
+            results["Start"].append(times_from_pepoch[i][0] / 86400 + pepoch[i])
+        if hasattr(model[i], "STOP"):
+            results["Stop"].append(model[i].STOP.value)
+        else:
+            results["Stop"].append(times_from_pepoch[i][-1] / 86400 + pepoch[i])
 
-    if hasattr(model, "START"):
-        results["Start"] = model.START.value
-    else:
-        results["Start"] = times_from_pepoch[0] / 86400 + pepoch
-    if hasattr(model, "STOP"):
-        results["Stop"] = model.STOP.value
-    else:
-        results["Stop"] = times_from_pepoch[-1] / 86400 + pepoch
-
-    results["PEPOCH"] = pepoch
+    results["PEPOCH"] = [pepoch[i] for i in range(n_files)]
     results["fname"] = fname
     results["nharm"] = nharm
     results["emin"] = 0 if energy_range is None else energy_range[0]
     results["emax"] = np.inf if energy_range is None else energy_range[1]
     results["nsteps"] = nsteps
-    results["nharm"] = nharm
+    # results["nharm"] = nharm
     results["pf"] = pulsed_frac
-    results["ctrate"] = times_from_pepoch.size / expo
+    results["ctrate"] = [times_from_pepoch[i].size / expo[i] for i in range(n_files)]
     results["ell1fit_version"] = version.version
 
     results = Table(rows=[results])
