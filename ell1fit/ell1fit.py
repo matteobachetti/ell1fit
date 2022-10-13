@@ -725,19 +725,22 @@ def fast_phase(times, frequency_derivatives):
 
 def _calculate_phases(times_from_pepoch, pars_dict):
     n_files = len(times_from_pepoch)
-    phases = []
+    phases = [[] for _ in range(n_files)]
     list_phases_from_zero_to_one = []
-    freq_ders = [[]] * n_files
+    freq_ders = [[] for _ in range(n_files)]
+    deorbit_times_from_pepoch = []
+    tasc = []
     for i in range(n_files):
-        tasc = _mjd_to_sec(pars_dict["TASC"], pars_dict[f"PEPOCH_{i}"])
-        deorbit_times_from_pepoch = simple_ell1_deorbit_numba(
-            times_from_pepoch[i],
-            pars_dict["PB"],
-            pars_dict["A1"],
-            # pars_dict["TASC"],
-            tasc,
-            pars_dict["EPS1"],
-            pars_dict["EPS2"],
+        tasc.append(_mjd_to_sec(pars_dict["TASC"], pars_dict[f"PEPOCH_{i}"]))
+        deorbit_times_from_pepoch.append(
+            simple_ell1_deorbit_numba(
+                times_from_pepoch[i],
+                pars_dict["PB"],
+                pars_dict["A1"],
+                tasc[i],
+                pars_dict["EPS1"],
+                pars_dict["EPS2"],
+            )
         )
 
         count = 0
@@ -745,9 +748,8 @@ def _calculate_phases(times_from_pepoch, pars_dict):
             freq_ders[i].append(pars_dict[f"F{count}_{i}"])
             count += 1
 
-        phases.append(
-            pars_dict[f"Phase_{i}"]
-            + fast_phase(deorbit_times_from_pepoch.astype(float), freq_ders[i])
+        phases[i] = pars_dict[f"Phase_{i}"] + fast_phase(
+            deorbit_times_from_pepoch[i].astype(float), freq_ders[i]
         )
         list_phases_from_zero_to_one.append(phases_from_zero_to_one(phases[i]))
     return list_phases_from_zero_to_one
@@ -881,7 +883,7 @@ def optimize_solution(
             local_phases(all_zeros)[i],
             phases_from_zero_to_one(phases[i]),
             times_from_pepoch[i],
-            fname=outroot + f"{i}.jpg",
+            fname=outroot + f"_{i}.jpg",
         )
 
     corner_labels = [
@@ -917,7 +919,7 @@ def optimize_solution(
             local_phases(all_zeros)[i],
             phases_from_zero_to_one(phases[i]),
             times_from_pepoch[i],
-            fname=outroot + "_final.jpg",
+            fname=outroot + f"_{i}_final.jpg",
         )
 
     return results
@@ -1035,12 +1037,12 @@ def main(args=None):
     assert len(parfile) == len(
         files
     ), "The number of parameter files must match that of event files."
-    model = [None] * n_files
-    pepoch = [None] * n_files
+    model = []
+    pepoch = []
 
     for i in range(n_files):
-        model[i] = get_model(parfile[i])
-        pepoch[i] = model[i].PEPOCH.value
+        model.append(get_model(parfile[i]))
+        pepoch.append(model[i].PEPOCH.value)
 
         if hasattr(model[i], "T0") or model[i].BINARY.value != "ELL1":
             raise ValueError("This script wants an ELL1 model, with TASC, not T0, defined")
@@ -1080,22 +1082,19 @@ def main(args=None):
             count += 1
 
         parameters[f"PEPOCH_{i}"] = _get_par_dict(model[i])["PEPOCH"]
-        parameters[f"Phase_{i}"] = 0
+        parameters[f"Phase_{i}"] = parameters["Phase"]
         ###^----- ho inizializzato le fasi perchè _calculate_phases chiama parameters[f"Phase_{i}"]
+    del parameters["Phase"]
 
     parameter_names = []
-    count = 0
-    while f"Phase_{count}" in parameters:
-        parameter_names.append(f"Phase_{count}")
-        count += 1
-
     list_parameter_names = args.parameters.split(",")
 
-    for f in list_parameter_names:
-        count = 0
-        while f + f"_{count}" in parameters:
-            parameter_names.append(f + f"_{count}")
-            count += 1
+    for f in parameters:
+        if f.startswith("Phase"):
+            parameter_names.append(f)
+        for g in list_parameter_names:
+            if f.startswith(g):
+                parameter_names.append(f)
 
     minimize_first = args.minimize_first
 
@@ -1111,21 +1110,17 @@ def main(args=None):
     elif outroot is None:
         outroot = "out" + "_" + "_".join(args.parameters.split(",")) + energy_str + nharm_str
 
-    alltimes = [[]] * n_files
-    ts = [[]] * n_files
-    gtis = [[]] * n_files
-    times_from_pepoch = [[]] * n_files
-    observation_length = [[]] * n_files
+    gtis = [[] for _ in range(n_files)]
+    times_from_pepoch = [[] for _ in range(n_files)]
+    observation_length = [[] for _ in range(n_files)]
     expo = np.zeros(n_files)
     for i in range(n_files):
         fname = files[i]
-        ts[i], gtis[i] = _load_and_format_events(
-            fname, energy_range, pepoch[i], plotfile=outroot + "_lightcurve.jpg"
+        times_from_pepoch[i], gtis[i] = _load_and_format_events(
+            fname, energy_range, pepoch[i], plotfile=outroot + f"_lightcurve_{i}.jpg"
         )
-        alltimes[i].append(ts[i])
-        expo[i] += np.sum(np.diff(gtis, axis=1))
+        expo[i] += np.sum(np.diff(gtis[i], axis=1))
 
-        times_from_pepoch[i] = np.sort(np.concatenate(alltimes[i]))
         observation_length[i] = times_from_pepoch[i][-1] - times_from_pepoch[i][0]
 
     bounds = create_bounds(parameter_names)
@@ -1180,27 +1175,34 @@ def main(args=None):
         nharm=nharm,
         outroot=outroot,
     )
-    results["Start"] = []
-    results["Stop"] = []
+
     for i in range(n_files):
         if hasattr(model[i], "START"):
-            results["Start"].append(model[i].START.value)
+            results[f"Start_{i}"] = model[i].START.value
         else:
-            results["Start"].append(times_from_pepoch[i][0] / 86400 + pepoch[i])
+            results[f"Start_{i}"] = times_from_pepoch[i][0] / 86400 + pepoch[i]
         if hasattr(model[i], "STOP"):
-            results["Stop"].append(model[i].STOP.value)
+            results[f"Stop_{i}"] = model[i].STOP.value
         else:
-            results["Stop"].append(times_from_pepoch[i][-1] / 86400 + pepoch[i])
+            results[f"Stop_{i}"] = times_from_pepoch[i][-1] / 86400 + pepoch[i]
 
-    results["PEPOCH"] = [pepoch[i] for i in range(n_files)]
-    results["fname"] = fname
+    for i in range(n_files):
+        results[f"PEPOCH_{i}"] = pepoch[i]
+
+    for i in range(n_files):
+        results[f"fname_{i}"] = fname[i]
+
     results["nharm"] = nharm
     results["emin"] = 0 if energy_range is None else energy_range[0]
     results["emax"] = np.inf if energy_range is None else energy_range[1]
     results["nsteps"] = nsteps
-    # results["nharm"] = nharm
-    results["pf"] = pulsed_frac
-    results["ctrate"] = [times_from_pepoch[i].size / expo[i] for i in range(n_files)]
+
+    for i in range(n_files):
+        results[f"pf_{i}"] = pulsed_frac[i]
+
+    for i in range(n_files):
+        results[f"ctrate_{i}"] = times_from_pepoch[i].size / expo[i]
+
     results["ell1fit_version"] = version.version
 
     results = Table(rows=[results])
