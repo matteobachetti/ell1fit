@@ -23,7 +23,7 @@ def update_model(model, value_dict):
         if f"d{par}_mean" not in value_dict:
             continue
         if par != "Phase":
-            print(f"Updating {par}" )
+            print(f"Updating {par}")
         else:
             print("Updating TZRMJD")
 
