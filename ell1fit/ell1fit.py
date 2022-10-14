@@ -772,7 +772,7 @@ def _get_par_dict(model):
         "A1": model.A1.value.astype(float),
         "EPS1": model.EPS1.value.astype(float),
         "EPS2": model.EPS2.value.astype(float),
-        "PEPOCH": model.PEPOCH.value.astype(float),  ### ho aggiunto pepoch
+        "PEPOCH": model.PEPOCH.value.astype(float), #  I added Pepoch
     }
 
     count = 0
@@ -956,7 +956,7 @@ def get_factors(parnames, model, observation_length):
         if matchobj:
             order = int(matchobj.group(1))
             file_n = int(matchobj.group(2))
-            zoom.append(order_of_magnitude(1 / obs_length ** (order + 1)))
+            zoom.append(order_of_magnitude(1 / observation_length[file_n] ** (order + 1)))
         elif par == "A1":
             zoom.append(min(1, order_of_magnitude(1 / np.pi / 2 / F)))
         elif par == "PB":
@@ -1083,7 +1083,7 @@ def main(args=None):
 
         parameters[f"PEPOCH_{i}"] = _get_par_dict(model[i])["PEPOCH"]
         parameters[f"Phase_{i}"] = parameters["Phase"]
-        ###^----- ho inizializzato le fasi perchè _calculate_phases chiama parameters[f"Phase_{i}"]
+        #  I initialized the phases because _calculate_phases calls parameters[f"Phase_{i}"]
     del parameters["Phase"]
 
     parameter_names = []
