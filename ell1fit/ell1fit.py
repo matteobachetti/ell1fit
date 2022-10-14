@@ -1202,6 +1202,11 @@ def main(args=None):
 
     results["ell1fit_version"] = version.version
 
+    list_result = []
+    for i in range(n_files):
+        list_result.append(copy.deepcopy(results))
+    keys = list(results.keys())
+
     results = Table(rows=[results])
 
     output_file = outroot + "_results.ecsv"
@@ -1212,6 +1217,42 @@ def main(args=None):
         results = vstack([old, results])
 
     results.write(output_file, overwrite=True)
+
+    list_parameter_names += [
+        "Phase",
+        "PEPOCH",
+        "Start",
+        "Stop",
+        "fname",
+        "ctrate",
+        "pf",
+        "additional_phase",
+    ]
+
+    list_output_file = []
+    for i in range(n_files):
+        for par in list_parameter_names:
+            for j in range(len(keys)):
+                for k in range(n_files):
+                    if par + f"_{k}" in keys[j]:
+                        if k == i:
+                            list_result[i][keys[j].replace(par + f"_{k}", par)] = list_result[i][
+                                keys[j]
+                            ]
+                            # print(keys[j], "--->", keys[j].replace(par + f"_{k}", par))
+                        del list_result[i][keys[j]]
+
+        list_result[i] = Table(rows=[list_result[i]])
+
+        list_output_file.append(outroot + f"_results_{i}.ecsv")
+
+        if os.path.exists(list_output_file[i]):
+            old = Table.read(list_output_file[i])
+            old.write("old_" + list_output_file[i], overwrite=True)
+            list_result[i] = vstack([old, list_result[i]])
+
+        list_result[i].write(list_output_file[i], overwrite=True)
+
     return output_file
 
 
