@@ -772,7 +772,7 @@ def _get_par_dict(model):
         "A1": model.A1.value.astype(float),
         "EPS1": model.EPS1.value.astype(float),
         "EPS2": model.EPS2.value.astype(float),
-        "PEPOCH": model.PEPOCH.value.astype(float), #  I added Pepoch
+        "PEPOCH": model.PEPOCH.value.astype(float),  # I added Pepoch
     }
 
     count = 0
