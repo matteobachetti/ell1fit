@@ -728,19 +728,16 @@ def _calculate_phases(times_from_pepoch, pars_dict):
     phases = [[] for _ in range(n_files)]
     list_phases_from_zero_to_one = []
     freq_ders = [[] for _ in range(n_files)]
-    deorbit_times_from_pepoch = []
-    tasc = []
+
     for i in range(n_files):
-        tasc.append(_mjd_to_sec(pars_dict["TASC"], pars_dict[f"PEPOCH_{i}"]))
-        deorbit_times_from_pepoch.append(
-            simple_ell1_deorbit_numba(
-                times_from_pepoch[i],
-                pars_dict["PB"],
-                pars_dict["A1"],
-                tasc[i],
-                pars_dict["EPS1"],
-                pars_dict["EPS2"],
-            )
+        tasc = _mjd_to_sec(pars_dict["TASC"], pars_dict[f"PEPOCH_{i}"])
+        deorbit_times_from_pepoch = simple_ell1_deorbit_numba(
+            times_from_pepoch[i],
+            pars_dict["PB"],
+            pars_dict["A1"],
+            tasc,
+            pars_dict["EPS1"],
+            pars_dict["EPS2"],
         )
 
         count = 0
@@ -749,7 +746,7 @@ def _calculate_phases(times_from_pepoch, pars_dict):
             count += 1
 
         phases[i] = pars_dict[f"Phase_{i}"] + fast_phase(
-            deorbit_times_from_pepoch[i].astype(float), freq_ders[i]
+            deorbit_times_from_pepoch.astype(float), freq_ders[i]
         )
         list_phases_from_zero_to_one.append(phases_from_zero_to_one(phases[i]))
     return list_phases_from_zero_to_one
@@ -1062,13 +1059,13 @@ def main(args=None):
 
     general_tasc = np.min([mod.TASC.value for mod in model])
 
-    sc_ind = 0  # scelta dell'indice del file da cui copiare A1,TASC, etc.
+    ch_ind = 0
 
-    parameters = _get_par_dict(model[sc_ind])
+    parameters = _get_par_dict(model[ch_ind])
     parameters["TASC"] = general_tasc
 
     count = 0
-    while f"F{count}" in model[sc_ind]:
+    while f"F{count}" in model[ch_ind]:
         del parameters[f"F{count}"]
         count += 1
 
