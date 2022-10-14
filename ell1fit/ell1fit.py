@@ -724,13 +724,13 @@ def fast_phase(times, frequency_derivatives):
 
 
 def _calculate_phases(times_from_pepoch, pars_dict):
+
     n_files = len(times_from_pepoch)
-    phases = [[] for _ in range(n_files)]
     list_phases_from_zero_to_one = []
-    freq_ders = [[] for _ in range(n_files)]
 
     for i in range(n_files):
         tasc = _mjd_to_sec(pars_dict["TASC"], pars_dict[f"PEPOCH_{i}"])
+
         deorbit_times_from_pepoch = simple_ell1_deorbit_numba(
             times_from_pepoch[i],
             pars_dict["PB"],
@@ -740,15 +740,29 @@ def _calculate_phases(times_from_pepoch, pars_dict):
             pars_dict["EPS2"],
         )
 
+        deorbited_pepoch = simple_ell1_deorbit_numba(
+            np.array([0.0]),
+            pars_dict["PB"],
+            pars_dict["A1"],
+            tasc,
+            pars_dict["EPS1"],
+            pars_dict["EPS2"],
+        )
+
         count = 0
+        freq_ders = []
         while f"F{count}_{i}" in pars_dict:
-            freq_ders[i].append(pars_dict[f"F{count}_{i}"])
+            freq_ders.append(pars_dict[f"F{count}_{i}"])
             count += 1
 
-        phases[i] = pars_dict[f"Phase_{i}"] + fast_phase(
-            deorbit_times_from_pepoch.astype(float), freq_ders[i]
+        phase_pepoch = fast_phase(deorbited_pepoch.astype(float), freq_ders)
+
+        phases = (
+            pars_dict[f"Phase_{i}"]
+            - phase_pepoch
+            + fast_phase(deorbit_times_from_pepoch.astype(float), freq_ders)
         )
-        list_phases_from_zero_to_one.append(phases_from_zero_to_one(phases[i]))
+        list_phases_from_zero_to_one.append(phases_from_zero_to_one(phases))
     return list_phases_from_zero_to_one
 
 
@@ -1052,10 +1066,9 @@ def main(args=None):
 
     energy_range = args.erange
     energy_str = _format_energy_string(energy_range)
+    nharm_str = ""
     if args.nharm > 1:
         nharm_str = f"_N{args.nharm}"
-    else:
-        nharm_str = ""
 
     general_tasc = np.min([mod.TASC.value for mod in model])
 
