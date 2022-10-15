@@ -2,6 +2,7 @@ import warnings
 
 import os
 import copy
+import re
 import matplotlib.pyplot as plt
 import numpy as np
 from hendrics.io import load_events
@@ -14,7 +15,7 @@ from scipy.interpolate import interp1d
 import emcee
 import corner
 from numba import njit, vectorize, int64, float32, float64, prange
-from astropy.table import Table, vstack
+from astropy.table import Table, vstack, hstack
 from astropy.time import Time
 from scipy.ndimage import gaussian_filter
 from scipy.optimize import minimize
@@ -56,6 +57,10 @@ params = {
     # expressed as a fraction of the average axis height
 }
 mpl.rcParams.update(params)
+
+
+simple_freq_re = re.compile(r"^d?F([0-9]+)")
+freq_re = re.compile(r"^d?F([0-9]+)_([0-9]+)$")
 
 
 def splitext_improved(path):
@@ -951,10 +956,8 @@ def order_of_magnitude(value):
 
 
 def get_factors(parnames, model, observation_length):
-    import re
 
     n_files = len(observation_length)
-    freq_re = re.compile(r"^F([0-9]+)_([0-9]+)$")
     zoom = []
     P = model[0].PB.value * 86400
     X = model[0].A1.value
@@ -989,6 +992,62 @@ def _format_energy_string(energy_range):
     upper = "**" if energy_range[1] is None else f"{energy_range[1]:g}"
 
     return f"_{lower}-{upper}keV"
+
+
+def look_for_string_in_list_of_strings(input_list, string):
+    output_list = []
+    for value in input_list:
+        if string in value:
+            output_list.append(value)
+    return output_list
+
+
+def look_for_list_of_strings_in_string(input_list, string):
+    for value in input_list:
+        if value in string:
+            return value
+    return None
+
+
+def split_output_results(result_table, n_files, fit_parameters):
+    """
+
+    Examples
+    --------
+    >>> result_table = Table({"dF0_1": [234], "dF0_1_16": [4], "TASC_0": [3.], "TASC_10": [5.], "PB": [3.]})
+    >>> output_tables = split_output_results(result_table, 2, ["F0", "F1", "TASC"])
+    >>> assert sorted(output_tables[0].colnames) == ["PB", "TASC_0", "TASC_10"]
+    >>> assert sorted(output_tables[1].colnames) == ["PB", "TASC_0", "TASC_10", "dF0", "dF0_16"]
+    """
+    tier_2_parameters = [par for par in fit_parameters if simple_freq_re.match(par)]
+
+    tier_2_parameters = tier_2_parameters + [
+        "Phase",
+        "PEPOCH",
+        "Start",
+        "Stop",
+        "fname",
+        "ctrate",
+        "pf",
+        "additional_phase",
+    ]
+    common_table = copy.deepcopy(result_table)
+    output_tables = [Table() for _ in range(n_files)]
+
+    for par in tier_2_parameters:
+        for i in range(n_files):
+            par_to_test = f"{par}_{i}"
+            cols = look_for_string_in_list_of_strings(common_table.colnames, par_to_test)
+            for colname in cols:
+                clean_colname = colname.replace(f"{par}_{i}", f"{par}")
+                output_tables[i][clean_colname] = common_table[colname]
+                common_table.remove_column(colname)
+
+    for i in range(n_files):
+        for col in common_table.colnames:
+            output_tables[i][col] = common_table[col]
+
+    return output_tables
 
 
 def main(args=None):
@@ -1225,39 +1284,50 @@ def main(args=None):
 
     results.write(output_file, overwrite=True)
 
-    list_parameter_names += [
-        "Phase",
-        "PEPOCH",
-        "Start",
-        "Stop",
-        "fname",
-        "ctrate",
-        "pf",
-        "additional_phase",
-    ]
+    # list_parameter_names += [
+    #     "Phase",
+    #     "PEPOCH",
+    #     "Start",
+    #     "Stop",
+    #     "fname",
+    #     "ctrate",
+    #     "pf",
+    #     "additional_phase",
+    # ]
 
-    list_output_file = []
-    for i in range(n_files):
-        for par in list_parameter_names:
-            for j in range(len(keys)):
-                for k in range(n_files):
-                    if par + f"_{k}" in keys[j]:
-                        if k == i:
-                            list_result[i][keys[j].replace(par + f"_{k}", par)] = list_result[i][
-                                keys[j]
-                            ]
-                            # print(keys[j], "--->", keys[j].replace(par + f"_{k}", par))
-                        del list_result[i][keys[j]]
+    list_result = split_output_results(results, n_files, args.parameters.split(","))
 
-        list_result[i] = Table(rows=[list_result[i]])
+    for i, table in enumerate(list_result):
+        outroot = (
+            splitext_improved(files[0])[0]
+            + "_"
+            + "_".join(args.parameters.split(","))
+            + energy_str
+            + nharm_str
+        )
+        list_result.write(outroot + "_results.ecsv")
+    # list_output_file = []
+    # for i in range(n_files):
+    #     for par in list_parameter_names:
+    #         for j in range(len(keys)):
+    #             for k in range(n_files):
+    #                 if par + f"_{k}" in keys[j]:
+    #                     if k == i:
+    #                         list_result[i][keys[j].replace(par + f"_{k}", par)] = list_result[i][
+    #                             keys[j]
+    #                         ]
+    #                         # print(keys[j], "--->", keys[j].replace(par + f"_{k}", par))
+    #                     del list_result[i][keys[j]]
 
-        list_output_file.append(outroot + f"_results_{i}.ecsv")
+    #     list_result[i] = Table(rows=[list_result[i]])
 
-        if os.path.exists(list_output_file[i]):
-            old = Table.read(list_output_file[i])
-            old.write("old_" + list_output_file[i], overwrite=True)
-            list_result[i] = vstack([old, list_result[i]])
+    #     list_output_file.append(outroot + f"_results_{i}.ecsv")
 
-        list_result[i].write(list_output_file[i], overwrite=True)
+    #     if os.path.exists(list_output_file[i]):
+    #         old = Table.read(list_output_file[i])
+    #         old.write("old_" + list_output_file[i], overwrite=True)
+    #         list_result[i] = vstack([old, list_result[i]])
+
+    #     list_result[i].write(list_output_file[i], overwrite=True)
 
     return output_file
