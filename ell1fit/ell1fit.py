@@ -15,7 +15,7 @@ from scipy.interpolate import interp1d
 import emcee
 import corner
 from numba import njit, vectorize, int64, float32, float64, prange
-from astropy.table import Table, vstack, hstack
+from astropy.table import Table, vstack
 from astropy.time import Time
 from scipy.ndimage import gaussian_filter
 from scipy.optimize import minimize
@@ -1014,7 +1014,8 @@ def split_output_results(result_table, n_files, fit_parameters):
 
     Examples
     --------
-    >>> result_table = Table({"dF0_1": [234], "dF0_1_16": [4], "TASC_0": [3.], "TASC_10": [5.], "PB": [3.]})
+    >>> vals_dict = {"dF0_1": [234], "dF0_1_16": [4], "TASC_0": [3.], "TASC_10": [5.], "PB": [3.]}
+    >>> result_table = Table(vals_dict)
     >>> output_tables = split_output_results(result_table, 2, ["F0", "F1", "TASC"])
     >>> assert sorted(output_tables[0].colnames) == ["PB", "TASC_0", "TASC_10"]
     >>> assert sorted(output_tables[1].colnames) == ["PB", "TASC_0", "TASC_10", "dF0", "dF0_16"]
@@ -1271,7 +1272,7 @@ def main(args=None):
     list_result = []
     for i in range(n_files):
         list_result.append(copy.deepcopy(results))
-    keys = list(results.keys())
+    # keys = list(results.keys())
 
     results = Table(rows=[results])
 
