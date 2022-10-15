@@ -1138,9 +1138,6 @@ def main(args=None):
 
     profile = folded_profile(times_from_pepoch, parameters, nbin=nbin)
 
-    create_template = []
-    template = []
-    additional_phase = []
     template_func = []
     mint = []
     maxt = []
@@ -1152,19 +1149,16 @@ def main(args=None):
         raise ValueError("One or more parameters are missing from the parameter file")
 
     for i in range(n_files):
-        create_template.append(
-            create_template_from_profile_harm(
-                profile[i], nharm=nharm, final_nbin=200, imagefile=outroot + "_template.jpg"
-            )
+        template, additional_phase = create_template_from_profile_harm(
+            profile[i], nharm=nharm, final_nbin=200, imagefile=outroot + "_template.jpg"
         )
-        template.append(create_template[i][0])
-        additional_phase.append(create_template[i][1])
-        template_func.append(get_template_func(template[i]))
-        mint.append(template[i].min())
-        maxt.append(template[i].max())
+
+        template_func.append(get_template_func(template))
+        mint.append(template.min())
+        maxt.append(template.max())
         pulsed_frac.append((maxt[i] - mint[i]) / (maxt[i] + mint[i]))
 
-        ph0.append(-phases_around_zero(additional_phase[i]))
+        ph0.append(-phases_around_zero(additional_phase))
         parameters[f"Phase_{i}"] = ph0[i]
 
         for j, par in enumerate(parameter_names):
