@@ -1168,17 +1168,18 @@ def main(args=None):
 
     minimize_first = args.minimize_first
 
-    outroot = args.outroot
-    if outroot is None and len(files) == 1:
-        outroot = (
-            splitext_improved(files[0])[0]
-            + "_"
-            + "_".join(list_parameter_names)
-            + energy_str
-            + nharm_str
-        )
-    elif outroot is None:
-        outroot = "out" + "_" + "_".join(list_parameter_names) + energy_str + nharm_str
+    def get_outroot(file_n=None):
+        if args.outroot is None and file_n is not None:
+            initial_outroot = splitext_improved(files[file_n])[0]
+        elif args.outroot is not None and file_n is not None:
+            initial_outroot = args.outroot + f"_{file_n}"
+        elif args.outroot is not None:
+            initial_outroot = args.outroot
+        else:
+            initial_outroot = "out"
+
+        outroot = initial_outroot + "_" + "_".join(list_parameter_names) + energy_str + nharm_str
+        return outroot
 
     gtis = [[] for _ in range(n_files)]
     times_from_pepoch = [[] for _ in range(n_files)]
@@ -1187,7 +1188,7 @@ def main(args=None):
     for i in range(n_files):
         fname = files[i]
         times_from_pepoch[i], gtis[i] = _load_and_format_events(
-            fname, energy_range, pepoch[i], plotfile=outroot + f"_lightcurve_{i}.jpg"
+            fname, energy_range, pepoch[i], plotfile=get_outroot(i) + f"_lightcurve_{i}.jpg"
         )
         expo[i] += np.sum(np.diff(gtis[i], axis=1))
 
@@ -1206,7 +1207,7 @@ def main(args=None):
 
     for i in range(n_files):
         template, additional_phase = create_template_from_profile_harm(
-            profile[i], nharm=nharm, final_nbin=200, imagefile=outroot + f"_{i}_template.jpg"
+            profile[i], nharm=nharm, final_nbin=200, imagefile=get_outroot(i) + f"_{i}_template.jpg"
         )
 
         template_func.append(get_template_func(template))
@@ -1238,7 +1239,7 @@ def main(args=None):
         nsteps=nsteps,
         minimize_first=minimize_first,
         nharm=nharm,
-        outroot=outroot,
+        outroot=get_outroot(None),
     )
 
     for i in range(n_files):
@@ -1277,7 +1278,7 @@ def main(args=None):
 
     results = Table(rows=[results])
 
-    output_file = outroot + "_results.ecsv"
+    output_file = get_outroot(None) + "_results.ecsv"
 
     if os.path.exists(output_file):
         old = Table.read(output_file)
@@ -1289,14 +1290,6 @@ def main(args=None):
     list_result = split_output_results(results, n_files, list_parameter_names)
 
     for i, table in enumerate(list_result):
-        outroot = (
-            splitext_improved(files[i])[0]
-            + "_"
-            + "_".join(list_parameter_names)
-            + energy_str
-            + nharm_str
-        )
-        print(list_result[i])
-        list_result[i].write(outroot + "_results.ecsv", overwrite=True)
+        table.write(get_outroot(i) + "_results.ecsv", overwrite=True)
 
     return output_file
