@@ -1285,50 +1285,17 @@ def main(args=None):
 
     results.write(output_file, overwrite=True)
 
-    # list_parameter_names += [
-    #     "Phase",
-    #     "PEPOCH",
-    #     "Start",
-    #     "Stop",
-    #     "fname",
-    #     "ctrate",
-    #     "pf",
-    #     "additional_phase",
-    # ]
-
     list_result = split_output_results(results, n_files, args.parameters.split(","))
 
     for i, table in enumerate(list_result):
         outroot = (
-            splitext_improved(files[0])[0]
+            splitext_improved(files[i])[0]
             + "_"
             + "_".join(args.parameters.split(","))
             + energy_str
             + nharm_str
         )
-        list_result.write(outroot + "_results.ecsv")
-    # list_output_file = []
-    # for i in range(n_files):
-    #     for par in list_parameter_names:
-    #         for j in range(len(keys)):
-    #             for k in range(n_files):
-    #                 if par + f"_{k}" in keys[j]:
-    #                     if k == i:
-    #                         list_result[i][keys[j].replace(par + f"_{k}", par)] = list_result[i][
-    #                             keys[j]
-    #                         ]
-    #                         # print(keys[j], "--->", keys[j].replace(par + f"_{k}", par))
-    #                     del list_result[i][keys[j]]
-
-    #     list_result[i] = Table(rows=[list_result[i]])
-
-    #     list_output_file.append(outroot + f"_results_{i}.ecsv")
-
-    #     if os.path.exists(list_output_file[i]):
-    #         old = Table.read(list_output_file[i])
-    #         old.write("old_" + list_output_file[i], overwrite=True)
-    #         list_result[i] = vstack([old, list_result[i]])
-
-    #     list_result[i].write(list_output_file[i], overwrite=True)
+        print(list_result[i])
+        list_result[i].write(outroot + "_results.ecsv", overwrite=True)
 
     return output_file
