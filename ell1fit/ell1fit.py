@@ -1290,6 +1290,9 @@ def main(args=None):
     list_result = split_output_results(results, n_files, list_parameter_names)
 
     for i, table in enumerate(list_result):
-        table.write(get_outroot(i) + "_results.ecsv", overwrite=True)
+        outfile = get_outroot(i) + "_results.ecsv"
+        table.write(outfile, overwrite=True)
+        print(f"Writing {outfile}")
+        print(table)
 
     return output_file
