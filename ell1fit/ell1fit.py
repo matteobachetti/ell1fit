@@ -1141,18 +1141,14 @@ def main(args=None):
     parameters = _get_par_dict(model[ch_ind])
     parameters["TASC"] = general_tasc
 
-    count = 0
-    while f"F{count}" in model[ch_ind]:
-        del parameters[f"F{count}"]
-        count += 1
-
     del parameters["PEPOCH"]
 
     for i in range(n_files):
-
         count = 0
         while f"F{count}" in _get_par_dict(model[i]):
             parameters[f"F{count}_{i}"] = _get_par_dict(model[i])[f"F{count}"]
+            if f"F{count}" in parameters:
+                del parameters[f"F{count}"]
             count += 1
 
         parameters[f"PEPOCH_{i}"] = _get_par_dict(model[i])["PEPOCH"]
