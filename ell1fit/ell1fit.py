@@ -507,17 +507,19 @@ def safe_run_sampler(
 
     print("Initial size: {0}".format(initial_size))
     # backend.reset(nwalkers, ndim)
+    nwalkers = max(32, starting_pars.size * 2)
     if initial_size < 100:
         print("Starting from zero")
-        pos = np.array(starting_pars) + np.random.normal(np.zeros((32, starting_pars.size)), 1e-5)
-        nwalkers, ndim = pos.shape
+
+        pos = np.array(starting_pars) + np.random.normal(np.zeros((nwalkers, starting_pars.size)), 1e-5)
+        _, ndim = pos.shape
         backend.reset(nwalkers, ndim)
     elif initial_size < max_n:
         print("Starting from where we left")
         reader = emcee.backends.HDFBackend(backend_filename)
         samples = reader.get_chain(discard=initial_size // 2, flat=True)
 
-        pos = samples[-32:, :]
+        pos = samples[-nwalkers:, :]
 
         nwalkers, ndim = pos.shape
 
