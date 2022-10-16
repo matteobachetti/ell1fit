@@ -1157,7 +1157,7 @@ def main(args=None):
     del parameters["Phase"]
 
     parameter_names = []
-    list_parameter_names = args.parameters.split(",")
+    list_parameter_names = sorted(args.parameters.split(","))
 
     for f in parameters:
         if f.startswith("Phase"):
@@ -1173,12 +1173,12 @@ def main(args=None):
         outroot = (
             splitext_improved(files[0])[0]
             + "_"
-            + "_".join(args.parameters.split(","))
+            + "_".join(list_parameter_names)
             + energy_str
             + nharm_str
         )
     elif outroot is None:
-        outroot = "out" + "_" + "_".join(args.parameters.split(",")) + energy_str + nharm_str
+        outroot = "out" + "_" + "_".join(list_parameter_names) + energy_str + nharm_str
 
     gtis = [[] for _ in range(n_files)]
     times_from_pepoch = [[] for _ in range(n_files)]
@@ -1285,13 +1285,13 @@ def main(args=None):
 
     results.write(output_file, overwrite=True)
 
-    list_result = split_output_results(results, n_files, args.parameters.split(","))
+    list_result = split_output_results(results, n_files, list_parameter_names)
 
     for i, table in enumerate(list_result):
         outroot = (
             splitext_improved(files[i])[0]
             + "_"
-            + "_".join(args.parameters.split(","))
+            + "_".join(list_parameter_names)
             + energy_str
             + nharm_str
         )
