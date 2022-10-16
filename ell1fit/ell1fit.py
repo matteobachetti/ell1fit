@@ -1203,10 +1203,6 @@ def main(args=None):
     maxt = []
     pulsed_frac = []
     ph0 = []
-    try:
-        input_mean_fit_pars = [parameters[par] for par in parameter_names]
-    except KeyError:
-        raise ValueError("One or more parameters are missing from the parameter file")
 
     for i in range(n_files):
         template, additional_phase = create_template_from_profile_harm(
@@ -1225,6 +1221,11 @@ def main(args=None):
             if par == f"Phase_{i}":
                 bounds[j] = (ph0[i] - 0.5, ph0[i] + 0.5)
                 break
+
+    try:
+        input_mean_fit_pars = [parameters[par] for par in parameter_names]
+    except KeyError:
+        raise ValueError("One or more parameters are missing from the parameter file")
 
     results = optimize_solution(
         times_from_pepoch,
