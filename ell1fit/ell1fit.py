@@ -511,7 +511,9 @@ def safe_run_sampler(
     if initial_size < 100:
         print("Starting from zero")
 
-        pos = np.array(starting_pars) + np.random.normal(np.zeros((nwalkers, starting_pars.size)), 1e-5)
+        pos = np.array(starting_pars) + np.random.normal(
+            np.zeros((nwalkers, starting_pars.size)), 1e-5
+        )
         _, ndim = pos.shape
         backend.reset(nwalkers, ndim)
     elif initial_size < max_n:
