@@ -1210,7 +1210,7 @@ def main(args=None):
 
     for i in range(n_files):
         template, additional_phase = create_template_from_profile_harm(
-            profile[i], nharm=nharm, final_nbin=200, imagefile=outroot + "_template.jpg"
+            profile[i], nharm=nharm, final_nbin=200, imagefile=outroot + f"_{i}_template.jpg"
         )
 
         template_func.append(get_template_func(template))
