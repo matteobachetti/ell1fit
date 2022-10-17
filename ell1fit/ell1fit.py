@@ -903,7 +903,7 @@ def optimize_solution(
             local_phases(all_zeros)[i],
             phases_from_zero_to_one(phases[i]),
             times_from_pepoch[i],
-            fname=outroot + f"_{i}.jpg",
+            fname=outroot[i] + ".jpg",
         )
 
     corner_labels = [
@@ -913,7 +913,7 @@ def optimize_solution(
         func_to_maximize,
         fit_pars,
         max_n=nsteps,
-        outroot=outroot,
+        outroot=outroot[-1],
         labels=["d" + par for par in fit_parameters],
         corner_labels=corner_labels,
         n_autocorr=0,
@@ -939,7 +939,7 @@ def optimize_solution(
             local_phases(all_zeros)[i],
             phases_from_zero_to_one(phases[i]),
             times_from_pepoch[i],
-            fname=outroot + f"_{i}_final.jpg",
+            fname=outroot[i] + "_final.jpg",
         )
 
     return results
@@ -1203,7 +1203,7 @@ def main(args=None):
 
     for i in range(n_files):
         template, additional_phase = create_template_from_profile_harm(
-            profile[i], nharm=nharm, final_nbin=200, imagefile=get_outroot(i) + f"_{i}_template.jpg"
+            profile[i], nharm=nharm, final_nbin=200, imagefile=get_outroot(i) + "_template.jpg"
         )
 
         template_func.append(get_template_func(template))
@@ -1235,7 +1235,7 @@ def main(args=None):
         nsteps=nsteps,
         minimize_first=minimize_first,
         nharm=nharm,
-        outroot=get_outroot(None),
+        outroot=[get_outroot(i) for i in range(n_files)] + [get_outroot(None)],
     )
 
     for i in range(n_files):
