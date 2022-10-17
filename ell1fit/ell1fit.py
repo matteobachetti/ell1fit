@@ -1181,16 +1181,15 @@ def main(args=None):
         outroot = initial_outroot + "_" + "_".join(list_parameter_names) + energy_str + nharm_str
         return outroot
 
-    gtis = [[] for _ in range(n_files)]
     times_from_pepoch = [[] for _ in range(n_files)]
     observation_length = [[] for _ in range(n_files)]
     expo = np.zeros(n_files)
     for i in range(n_files):
         fname = files[i]
-        times_from_pepoch[i], gtis[i] = _load_and_format_events(
+        times_from_pepoch[i], gtis = _load_and_format_events(
             fname, energy_range, pepoch[i], plotfile=get_outroot(i) + f"_lightcurve_{i}.jpg"
         )
-        expo[i] += np.sum(np.diff(gtis[i], axis=1))
+        expo[i] += np.sum(np.diff(gtis, axis=1))
 
         observation_length[i] = times_from_pepoch[i][-1] - times_from_pepoch[i][0]
 
@@ -1200,10 +1199,7 @@ def main(args=None):
     profile = folded_profile(times_from_pepoch, parameters, nbin=nbin)
 
     template_func = []
-    mint = []
-    maxt = []
     pulsed_frac = []
-    ph0 = []
 
     for i in range(n_files):
         template, additional_phase = create_template_from_profile_harm(
@@ -1211,16 +1207,16 @@ def main(args=None):
         )
 
         template_func.append(get_template_func(template))
-        mint.append(template.min())
-        maxt.append(template.max())
-        pulsed_frac.append((maxt[i] - mint[i]) / (maxt[i] + mint[i]))
+        mint = template.min()
+        maxt = template.max()
+        pulsed_frac.append((maxt - mint) / (maxt + mint))
 
-        ph0.append(-phases_around_zero(additional_phase))
-        parameters[f"Phase_{i}"] = ph0[i]
+        ph0 = -phases_around_zero(additional_phase)
+        parameters[f"Phase_{i}"] = ph0
 
         for j, par in enumerate(parameter_names):
             if par == f"Phase_{i}":
-                bounds[j] = (ph0[i] - 0.5, ph0[i] + 0.5)
+                bounds[j] = (ph0 - 0.5, ph0 + 0.5)
                 break
 
     try:
@@ -1274,7 +1270,6 @@ def main(args=None):
     list_result = []
     for i in range(n_files):
         list_result.append(copy.deepcopy(results))
-    # keys = list(results.keys())
 
     results = Table(rows=[results])
 
