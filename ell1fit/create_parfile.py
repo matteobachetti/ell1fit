@@ -18,28 +18,40 @@ def update_model(model, value_dict):
     PEPOCH = value_dict["PEPOCH"]
     if PEPOCH != new_model.PEPOCH.value:
         new_model.PEPOCH.value = PEPOCH
-    print(PEPOCH)
 
     for par in pars.split(","):
         if f"d{par}_mean" not in value_dict:
             continue
-        print(f"Updating {par}")
+        if par != "Phase":
+            print(f"Updating {par}")
+        else:
+            print("Updating TZRMJD")
+
         mean = value_dict[f"d{par}_mean"]
+        neg = mean - value_dict[f"d{par}_16"]
+        pos = value_dict[f"d{par}_84"] - mean
         initial = value_dict[f"d{par}_initial"]
         factor = value_dict[f"d{par}_factor"]
         value = mean * factor + initial
-        print(value, mean, factor, initial)
+        err = max(neg, pos) * factor
         if par == "Phase":
-            print(value, new_model.F0.value, PEPOCH, value / new_model.F0.value / 86400)
-            new_model.TZRMJD.value = value / new_model.F0.value / 86400 + PEPOCH
+            new_model.TZRMJD.value = -value / new_model.F0.value / 86400 + PEPOCH
+            new_model.TZRMJD.uncertainty_value = err / new_model.F0.value / 86400
+            new_model.TZRMJD.frozen = False
             # new_model.TZRMJD.value =  PEPOCH
             continue
         if par == "PB":
             value /= 86400
+            err /= 86400
         elif par == "TASC":
             value = value / 86400 + PEPOCH
+            err /= 86400
 
         getattr(new_model, par).value = value
+        getattr(new_model, par).uncertainty_value = err
+        getattr(new_model, par).frozen = False
+
+    print(new_model.as_parfile())
     return new_model
 
 
