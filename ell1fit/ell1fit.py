@@ -2,6 +2,7 @@ import warnings
 
 import os
 import copy
+import re
 import matplotlib.pyplot as plt
 import numpy as np
 from hendrics.io import load_events
@@ -56,6 +57,10 @@ params = {
     # expressed as a fraction of the average axis height
 }
 mpl.rcParams.update(params)
+
+
+simple_freq_re = re.compile(r"^d?F([0-9]+)")
+freq_re = re.compile(r"^d?F([0-9]+)_([0-9]+)$")
 
 
 def splitext_improved(path):
@@ -502,17 +507,21 @@ def safe_run_sampler(
 
     print("Initial size: {0}".format(initial_size))
     # backend.reset(nwalkers, ndim)
+    nwalkers = max(32, starting_pars.size * 2)
     if initial_size < 100:
         print("Starting from zero")
-        pos = np.array(starting_pars) + np.random.normal(np.zeros((32, starting_pars.size)), 1e-5)
-        nwalkers, ndim = pos.shape
+
+        pos = np.array(starting_pars) + np.random.normal(
+            np.zeros((nwalkers, starting_pars.size)), 1e-5
+        )
+        _, ndim = pos.shape
         backend.reset(nwalkers, ndim)
     elif initial_size < max_n:
         print("Starting from where we left")
         reader = emcee.backends.HDFBackend(backend_filename)
         samples = reader.get_chain(discard=initial_size // 2, flat=True)
 
-        pos = samples[-32:, :]
+        pos = samples[-nwalkers:, :]
 
         nwalkers, ndim = pos.shape
 
@@ -724,29 +733,54 @@ def fast_phase(times, frequency_derivatives):
 
 
 def _calculate_phases(times_from_pepoch, pars_dict):
-    deorbit_times_from_pepoch = simple_ell1_deorbit_numba(
-        times_from_pepoch,
-        pars_dict["PB"],
-        pars_dict["A1"],
-        pars_dict["TASC"],
-        pars_dict["EPS1"],
-        pars_dict["EPS2"],
-    )
 
-    freq_ders = []
-    count = 0
-    while f"F{count}" in pars_dict:
-        freq_ders.append(pars_dict[f"F{count}"])
-        count += 1
+    n_files = len(times_from_pepoch)
+    list_phases_from_zero_to_one = []
 
-    phases = pars_dict["Phase"] + fast_phase(deorbit_times_from_pepoch.astype(float), freq_ders)
+    for i in range(n_files):
+        tasc = _mjd_to_sec(pars_dict["TASC"], pars_dict[f"PEPOCH_{i}"])
 
-    return phases_from_zero_to_one(phases)
+        deorbit_times_from_pepoch = simple_ell1_deorbit_numba(
+            times_from_pepoch[i],
+            pars_dict["PB"],
+            pars_dict["A1"],
+            tasc,
+            pars_dict["EPS1"],
+            pars_dict["EPS2"],
+        )
+
+        deorbited_pepoch = simple_ell1_deorbit_numba(
+            np.array([0.0]),
+            pars_dict["PB"],
+            pars_dict["A1"],
+            tasc,
+            pars_dict["EPS1"],
+            pars_dict["EPS2"],
+        )
+
+        count = 0
+        freq_ders = []
+        while f"F{count}_{i}" in pars_dict:
+            freq_ders.append(pars_dict[f"F{count}_{i}"])
+            count += 1
+
+        phase_pepoch = fast_phase(deorbited_pepoch.astype(float), freq_ders)
+
+        phases = (
+            pars_dict[f"Phase_{i}"]
+            - phase_pepoch
+            + fast_phase(deorbit_times_from_pepoch.astype(float), freq_ders)
+        )
+        list_phases_from_zero_to_one.append(phases_from_zero_to_one(phases))
+    return list_phases_from_zero_to_one
 
 
 def folded_profile(times, parameters, nbin=16):
+    n_files = len(times)
     phases = _calculate_phases(times, parameters)
-    profile, _ = np.histogram(phases, bins=np.linspace(0, 1, nbin + 1))
+    profile = []
+    for i in range(n_files):
+        profile.append(np.histogram(phases[i], bins=np.linspace(0, 1, nbin + 1))[0])
     return profile
 
 
@@ -758,6 +792,7 @@ def _get_par_dict(model):
         "A1": model.A1.value.astype(float),
         "EPS1": model.EPS1.value.astype(float),
         "EPS2": model.EPS2.value.astype(float),
+        "PEPOCH": model.PEPOCH.value.astype(float),  # I added Pepoch
     }
 
     count = 0
@@ -832,11 +867,16 @@ def optimize_solution(
 
     def func_to_maximize(pars):
         # print(pars)
+        lp = logprior(pars)
+        if np.isinf(lp):
+            return lp
         phases = local_phases(pars)
 
-        ll = likelihood(phases, template_func) + logprior(pars)
+        ll = 0
+        for i in range(len(phases)):
+            ll += likelihood(phases[i], template_func[i])
 
-        return ll
+        return ll + lp
 
     def func_to_minimize(pars):
         return -func_to_maximize(pars)
@@ -858,29 +898,31 @@ def optimize_solution(
     rough_results = {}
     for par, value, f in zip(fit_parameters, fit_pars, factors):
         rough_results["rough_d" + par] = value
-
-    _compare_phaseograms(
-        local_phases(all_zeros),
-        phases_from_zero_to_one(phases),
-        times_from_pepoch,
-        fname=outroot + ".jpg",
-    )
+    for i in range(len(times_from_pepoch)):
+        _compare_phaseograms(
+            local_phases(all_zeros)[i],
+            phases_from_zero_to_one(phases[i]),
+            times_from_pepoch[i],
+            fname=outroot[i] + ".jpg",
+        )
 
     corner_labels = [
         "d" + par + f"{np.log10(fac):+g}" for (par, fac) in zip(fit_parameters, factors)
     ]
-
     results = safe_run_sampler(
         func_to_maximize,
         fit_pars,
         max_n=nsteps,
-        outroot=outroot,
+        outroot=outroot[-1],
         labels=["d" + par for par in fit_parameters],
         corner_labels=corner_labels,
         n_autocorr=0,
     )
 
-    results["additional_phase"] = pars_dict["Phase"]
+    count = 0
+    while f"Phase_{count}" in pars_dict:
+        results[f"additional_phase_{count}"] = pars_dict[f"Phase_{count}"]
+        count += 1
 
     results.update(model_parameters)
     results.update(rough_results)
@@ -892,12 +934,13 @@ def optimize_solution(
     fit_pars = [results["d" + par + "_50"] for par in fit_parameters]
     phases = local_phases(fit_pars)
 
-    _compare_phaseograms(
-        local_phases(all_zeros),
-        phases_from_zero_to_one(phases),
-        times_from_pepoch,
-        fname=outroot + "_final.jpg",
-    )
+    for i in range(len(times_from_pepoch)):
+        _compare_phaseograms(
+            local_phases(all_zeros)[i],
+            phases_from_zero_to_one(phases[i]),
+            times_from_pepoch[i],
+            fname=outroot[i] + "_final.jpg",
+        )
 
     return results
 
@@ -917,22 +960,25 @@ def order_of_magnitude(value):
 
 
 def get_factors(parnames, model, observation_length):
-    import re
 
-    freq_re = re.compile(r"^F([0-9]+)$")
+    n_files = len(observation_length)
     zoom = []
-    P = model.PB.value * 86400
-    X = model.A1.value
-    F = model.F0.value
+    P = model[0].PB.value * 86400
+    X = model[0].A1.value
+
+    F = np.max([model[i].F0.value for i in range(n_files)])
+    obs_length = np.max(observation_length)
+
     for par in parnames:
         matchobj = freq_re.match(par)
         if matchobj:
             order = int(matchobj.group(1))
-            zoom.append(order_of_magnitude(1 / observation_length ** (order + 1)))
+            file_n = int(matchobj.group(2))
+            zoom.append(order_of_magnitude(1 / observation_length[file_n] ** (order + 1)))
         elif par == "A1":
             zoom.append(min(1, order_of_magnitude(1 / np.pi / 2 / F)))
         elif par == "PB":
-            dp = np.sqrt(3) / (2 * np.pi**2 * F) * P**2 / X / observation_length
+            dp = np.sqrt(3) / (2 * np.pi**2 * F) * P**2 / X / obs_length
             zoom.append(min(1.0, order_of_magnitude(dp)))
         elif par.startswith("EPS"):
             zoom.append(0.001)
@@ -952,6 +998,63 @@ def _format_energy_string(energy_range):
     return f"_{lower}-{upper}keV"
 
 
+def look_for_string_in_list_of_strings(input_list, string):
+    output_list = []
+    for value in input_list:
+        if string in value:
+            output_list.append(value)
+    return output_list
+
+
+def look_for_list_of_strings_in_string(input_list, string):
+    for value in input_list:
+        if value in string:
+            return value
+    return None
+
+
+def split_output_results(result_table, n_files, fit_parameters):
+    """
+
+    Examples
+    --------
+    >>> vals_dict = {"dF0_1": [234], "dF0_1_16": [4], "TASC_0": [3.], "TASC_10": [5.], "PB": [3.]}
+    >>> result_table = Table(vals_dict)
+    >>> output_tables = split_output_results(result_table, 2, ["F0", "F1", "TASC"])
+    >>> assert sorted(output_tables[0].colnames) == ["PB", "TASC_0", "TASC_10"]
+    >>> assert sorted(output_tables[1].colnames) == ["PB", "TASC_0", "TASC_10", "dF0", "dF0_16"]
+    """
+    tier_2_parameters = [par for par in fit_parameters if simple_freq_re.match(par)]
+
+    tier_2_parameters = tier_2_parameters + [
+        "Phase",
+        "PEPOCH",
+        "Start",
+        "Stop",
+        "fname",
+        "ctrate",
+        "pf",
+        "additional_phase",
+    ]
+    common_table = copy.deepcopy(result_table)
+    output_tables = [Table() for _ in range(n_files)]
+
+    for par in tier_2_parameters:
+        for i in range(n_files):
+            par_to_test = f"{par}_{i}"
+            cols = look_for_string_in_list_of_strings(common_table.colnames, par_to_test)
+            for colname in cols:
+                clean_colname = colname.replace(f"{par}_{i}", f"{par}")
+                output_tables[i][clean_colname] = common_table[colname]
+                common_table.remove_column(colname)
+
+    for i in range(n_files):
+        for col in common_table.colnames:
+            output_tables[i][col] = common_table[col]
+
+    return output_tables
+
+
 def main(args=None):
     """Main function called by the `ell1fit` script"""
     import argparse
@@ -963,9 +1066,10 @@ def main(args=None):
         "-p",
         "--parfile",
         type=str,
+        nargs="+",
         default=None,
         help=(
-            "Input parameter file. Must contain a simple ELL1 binary model, "
+            "Input parameter files, one per event file. Must contain a simple ELL1 binary model, "
             "with no orbital derivatives, and a number of spin derivatives (F0, F1, ...). "
             "All other models will be ignored."
         ),
@@ -1004,12 +1108,22 @@ def main(args=None):
     args = parser.parse_args(args)
     files = args.files
     parfile = args.parfile
-    model = get_model(parfile)
-    pepoch = model.PEPOCH.value
-    if hasattr(model, "T0") or model.BINARY.value != "ELL1":
-        raise ValueError("This script wants an ELL1 model, with TASC, not T0, defined")
+    n_files = len(files)
+    assert len(parfile) == len(
+        files
+    ), "The number of parameter files must match that of event files."
+    model = []
+    pepoch = []
 
-    model.change_binary_epoch(pepoch)
+    for i in range(n_files):
+        model.append(get_model(parfile[i]))
+        pepoch.append(model[i].PEPOCH.value)
+
+        if hasattr(model[i], "T0") or model[i].BINARY.value != "ELL1":
+            raise ValueError("This script wants an ELL1 model, with TASC, not T0, defined")
+
+        model[i].change_binary_epoch(pepoch[i])
+
     nsteps = args.nsteps
     nharm = args.nharm
     nbin = max(16, nharm * 8)
@@ -1019,53 +1133,96 @@ def main(args=None):
     nharm_str = ""
     if args.nharm > 1:
         nharm_str = f"_N{args.nharm}"
-    parameters = _get_par_dict(model)
-    parameter_names = ["Phase"] + args.parameters.split(",")
+
+    general_tasc = np.min([mod.TASC.value for mod in model])
+
+    ch_ind = 0
+
+    parameters = _get_par_dict(model[ch_ind])
+    parameters["TASC"] = general_tasc
+
+    del parameters["PEPOCH"]
+
+    for i in range(n_files):
+        count = 0
+        while f"F{count}" in _get_par_dict(model[i]):
+            parameters[f"F{count}_{i}"] = _get_par_dict(model[i])[f"F{count}"]
+            if f"F{count}" in parameters:
+                del parameters[f"F{count}"]
+            count += 1
+
+        parameters[f"PEPOCH_{i}"] = _get_par_dict(model[i])["PEPOCH"]
+        parameters[f"Phase_{i}"] = parameters["Phase"]
+        #  I initialized the phases because _calculate_phases calls parameters[f"Phase_{i}"]
+    del parameters["Phase"]
+
+    parameter_names = []
+    list_parameter_names = sorted(args.parameters.split(","))
+
+    for f in parameters:
+        if f.startswith("Phase"):
+            parameter_names.append(f)
+        for g in list_parameter_names:
+            if f.startswith(g):
+                parameter_names.append(f)
+
     minimize_first = args.minimize_first
 
-    outroot = args.outroot
-    if outroot is None and len(files) == 1:
-        outroot = (
-            splitext_improved(files[0])[0]
-            + "_"
-            + "_".join(args.parameters.split(","))
-            + energy_str
-            + nharm_str
-        )
-    elif outroot is None:
-        outroot = "out" + "_" + "_".join(args.parameters.split(",")) + energy_str + nharm_str
+    def get_outroot(file_n=None):
+        if args.outroot is None and file_n is not None:
+            initial_outroot = splitext_improved(files[file_n])[0]
+        elif args.outroot is not None and file_n is not None:
+            initial_outroot = args.outroot + f"_{file_n}"
+        elif args.outroot is not None:
+            initial_outroot = args.outroot
+        else:
+            initial_outroot = "out"
 
-    alltimes = []
-    expo = 0.0
-    for fname in files:
-        ts, gtis = _load_and_format_events(
-            fname, energy_range, pepoch, plotfile=outroot + "_lightcurve.jpg"
-        )
-        alltimes.append(ts)
-        expo += np.sum(np.diff(gtis, axis=1))
+        outroot = initial_outroot + "_" + "_".join(list_parameter_names) + energy_str + nharm_str
+        return outroot
 
-    times_from_pepoch = np.sort(np.concatenate(alltimes))
-    observation_length = times_from_pepoch[-1] - times_from_pepoch[0]
+    times_from_pepoch = [[] for _ in range(n_files)]
+    observation_length = [[] for _ in range(n_files)]
+    expo = np.zeros(n_files)
+    for i in range(n_files):
+        fname = files[i]
+        times_from_pepoch[i], gtis = _load_and_format_events(
+            fname, energy_range, pepoch[i], plotfile=get_outroot(i) + f"_lightcurve_{i}.jpg"
+        )
+        expo[i] += np.sum(np.diff(gtis, axis=1))
+
+        observation_length[i] = times_from_pepoch[i][-1] - times_from_pepoch[i][0]
 
     bounds = create_bounds(parameter_names)
     factors = get_factors(parameter_names, model, observation_length)
 
     profile = folded_profile(times_from_pepoch, parameters, nbin=nbin)
-    template, additional_phase = create_template_from_profile_harm(
-        profile, nharm=nharm, final_nbin=200, imagefile=outroot + "_template.jpg"
-    )
-    template_func = get_template_func(template)
-    mint = template.min()
-    maxt = template.max()
-    pulsed_frac = (maxt - mint) / (maxt + mint)
 
-    ph0 = -phases_around_zero(additional_phase)
-    parameters["Phase"] = ph0
+    template_func = []
+    pulsed_frac = []
+
+    for i in range(n_files):
+        template, additional_phase = create_template_from_profile_harm(
+            profile[i], nharm=nharm, final_nbin=200, imagefile=get_outroot(i) + "_template.jpg"
+        )
+
+        template_func.append(get_template_func(template))
+        mint = template.min()
+        maxt = template.max()
+        pulsed_frac.append((maxt - mint) / (maxt + mint))
+
+        ph0 = -phases_around_zero(additional_phase)
+        parameters[f"Phase_{i}"] = ph0
+
+        for j, par in enumerate(parameter_names):
+            if par == f"Phase_{i}":
+                bounds[j] = (ph0 - 0.5, ph0 + 0.5)
+                break
+
     try:
         input_mean_fit_pars = [parameters[par] for par in parameter_names]
     except KeyError:
         raise ValueError("One or more parameters are missing from the parameter file")
-    bounds[0] = (ph0 - 0.5, ph0 + 0.5)
 
     results = optimize_solution(
         times_from_pepoch,
@@ -1078,32 +1235,45 @@ def main(args=None):
         nsteps=nsteps,
         minimize_first=minimize_first,
         nharm=nharm,
-        outroot=outroot,
+        outroot=[get_outroot(i) for i in range(n_files)] + [get_outroot(None)],
     )
 
-    if hasattr(model, "START"):
-        results["Start"] = model.START.value
-    else:
-        results["Start"] = times_from_pepoch[0] / 86400 + pepoch
-    if hasattr(model, "STOP"):
-        results["Stop"] = model.STOP.value
-    else:
-        results["Stop"] = times_from_pepoch[-1] / 86400 + pepoch
+    for i in range(n_files):
+        if hasattr(model[i], "START"):
+            results[f"Start_{i}"] = model[i].START.value
+        else:
+            results[f"Start_{i}"] = times_from_pepoch[i][0] / 86400 + pepoch[i]
+        if hasattr(model[i], "STOP"):
+            results[f"Stop_{i}"] = model[i].STOP.value
+        else:
+            results[f"Stop_{i}"] = times_from_pepoch[i][-1] / 86400 + pepoch[i]
 
-    results["PEPOCH"] = pepoch
-    results["fname"] = fname
+    for i in range(n_files):
+        results[f"PEPOCH_{i}"] = pepoch[i]
+
+    for i in range(n_files):
+        results[f"fname_{i}"] = fname[i]
+
     results["nharm"] = nharm
     results["emin"] = 0 if energy_range is None else energy_range[0]
     results["emax"] = np.inf if energy_range is None else energy_range[1]
     results["nsteps"] = nsteps
-    results["nharm"] = nharm
-    results["pf"] = pulsed_frac
-    results["ctrate"] = times_from_pepoch.size / expo
+
+    for i in range(n_files):
+        results[f"pf_{i}"] = pulsed_frac[i]
+
+    for i in range(n_files):
+        results[f"ctrate_{i}"] = times_from_pepoch[i].size / expo[i]
+
     results["ell1fit_version"] = version.version
+
+    list_result = []
+    for i in range(n_files):
+        list_result.append(copy.deepcopy(results))
 
     results = Table(rows=[results])
 
-    output_file = outroot + "_results.ecsv"
+    output_file = get_outroot(None) + "_results.ecsv"
 
     if os.path.exists(output_file):
         old = Table.read(output_file)
@@ -1111,74 +1281,13 @@ def main(args=None):
         results = vstack([old, results])
 
     results.write(output_file, overwrite=True)
+
+    list_result = split_output_results(results, n_files, list_parameter_names)
+
+    for i, table in enumerate(list_result):
+        outfile = get_outroot(i) + "_results.ecsv"
+        table.write(outfile, overwrite=True)
+        print(f"Writing {outfile}")
+        print(table)
+
     return output_file
-
-
-# if __name__ == "__main__":
-#     import sys
-
-#     fname = sys.argv[1]
-#     parfile = sys.argv[2]
-#     nsteps=100_000
-#     if len(sys.argv) > 3:
-#         nsteps = int(sys.argv[3])
-
-#     print(f"Processing {fname}")
-#     initial_pars = {"F0": (-np.inf, np.inf), "F1": (-np.inf, np.inf),
-# "TASC": (-np.inf, np.inf), "A1": (-np.inf, np.inf), "EPS1": (-1, 1), "EPS2": (-1, 1)}
-#     zoom = {"F0": 1.e-5, "F1": 1e-12, "TASC": 1, "A1": 1e-4, "EPS1": 1e-3, "EPS2": 1e-3}
-
-#     minimize_first=True
-#     nharm=1
-#     energy_range = [3, 30]
-#     if "3010" in fname or "80002092004" in fname:
-#         energy_range = [8, 30]
-#         nharm=2
-#     if "80002092006" in fname:
-#         initial_pars["F2"] = (-np.inf, np.inf)
-#         zoom["F2"] = 1e-17
-
-#     results = optimize_solution(
-#         fname, parfile, initial_pars, zoom=zoom, nsteps=nsteps, energy_range=energy_range,
-# minimize_first=minimize_first,
-#         nharm=2
-#     )
-
-#     from scinum import Number
-
-#     results = results[-1]
-#     eps1 = eps2 = 0
-#     for par in initial_pars.keys():
-#         mean = results[par + "_50"] * results[par + "_factor"] + results[par + "_initial"]
-#         errp = (results[par + "_84"] - results[par + "_50"]) * results[par + "_factor"]
-#         errn = (results[par + "_50"] - results[par + "_16"]) * results[par + "_factor"]
-#         if np.abs(errp - errn) / errp < 0.1:
-#             errp = errn
-
-#         lim = np.array([results[par + "_1"], results[par + "_99"]]) * results[par + "_factor"] +
-# results[par + "_initial"]
-
-#         if par == "TASC":
-#             mean = float(results["PEPOCH"] + mean / 86400)
-#         elif par == "PB":
-#             mean = mean / 86400
-
-#         if par in ("PB", "TASC"):
-#             errp = errp / 86400
-#             errn = errn / 86400
-#             lim = lim / 86400
-
-#         additional_label = ""
-#         if lim[0] < 0 and lim[1] > 0:
-#             additional_label = rf"({lim[0]:g} \le {par} \le {lim[1]:g})"
-
-#         meas = Number(mean, (errn, errp), additional_label)
-#         meas_str = meas.str("pdg", style="latex")
-#         print(par, meas_str, additional_label)
-
-#         if par == "EPS1":
-#             eps1_uplim = np.max(np.abs(lim))
-#         if par == "EPS2":
-#             eps2_uplim = np.max(np.abs(lim))
-
-#     print("ECC <", np.sqrt(eps1_uplim **2 + eps2_uplim**2))
