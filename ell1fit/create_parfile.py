@@ -9,17 +9,21 @@ def update_model(model, value_dict):
         value_dict = dict((key, value_dict[key]) for key in value_dict.colnames)
     new_model = copy.deepcopy(model)
     # Note: phase must be after F0
-    pars = "F0,Phase,TASC,PB,A1,EPS1,EPS2"
-    count = 1
-    while hasattr(new_model, f"F{count}"):
-        pars += f",F{count}"
-        count += 1
+    pars = []
+    for component in model.components:
+        if component not in ["BinaryELL1", "Spindown"]:
+            continue
+        mod = model.components[component]
+        for par in mod.params:
+            pars.append(par)
+
+    pars.append("Phase")
 
     PEPOCH = value_dict["PEPOCH"]
     if PEPOCH != new_model.PEPOCH.value:
         new_model.PEPOCH.value = PEPOCH
 
-    for par in pars.split(","):
+    for par in pars:
         if f"d{par}_mean" not in value_dict:
             continue
         if par != "Phase":
@@ -35,7 +39,6 @@ def update_model(model, value_dict):
         value = mean * factor + initial
         err = max(neg, pos) * factor
         if par == "Phase":
-
             new_model.TZRMJD.value = -value / new_model.F0.value / 86400 + PEPOCH
             new_model.TZRMJD.uncertainty_value = err / new_model.F0.value / 86400
             new_model.TZRMJD.frozen = False
