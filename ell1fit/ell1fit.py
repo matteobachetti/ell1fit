@@ -79,12 +79,16 @@ def splitext_improved(path):
     >>> path_without_ext = os.path.join("a.a.a.f", "a")
     >>> np.all(splitext_improved(path_with_dirs) ==  (path_without_ext, '.tar.gz'))
     True
+    >>> path_with_dirs = os.path.join("a.a.a.f", "a.1.tar")
+    >>> path_without_ext = os.path.join("a.a.a.f", "a.1")
+    >>> np.all(splitext_improved(path_with_dirs) ==  (path_without_ext, '.tar.gz'))
+    True
     """
     import os
 
     dir, file = os.path.split(path)
 
-    if len(file.split(".")) > 2:
+    if len(file.split(".")) > 2 and file.endswith(".gz"):
         froot, ext = file.split(".")[0], "." + ".".join(file.split(".")[-2:])
     else:
         froot, ext = os.path.splitext(file)
