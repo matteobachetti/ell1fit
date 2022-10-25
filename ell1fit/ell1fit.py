@@ -736,24 +736,31 @@ def _calculate_phases(times_from_pepoch, pars_dict):
 
     n_files = len(times_from_pepoch)
     list_phases_from_zero_to_one = []
-
+    pb = pars_dict["PB"]
+    pbdot = pars_dict["PBDOT"]
     for i in range(n_files):
         tasc = _mjd_to_sec(pars_dict["TASC"], pars_dict[f"PEPOCH_{i}"])
 
+        dt = -tasc
+        d_orbits = dt / pb - pbdot * dt**2 / (2.0 * pb**2)
+        n_orbits = np.rint(d_orbits)
+        dt_integer_orbits = pb * n_orbits + pb * pbdot * n_orbits**2 / 2.0
+        closest_tasc = tasc + dt_integer_orbits
+        new_pb = pb + pbdot * dt_integer_orbits
         deorbit_times_from_pepoch = simple_ell1_deorbit_numba(
             times_from_pepoch[i],
-            pars_dict["PB"],
+            new_pb,
             pars_dict["A1"],
-            tasc,
+            closest_tasc,
             pars_dict["EPS1"],
             pars_dict["EPS2"],
         )
 
         deorbited_pepoch = simple_ell1_deorbit_numba(
             np.array([0.0]),
-            pars_dict["PB"],
+            new_pb,
             pars_dict["A1"],
-            tasc,
+            closest_tasc,
             pars_dict["EPS1"],
             pars_dict["EPS2"],
         )
@@ -788,10 +795,11 @@ def _get_par_dict(model):
     parameters = {
         "Phase": 0,
         "PB": model.PB.value.astype(float) * 86400,
-        "TASC": _mjd_to_sec(model.TASC.value, model.PEPOCH.value),
+        "TASC": model.TASC.value,
         "A1": model.A1.value.astype(float),
         "EPS1": model.EPS1.value.astype(float),
         "EPS2": model.EPS2.value.astype(float),
+        "PBDOT": model.PBDOT.value.astype(float),
         "PEPOCH": model.PEPOCH.value.astype(float),  # I added Pepoch
     }
 
@@ -1134,24 +1142,23 @@ def main(args=None):
     if args.nharm > 1:
         nharm_str = f"_N{args.nharm}"
 
-    general_tasc = np.min([mod.TASC.value for mod in model])
+    ref_model = copy.deepcopy(model[0])
+    ref_model.change_binary_epoch(np.mean(pepoch))
 
-    ch_ind = 0
-
-    parameters = _get_par_dict(model[ch_ind])
-    parameters["TASC"] = general_tasc
+    parameters = _get_par_dict(ref_model)
 
     del parameters["PEPOCH"]
 
     for i in range(n_files):
         count = 0
-        while f"F{count}" in _get_par_dict(model[i]):
-            parameters[f"F{count}_{i}"] = _get_par_dict(model[i])[f"F{count}"]
+        local_pars = _get_par_dict(model[i])
+        while f"F{count}" in local_pars:
+            parameters[f"F{count}_{i}"] = local_pars[f"F{count}"]
             if f"F{count}" in parameters:
                 del parameters[f"F{count}"]
             count += 1
 
-        parameters[f"PEPOCH_{i}"] = _get_par_dict(model[i])["PEPOCH"]
+        parameters[f"PEPOCH_{i}"] = local_pars["PEPOCH"]
         parameters[f"Phase_{i}"] = parameters["Phase"]
         #  I initialized the phases because _calculate_phases calls parameters[f"Phase_{i}"]
     del parameters["Phase"]
