@@ -976,8 +976,9 @@ def get_factors(parnames, model, observation_length):
     n_files = len(observation_length)
     zoom = []
     P = model[0].PB.value * 86400
+    Pd = model[0].PBDOT.value
     X = model[0].A1.value
-
+    sign = np.sign(Pd)
     F = np.max([model[i].F0.value for i in range(n_files)])
     obs_length = np.max(observation_length)
 
@@ -994,6 +995,9 @@ def get_factors(parnames, model, observation_length):
             zoom.append(min(1.0, order_of_magnitude(dp)))
         elif par.startswith("EPS"):
             zoom.append(0.001)
+        elif par == "PBDOT":
+            sign = np.sign(Pd)
+            zoom.append(sign * order_of_magnitude(sign * Pd))
         else:
             zoom.append(1.0)
     return zoom
@@ -1173,8 +1177,10 @@ def main(args=None):
     for f in parameters:
         if f.startswith("Phase"):
             parameter_names.append(f)
+            continue
         for g in list_parameter_names:
-            if f.startswith(g):
+            # Startswith alone was confusing PBDOT for PB
+            if f == g or (f.startswith(g) and freq_re.match(f)):
                 parameter_names.append(f)
 
     minimize_first = args.minimize_first
