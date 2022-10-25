@@ -81,7 +81,7 @@ def splitext_improved(path):
     True
     >>> path_with_dirs = os.path.join("a.a.a.f", "a.1.tar")
     >>> path_without_ext = os.path.join("a.a.a.f", "a.1")
-    >>> np.all(splitext_improved(path_with_dirs) ==  (path_without_ext, '.tar.gz'))
+    >>> np.all(splitext_improved(path_with_dirs) ==  (path_without_ext, '.tar'))
     True
     """
     import os
