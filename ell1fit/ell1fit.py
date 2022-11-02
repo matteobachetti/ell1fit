@@ -736,7 +736,7 @@ def fast_phase(times, frequency_derivatives):
     return _fast_phase_generic(times, np.array(frequency_derivatives))
 
 
-def _calculate_phases(times_from_pepoch, pars_dict):
+def _calculate_phases(times_from_pepoch, pars_dict, tolerance=1e-8):
 
     n_files = len(times_from_pepoch)
     list_phases_from_zero_to_one = []
@@ -758,6 +758,7 @@ def _calculate_phases(times_from_pepoch, pars_dict):
             closest_tasc,
             pars_dict["EPS1"],
             pars_dict["EPS2"],
+            tolerance=tolerance,
         )
 
         deorbited_pepoch = simple_ell1_deorbit_numba(
@@ -767,6 +768,7 @@ def _calculate_phases(times_from_pepoch, pars_dict):
             closest_tasc,
             pars_dict["EPS1"],
             pars_dict["EPS2"],
+            tolerance=tolerance,
         )
 
         count = 0
@@ -786,9 +788,9 @@ def _calculate_phases(times_from_pepoch, pars_dict):
     return list_phases_from_zero_to_one
 
 
-def folded_profile(times, parameters, nbin=16):
+def folded_profile(times, parameters, nbin=16, tolerance=1e-8):
     n_files = len(times)
-    phases = _calculate_phases(times, parameters)
+    phases = _calculate_phases(times, parameters, tolerance=tolerance)
     profile = []
     for i in range(n_files):
         profile.append(np.histogram(phases[i], bins=np.linspace(0, 1, nbin + 1))[0])
@@ -852,6 +854,7 @@ def optimize_solution(
     minimize_first=False,
     nharm=1,
     outroot="out",
+    tolerance=1e-8,
 ):
     def logprior(pars):
         if np.any(np.isnan(pars)):
@@ -875,7 +878,7 @@ def optimize_solution(
         for par, initial, value, f in zip(fit_parameters, values, pars, factors):
             allpars[par] = value * f + initial
 
-        return _calculate_phases(times_from_pepoch, allpars)
+        return _calculate_phases(times_from_pepoch, allpars, tolerance=tolerance)
 
     def func_to_maximize(pars):
         # print(pars)
@@ -1100,6 +1103,12 @@ def main(args=None):
         default=1,
     )
     parser.add_argument(
+        "--deorb-tolerance",
+        type=float,
+        help="Tolerance of deorbit operation, in seconds",
+        default=1e-8,
+    )
+    parser.add_argument(
         "-E",
         "--erange",
         nargs=2,
@@ -1143,6 +1152,7 @@ def main(args=None):
 
     nsteps = args.nsteps
     nharm = args.nharm
+    tolerance = args.deorb_tolerance
     nbin = max(16, nharm * 8)
 
     energy_range = args.erange
@@ -1214,7 +1224,7 @@ def main(args=None):
     bounds = create_bounds(parameter_names)
     factors = get_factors(parameter_names, model, observation_length)
 
-    profile = folded_profile(times_from_pepoch, parameters, nbin=nbin)
+    profile = folded_profile(times_from_pepoch, parameters, nbin=nbin, tolerance=tolerance)
 
     template_func = []
     pulsed_frac = []
@@ -1254,6 +1264,7 @@ def main(args=None):
         minimize_first=minimize_first,
         nharm=nharm,
         outroot=[get_outroot(i) for i in range(n_files)] + [get_outroot(None)],
+        tolerance=tolerance,
     )
 
     for i in range(n_files):
