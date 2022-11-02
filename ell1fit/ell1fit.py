@@ -968,7 +968,7 @@ def create_bounds(parnames):
 
 
 def order_of_magnitude(value):
-    return 10 ** np.int(np.log10(value) - 1)
+    return 10 ** np.int(np.log10(np.abs(value)) - 1)
 
 
 def get_factors(parnames, model, observation_length):
@@ -978,7 +978,6 @@ def get_factors(parnames, model, observation_length):
     P = model[0].PB.value * 86400
     Pd = model[0].PBDOT.value
     X = model[0].A1.value
-    sign = np.sign(Pd)
     F = np.max([model[i].F0.value for i in range(n_files)])
     obs_length = np.max(observation_length)
 
@@ -996,8 +995,7 @@ def get_factors(parnames, model, observation_length):
         elif par.startswith("EPS"):
             zoom.append(0.001)
         elif par == "PBDOT":
-            sign = np.sign(Pd)
-            zoom.append(sign * order_of_magnitude(sign * Pd))
+            zoom.append(order_of_magnitude(Pd))
         else:
             zoom.append(1.0)
     return zoom
@@ -1105,7 +1103,7 @@ def main(args=None):
         "-E",
         "--erange",
         nargs=2,
-        type=int,
+        type=float,
         help="Energy range",
         default=None,
     )
