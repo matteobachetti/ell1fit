@@ -47,9 +47,9 @@ def update_model(model, value_dict):
         if par == "PB":
             value /= 86400
             err /= 86400
-        elif par == "TASC":
-            value = value / 86400 + PEPOCH
-            err /= 86400
+        # elif par == "TASC":
+        #     value = value / 86400 + PEPOCH
+        #     err /= 86400
 
         getattr(new_model, par).value = value
         getattr(new_model, par).uncertainty_value = err
