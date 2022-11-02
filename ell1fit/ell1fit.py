@@ -1056,11 +1056,14 @@ def split_output_results(result_table, n_files, fit_parameters):
     output_tables = [Table() for _ in range(n_files)]
 
     for par in tier_2_parameters:
-        for i in range(n_files):
+        # Use reverse order, so that we eliminate 10, 11, etc. before going to 1
+        for i in list(range(n_files))[::-1]:
             par_to_test = f"{par}_{i}"
+
             cols = look_for_string_in_list_of_strings(common_table.colnames, par_to_test)
             for colname in cols:
                 clean_colname = colname.replace(f"{par}_{i}", f"{par}")
+
                 output_tables[i][clean_colname] = common_table[colname]
                 common_table.remove_column(colname)
 
