@@ -856,7 +856,7 @@ def optimize_solution(
     outroot="out",
     tolerance=1e-8,
 ):
-    def logprior(pars):
+    def logprior(pars):                 # MATT: cambiare qui, qui la prior deve essere una distribuzione di probabilità generica. Facendo per step potrei prima mettere la gaussiana.
         if np.any(np.isnan(pars)):
             return -np.inf
 
@@ -960,7 +960,7 @@ def optimize_solution(
     return results
 
 
-def create_bounds(parnames):
+def create_bounds(parnames):            # MATT: cambiare qui, deve controllare se nel parfile sono riportate anche le incertezze oppure no. Se sì, prior gaussiana.
     bounds = []
     for par in parnames:
         if par.startswith("EPS"):
