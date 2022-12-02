@@ -891,11 +891,12 @@ def optimize_solution(
             value = local_value * f + initial
             # Add correction for PB and TASC
 
-            if not (bound[0] < value < bound[1]):
-                print(f"Value out of bound: {parname}={value}")
-                return -np.inf
+        #     if not (bound[0] < value < bound[1]):
+        #         print(f"Value out of bound: {parname}={value}")
+        #         return -np.inf
 
-        return 0
+        # return 0
+            return bound.logpdf(value)    # To consider a generic prior.
 
     def local_phases(pars):
         allpars = copy.deepcopy(model_parameters)
@@ -985,7 +986,7 @@ def optimize_solution(
     return results
 
 
-def create_bounds(parunc):  # I changed the function, so that now it tales paremeters_with_unc as input
+def create_bounds(parunc):  # I changed the function, so that now it takes paremeters_with_unc as input
     bounds = []
     for par in parunc.keys:
         if par.startswith("EPS"):
