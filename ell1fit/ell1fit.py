@@ -19,6 +19,7 @@ from astropy.table import Table, vstack
 from astropy.time import Time
 from scipy.ndimage import gaussian_filter
 from scipy.optimize import minimize
+from scipy.stats import uniform, norm
 
 from numpy.fft import ifft, fft, fftfreq
 from . import version
@@ -806,7 +807,7 @@ def _get_par_dict(model):
         "EPS1": model.EPS1.value.astype(float),
         "EPS2": model.EPS2.value.astype(float),
         "PBDOT": model.PBDOT.value.astype(float),
-        "PEPOCH": model.PEPOCH.value.astype(float),  # I added Pepoch
+        "PEPOCH": model.PEPOCH.value.astype(float),# I added Pepoch
     }
 
     count = 0
@@ -815,6 +816,30 @@ def _get_par_dict(model):
         count += 1
     return parameters
 
+def _get_par_unc_dict(model):
+
+    def return_unc(param):
+        if param.uncertainty_value is None:      
+            return np.nan
+        return param.uncertainty_value.astype(float)
+
+    parameters_with_unc = {
+        "Phase": [0, 0],
+        "PB": [model.PB.value.astype(float) * 86400, return_unc(model.PB) * 86400],
+        "TASC": [model.TASC.value, return_unc(model.TASC)],
+        "A1": [model.A1.value.astype(float), return_unc(model.A1)],
+        "EPS1": [model.EPS1.value.astype(float), return_unc(model.EPS1)],
+        "EPS2": [model.EPS2.value.astype(float), return_unc(model.EPS2)],
+        "PBDOT": [model.PBDOT.value.astype(float), return_unc(model.PBDOT)],
+        "PEPOCH": [model.PEPOCH.value.astype(float), return_unc(model.PEPOCH)],# I added Pepoch
+    }
+
+    count = 0
+    
+    while hasattr(model, f"F{count}"):
+        parameters_with_unc[f"F{count}"] = [getattr(model, f"F{count}").value.astype(float), return_unc(getattr(model, f"F{count}"))]
+        count += 1
+    return parameters_with_unc
 
 def _load_and_format_events(
     event_file, energy_range, pepoch, plotlc=True, plotfile="lightcurve.jpg"
@@ -960,13 +985,17 @@ def optimize_solution(
     return results
 
 
-def create_bounds(parnames):            # MATT: cambiare qui, deve controllare se nel parfile sono riportate anche le incertezze oppure no. Se sì, prior gaussiana.
+def create_bounds(parunc):  # I changed the function, so that now it tales paremeters_with_unc as input
     bounds = []
-    for par in parnames:
+    for par in parunc.keys:
         if par.startswith("EPS"):
-            bounds.append((-1, 1))
+            bounds.append(uniform(-1, 1))
+        elif np.isnan(parunc[par][1]) and par=="PBDOT":  # For now the uniform distribution is from/to +-np.inf. Later, we will implement meaningful boundaries.
+            bounds.append(uniform(-np.inf, np.inf))
+        elif np.isnan(parunc[par][1]):
+            bounds.append(uniform(0, np.inf))
         else:
-            bounds.append((-np.inf, np.inf))
+            bounds.append(norm(parunc[par][0], parunc[par][1]))
     return bounds
 
 
@@ -1165,6 +1194,7 @@ def main(args=None):
     ref_model.change_binary_epoch(np.mean(pepoch))
 
     parameters = _get_par_dict(ref_model)
+    parameters_with_unc = _get_par_unc_dict(ref_model)
 
     del parameters["PEPOCH"]
 
@@ -1221,7 +1251,7 @@ def main(args=None):
 
         observation_length[i] = times_from_pepoch[i][-1] - times_from_pepoch[i][0]
 
-    bounds = create_bounds(parameter_names)
+    bounds = create_bounds(parameters_with_unc) # I changed create_bounds, so that now it take parameters_with_unc as input
     factors = get_factors(parameter_names, model, observation_length)
 
     profile = folded_profile(times_from_pepoch, parameters, nbin=nbin, tolerance=tolerance)
