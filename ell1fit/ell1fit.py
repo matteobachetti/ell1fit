@@ -988,7 +988,7 @@ def optimize_solution(
 
 def create_bounds(parunc):  # I changed the function, so that now it takes paremeters_with_unc as input
     bounds = []
-    for par in parunc.keys:
+    for par in parunc.keys():
         if par.startswith("EPS"):
             bounds.append(uniform(-1, 1))
         elif np.isnan(parunc[par][1]) and par=="PBDOT":  # For now the uniform distribution is from/to +-np.inf. Later, we will implement meaningful boundaries.
