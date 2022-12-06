@@ -881,7 +881,23 @@ def optimize_solution(
     outroot="out",
     tolerance=1e-8,
 ):
-    def logprior(pars):                 # MATT: cambiare qui, qui la prior deve essere una distribuzione di probabilità generica. Facendo per step potrei prima mettere la gaussiana.
+    def logprior(pars):
+        if np.any(np.isnan(pars)):
+            return -np.inf
+
+        for parname, bound, initial, local_value, f in zip(
+            fit_parameters, bounds, values, pars, factors
+        ):
+            value = local_value * f + initial
+            # Add correction for PB and TASC
+
+            if not (bound[0] < value < bound[1]):
+                print(f"Value out of bound: {parname}={value}")
+                return -np.inf
+
+        return 0
+
+    def logprior_with_unc(pars):                 # like logprior, but with parameters_with_unc as input
         if np.any(np.isnan(pars)):
             return -np.inf
 
@@ -985,8 +1001,17 @@ def optimize_solution(
 
     return results
 
+def create_bounds(parnames): # Original create_bounds function
+    bounds = []
+    for par in parnames:
+        if par.startswith("EPS"):
+            bounds.append((-1, 1))
+        else:
+            bounds.append((-np.inf, np.inf))
+    return bounds
 
-def create_bounds(parunc):  # I changed the function, so that now it takes paremeters_with_unc as input
+
+def create_bounds_with_unc(parunc):  # Copy of create_bounds that takes paremeters_with_unc as input
     bounds = []
     for par in parunc.keys():
         if par.startswith("EPS"):
@@ -1252,7 +1277,8 @@ def main(args=None):
 
         observation_length[i] = times_from_pepoch[i][-1] - times_from_pepoch[i][0]
 
-    bounds = create_bounds(parameters_with_unc) # I changed create_bounds, so that now it take parameters_with_unc as input
+    bounds = create_bounds(parameter_names)
+    # bounds = create_bounds_with_unc(parameters_with_unc) # like create_bounds, but now it take parameters_with_unc as input
     factors = get_factors(parameter_names, model, observation_length)
 
     profile = folded_profile(times_from_pepoch, parameters, nbin=nbin, tolerance=tolerance)
