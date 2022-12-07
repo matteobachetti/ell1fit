@@ -19,6 +19,7 @@ from astropy.table import Table, vstack
 from astropy.time import Time
 from scipy.ndimage import gaussian_filter
 from scipy.optimize import minimize
+from scipy.stats import uniform, norm
 
 from numpy.fft import ifft, fft, fftfreq
 from . import version
@@ -103,7 +104,6 @@ def interp_nb(x_vals, x, y):
 
 def normalize_dyn_profile(dynprof, norm):
     """Normalize a dynamical profile (e.g. a phaseogram).
-
     Parameters
     ----------
     dynprof : np.ndarray
@@ -123,7 +123,6 @@ def normalize_dyn_profile(dynprof, norm):
             from each profile
         5. mediannorm, meannorm: subtract the median or the norm
             and divide by it to get fractional amplitude
-
     Examples
     --------
     >>> hist = [[1, 2], [2, 3], [3, 4]]
@@ -185,7 +184,6 @@ def normalize_dyn_profile(dynprof, norm):
 @vectorize([(int64,), (float32,), (float64,)])
 def phases_from_zero_to_one(phase):
     """Normalize pulse phases from 0 to 1
-
     Examples
     --------
     >>> phases_from_zero_to_one(0.1)
@@ -206,7 +204,6 @@ def phases_from_zero_to_one(phase):
 @vectorize([(int64,), (float32,), (float64,)])
 def phases_around_zero(phase):
     """Normalize pulse phases from -0.5 to 0.5
-
     Examples
     --------
     >>> phases_around_zero(0.6)
@@ -344,12 +341,10 @@ def likelihood(phases, template_func, weights=None):
 
 def get_template_func(template):
     """Get a cubic interpolation function of a pulse template.
-
     Parameters
     ----------
     template : array-like
         The input template profile
-
     Returns
     -------
     template_fun : function
@@ -576,7 +571,6 @@ def safe_run_sampler(
 
 def renormalize_results(results, name, result_name, mean, factor):
     """
-
     Examples
     --------
     >>> results = {"Bu0_mean": 0, "Bu0_ne": 0.1, "Bu0_pe": 0.2}
@@ -702,19 +696,16 @@ def _fast_phase_generic(times, frequency_derivatives):
 def fast_phase(times, frequency_derivatives):
     """
     Calculate pulse phase from the frequency and its derivatives.
-
     Parameters
     ----------
     times : array of floats
         The times at which the phase is calculated
     *frequency_derivatives: floats
         List of derivatives in increasing order, starting from zero.
-
     Returns
     -------
     phases : array of floats
         The absolute pulse phase
-
     Examples
     --------
     >>> from stingray.pulse import pulse_phase
@@ -797,7 +788,7 @@ def folded_profile(times, parameters, nbin=16, tolerance=1e-8):
     return profile
 
 
-def _get_par_dict(model):
+def _get_par_dict(model): # I added uncs, where I store the uncertainties.
     parameters = {
         "Phase": 0,
         "PB": model.PB.value.astype(float) * 86400,
@@ -809,11 +800,28 @@ def _get_par_dict(model):
         "PEPOCH": model.PEPOCH.value.astype(float),  # I added Pepoch
     }
 
+    def return_unc(param):
+        if param.uncertainty_value is None:      
+            return np.nan
+        return param.uncertainty_value.astype(float)
+
+    uncs = {
+        "Phase": 0,
+        "PB": return_unc(model.PB) * 86400,
+        "TASC": return_unc(model.TASC),
+        "A1": return_unc(model.A1),
+        "EPS1": return_unc(model.EPS1),
+        "EPS2": return_unc(model.EPS2),
+        "PBDOT": return_unc(model.PBDOT),
+        "PEPOCH": return_unc(model.PEPOCH),# I added Pepoch
+    }
+
     count = 0
     while hasattr(model, f"F{count}"):
         parameters[f"F{count}"] = getattr(model, f"F{count}").value.astype(float)
+        uncs[f"F{count}"] = return_unc(getattr(model, f"F{count}"))
         count += 1
-    return parameters
+    return parameters, uncs
 
 
 def _load_and_format_events(
@@ -864,13 +872,7 @@ def optimize_solution(
             fit_parameters, bounds, values, pars, factors
         ):
             value = local_value * f + initial
-            # Add correction for PB and TASC
-
-            if not (bound[0] < value < bound[1]):
-                print(f"Value out of bound: {parname}={value}")
-                return -np.inf
-
-        return 0
+            return bound.logpdf(value)
 
     def local_phases(pars):
         allpars = copy.deepcopy(model_parameters)
@@ -960,13 +962,17 @@ def optimize_solution(
     return results
 
 
-def create_bounds(parnames):
+def create_bounds(parnames, parvalues, paruncs):
     bounds = []
     for par in parnames:
         if par.startswith("EPS"):
-            bounds.append((-1, 1))
+            bounds.append(uniform(-1, 1))
+        elif np.isnan(paruncs[par]) and par=="PBDOT":  # For now the uniform distribution is from/to +-np.inf. Later, we will implement meaningful boundaries.
+            bounds.append(uniform(-np.inf, np.inf))
+        elif np.isnan(paruncs[par]):
+            bounds.append(uniform(0, np.inf))
         else:
-            bounds.append((-np.inf, np.inf))
+            bounds.append(norm(parvalues[par], paruncs[par]))
     return bounds
 
 
@@ -1032,7 +1038,6 @@ def look_for_list_of_strings_in_string(input_list, string):
 
 def split_output_results(result_table, n_files, fit_parameters):
     """
-
     Examples
     --------
     >>> vals_dict = {"dF0_1": [234], "dF0_1_16": [4], "TASC_0": [3.], "TASC_10": [5.], "PB": [3.]}
@@ -1164,23 +1169,29 @@ def main(args=None):
     ref_model = copy.deepcopy(model[0])
     ref_model.change_binary_epoch(np.mean(pepoch))
 
-    parameters = _get_par_dict(ref_model)
+    parameters, uncertainties = _get_par_dict(ref_model)
 
     del parameters["PEPOCH"]
 
     for i in range(n_files):
         count = 0
-        local_pars = _get_par_dict(model[i])
+        local_pars, local_uncs = _get_par_dict(model[i])
         while f"F{count}" in local_pars:
             parameters[f"F{count}_{i}"] = local_pars[f"F{count}"]
+            uncertainties[f"F{count}_{i}"] = local_uncs[f"F{count}"]
             if f"F{count}" in parameters:
                 del parameters[f"F{count}"]
+            if f"F{count}" in uncertainties:
+                del uncertainties[f"F{count}"]
             count += 1
 
         parameters[f"PEPOCH_{i}"] = local_pars["PEPOCH"]
         parameters[f"Phase_{i}"] = parameters["Phase"]
+        uncertainties[f"PEPOCH_{i}"] = local_uncs["PEPOCH"]
+        uncertainties[f"Phase_{i}"] = uncertainties["Phase"]
         #  I initialized the phases because _calculate_phases calls parameters[f"Phase_{i}"]
     del parameters["Phase"]
+    del uncertainties["Phase"]
 
     parameter_names = []
     list_parameter_names = sorted(args.parameters.split(","))
@@ -1221,7 +1232,7 @@ def main(args=None):
 
         observation_length[i] = times_from_pepoch[i][-1] - times_from_pepoch[i][0]
 
-    bounds = create_bounds(parameter_names)
+    bounds = create_bounds(parameter_names, parameters, uncertainties) 
     factors = get_factors(parameter_names, model, observation_length)
 
     profile = folded_profile(times_from_pepoch, parameters, nbin=nbin, tolerance=tolerance)
