@@ -1172,6 +1172,7 @@ def main(args=None):
     parameters, uncertainties = _get_par_dict(ref_model)
 
     del parameters["PEPOCH"]
+    del uncertainties["PEPOCH"]
 
     for i in range(n_files):
         count = 0
