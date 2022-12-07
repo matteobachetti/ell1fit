@@ -788,40 +788,29 @@ def folded_profile(times, parameters, nbin=16, tolerance=1e-8):
     return profile
 
 
-def _get_par_dict(model): # I added uncs, where I store the uncertainties.
-    parameters = {
-        "Phase": 0,
-        "PB": model.PB.value.astype(float) * 86400,
-        "TASC": model.TASC.value,
-        "A1": model.A1.value.astype(float),
-        "EPS1": model.EPS1.value.astype(float),
-        "EPS2": model.EPS2.value.astype(float),
-        "PBDOT": model.PBDOT.value.astype(float),
-        "PEPOCH": model.PEPOCH.value.astype(float),  # I added Pepoch
-    }
-
+def _get_par_dict(model): # The dictionary now contains lists were the first value is the mean and the second one the uncertainty associated to the parameter.
+    
     def return_unc(param):
         if param.uncertainty_value is None:      
             return np.nan
         return param.uncertainty_value.astype(float)
-
-    uncs = {
-        "Phase": 0,
-        "PB": return_unc(model.PB) * 86400,
-        "TASC": return_unc(model.TASC),
-        "A1": return_unc(model.A1),
-        "EPS1": return_unc(model.EPS1),
-        "EPS2": return_unc(model.EPS2),
-        "PBDOT": return_unc(model.PBDOT),
-        "PEPOCH": return_unc(model.PEPOCH),# I added Pepoch
+    
+    parameters = {
+        "Phase": [0, 0],
+        "PB": [model.PB.value.astype(float) * 86400, return_unc(model.PB) * 86400],
+        "TASC": [model.TASC.value, return_unc(model.TASC)],
+        "A1": [model.A1.value.astype(float), return_unc(model.A1)],
+        "EPS1": [model.EPS1.value.astype(float), return_unc(model.EPS1)],
+        "EPS2": [model.EPS2.value.astype(float), return_unc(model.EPS2)],
+        "PBDOT": [model.PBDOT.value.astype(float), return_unc(model.PBDOT)],
+        "PEPOCH": [model.PEPOCH.value.astype(float), return_unc(model.PEPOCH)],  # I added Pepoch
     }
 
     count = 0
     while hasattr(model, f"F{count}"):
-        parameters[f"F{count}"] = getattr(model, f"F{count}").value.astype(float)
-        uncs[f"F{count}"] = return_unc(getattr(model, f"F{count}"))
+        parameters[f"F{count}"] = [getattr(model, f"F{count}").value.astype(float), return_unc(getattr(model, f"F{count}"))]
         count += 1
-    return parameters, uncs
+    return parameters
 
 
 def _load_and_format_events(
@@ -962,17 +951,17 @@ def optimize_solution(
     return results
 
 
-def create_bounds(parnames, parvalues, paruncs):
+def create_bounds(parnames, parvalunc): # Modified version of create_bounds, parvalunc is a dictionary with mean values ([0]) and uncertainties ([1])of the parameters.
     bounds = []
     for par in parnames:
         if par.startswith("EPS"):
             bounds.append(uniform(-1, 1))
-        elif np.isnan(paruncs[par]) and par=="PBDOT":  # For now the uniform distribution is from/to +-np.inf. Later, we will implement meaningful boundaries.
+        elif np.isnan(parvalunc[par][1]) and par=="PBDOT":  # For now the uniform distribution is from/to +-np.inf. Later, we will implement meaningful boundaries.
             bounds.append(uniform(-np.inf, np.inf))
-        elif np.isnan(paruncs[par]):
+        elif np.isnan(parvalunc[par][1]):
             bounds.append(uniform(0, np.inf))
         else:
-            bounds.append(norm(parvalues[par], paruncs[par]))
+            bounds.append(norm(parvalunc[par][0], parvalunc[par][1]))
     return bounds
 
 
@@ -1169,30 +1158,27 @@ def main(args=None):
     ref_model = copy.deepcopy(model[0])
     ref_model.change_binary_epoch(np.mean(pepoch))
 
-    parameters, uncertainties = _get_par_dict(ref_model)
+    parameters_with_unc = _get_par_dict(ref_model)
 
-    del parameters["PEPOCH"]
-    del uncertainties["PEPOCH"]
+    del parameters_with_unc["PEPOCH"]
 
     for i in range(n_files):
         count = 0
-        local_pars, local_uncs = _get_par_dict(model[i])
-        while f"F{count}" in local_pars:
-            parameters[f"F{count}_{i}"] = local_pars[f"F{count}"]
-            uncertainties[f"F{count}_{i}"] = local_uncs[f"F{count}"]
-            if f"F{count}" in parameters:
-                del parameters[f"F{count}"]
-            if f"F{count}" in uncertainties:
-                del uncertainties[f"F{count}"]
+        local_pars_uncs = _get_par_dict(model[i])
+        while f"F{count}" in local_pars_uncs:
+            parameters_with_unc[f"F{count}_{i}"] = [local_pars_uncs[f"F{count}"][0], local_pars_uncs[f"F{count}"][1]] 
+            if f"F{count}" in parameters_with_unc:
+                del parameters_with_unc[f"F{count}"]
             count += 1
 
-        parameters[f"PEPOCH_{i}"] = local_pars["PEPOCH"]
-        parameters[f"Phase_{i}"] = parameters["Phase"]
-        uncertainties[f"PEPOCH_{i}"] = local_uncs["PEPOCH"]
-        uncertainties[f"Phase_{i}"] = uncertainties["Phase"]
+        parameters_with_unc[f"PEPOCH_{i}"] = [local_pars_uncs["PEPOCH"][0], local_pars_uncs["PEPOCH"][1]]
+        parameters_with_unc[f"Phase_{i}"] = [parameters_with_unc["Phase"][0], parameters_with_unc["Phase"][1]]
         #  I initialized the phases because _calculate_phases calls parameters[f"Phase_{i}"]
-    del parameters["Phase"]
-    del uncertainties["Phase"]
+    del parameters_with_unc["Phase"]
+
+    parameters = {}
+    for f in parameters_with_unc:
+        parameters[f] = parameters_with_unc[f][0]
 
     parameter_names = []
     list_parameter_names = sorted(args.parameters.split(","))
@@ -1233,7 +1219,7 @@ def main(args=None):
 
         observation_length[i] = times_from_pepoch[i][-1] - times_from_pepoch[i][0]
 
-    bounds = create_bounds(parameter_names, parameters, uncertainties) 
+    bounds = create_bounds(parameter_names, parameters_with_unc)
     factors = get_factors(parameter_names, model, observation_length)
 
     profile = folded_profile(times_from_pepoch, parameters, nbin=nbin, tolerance=tolerance)
