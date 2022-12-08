@@ -788,13 +788,14 @@ def folded_profile(times, parameters, nbin=16, tolerance=1e-8):
     return profile
 
 
-def _get_par_dict(model): # The dictionary now contains lists were the first value is the mean and the second one the uncertainty associated to the parameter.
-    
+def _get_par_dict(
+    model,
+):  # The dictionary now contains lists were the first value is the mean and the second one the uncertainty associated to the parameter.
     def return_unc(param):
-        if param.uncertainty_value is None:      
+        if param.uncertainty_value is None:
             return np.nan
         return param.uncertainty_value.astype(float)
-    
+
     parameters = {
         "Phase": [0, 0],
         "PB": [model.PB.value.astype(float) * 86400, return_unc(model.PB) * 86400],
@@ -808,7 +809,10 @@ def _get_par_dict(model): # The dictionary now contains lists were the first val
 
     count = 0
     while hasattr(model, f"F{count}"):
-        parameters[f"F{count}"] = [getattr(model, f"F{count}").value.astype(float), return_unc(getattr(model, f"F{count}"))]
+        parameters[f"F{count}"] = [
+            getattr(model, f"F{count}").value.astype(float),
+            return_unc(getattr(model, f"F{count}")),
+        ]
         count += 1
     return parameters
 
@@ -951,12 +955,16 @@ def optimize_solution(
     return results
 
 
-def create_bounds(parnames, parvalunc): # Modified version of create_bounds, parvalunc is a dictionary with mean values ([0]) and uncertainties ([1])of the parameters.
+def create_bounds(
+    parnames, parvalunc
+):  # Modified version of create_bounds, parvalunc is a dictionary with mean values ([0]) and uncertainties ([1])of the parameters.
     bounds = []
     for par in parnames:
         if par.startswith("EPS"):
             bounds.append(uniform(-1, 1))
-        elif np.isnan(parvalunc[par][1]) and par=="PBDOT":  # For now the uniform distribution is from/to +-np.inf. Later, we will implement meaningful boundaries.
+        elif (
+            np.isnan(parvalunc[par][1]) and par == "PBDOT"
+        ):  # For now the uniform distribution is from/to +-np.inf. Later, we will implement meaningful boundaries.
             bounds.append(uniform(-np.inf, np.inf))
         elif np.isnan(parvalunc[par][1]):
             bounds.append(uniform(0, np.inf))
@@ -1166,13 +1174,22 @@ def main(args=None):
         count = 0
         local_pars_uncs = _get_par_dict(model[i])
         while f"F{count}" in local_pars_uncs:
-            parameters_with_unc[f"F{count}_{i}"] = [local_pars_uncs[f"F{count}"][0], local_pars_uncs[f"F{count}"][1]] 
+            parameters_with_unc[f"F{count}_{i}"] = [
+                local_pars_uncs[f"F{count}"][0],
+                local_pars_uncs[f"F{count}"][1],
+            ]
             if f"F{count}" in parameters_with_unc:
                 del parameters_with_unc[f"F{count}"]
             count += 1
 
-        parameters_with_unc[f"PEPOCH_{i}"] = [local_pars_uncs["PEPOCH"][0], local_pars_uncs["PEPOCH"][1]]
-        parameters_with_unc[f"Phase_{i}"] = [parameters_with_unc["Phase"][0], parameters_with_unc["Phase"][1]]
+        parameters_with_unc[f"PEPOCH_{i}"] = [
+            local_pars_uncs["PEPOCH"][0],
+            local_pars_uncs["PEPOCH"][1],
+        ]
+        parameters_with_unc[f"Phase_{i}"] = [
+            parameters_with_unc["Phase"][0],
+            parameters_with_unc["Phase"][1],
+        ]
         #  I initialized the phases because _calculate_phases calls parameters[f"Phase_{i}"]
     del parameters_with_unc["Phase"]
 
