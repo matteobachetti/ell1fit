@@ -790,7 +790,7 @@ def folded_profile(times, parameters, nbin=16, tolerance=1e-8):
 
 def _get_par_dict(
     model,
-):  # The dictionary now contains lists were the first value is the mean and the second one the uncertainty associated to the parameter.
+):  # The dictionary now contains lists (first value: parameter mean, second value: parameter uncertainty.
     def return_unc(param):
         if param.uncertainty_value is None:
             return np.nan
@@ -957,14 +957,14 @@ def optimize_solution(
 
 def create_bounds(
     parnames, parvalunc
-):  # Modified version of create_bounds, parvalunc is a dictionary with mean values ([0]) and uncertainties ([1])of the parameters.
+):  # parvalunc is a dictionary with mean values ([0]) and uncertainties ([1])of the parameters.
     bounds = []
     for par in parnames:
         if par.startswith("EPS"):
             bounds.append(uniform(-1, 1))
         elif (
             np.isnan(parvalunc[par][1]) and par == "PBDOT"
-        ):  # For now the uniform distribution is from/to +-np.inf. Later, we will implement meaningful boundaries.
+        ):  # For now the uniform distribution is from/to +-np.inf.
             bounds.append(uniform(-np.inf, np.inf))
         elif np.isnan(parvalunc[par][1]):
             bounds.append(uniform(0, np.inf))
