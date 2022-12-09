@@ -790,7 +790,7 @@ def folded_profile(times, parameters, nbin=16, tolerance=1e-8):
 
 def _get_par_dict(
     model,
-):  # The dictionary now contains lists (first value: parameter mean, second value: parameter uncertainty.
+):  # The dictionary contains lists [parameter mean, parameter uncertainty]
     def return_unc(param):
         if param.uncertainty_value is None:
             return np.nan
