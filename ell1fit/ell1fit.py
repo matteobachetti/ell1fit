@@ -3,6 +3,8 @@ import warnings
 import os
 import copy
 import re
+import logging
+
 import matplotlib.pyplot as plt
 import numpy as np
 from hendrics.io import load_events
@@ -270,7 +272,6 @@ def create_template_from_profile_harm(
         additional_phase = -np.angle(ft[3]) / 2 / np.pi
         B = np.mean(profile)
         A = np.abs(ft[3]) / prof.size * 2 / B
-        # np.abs(np.fft.fft(sine(x, a, b, ph + 0.7)))[1] / x.size * 2
 
         def template_func(x):
             return B * (1 + A * np.cos(2 * np.pi * x))
@@ -286,7 +287,6 @@ def create_template_from_profile_harm(
         template_fine = ifft(new_ft_fine).real * oversample_factor * final_nbin / nbin
 
         phases_fine = np.arange(0.5 * dph_fine, 3, dph_fine)
-        # print(template_fine.size, phases_fine.size)
 
         templ_func_fine = interp1d(phases_fine, template_fine, kind="cubic", assume_sorted=True)
 
@@ -296,12 +296,11 @@ def create_template_from_profile_harm(
             / oversample_factor
             + dph_fine / 2
         )
-        # phases_fine += 0.5 * dph_fine
 
         def template_func(x):
             return templ_func_fine(1 + x + additional_phase)
 
-        # print(additional_phase)
+        logging.debug(f"Additional phase: {additional_phase}")
 
     dph = 1 / final_nbin
     phas = np.arange(dph / 2, 1, dph)
@@ -313,7 +312,6 @@ def create_template_from_profile_harm(
 
     fig = plt.figure(figsize=(3.5, 2.65))
     plt.plot(np.arange(0.5 / nbin, 1, 1 / nbin), profile, drawstyle="steps-mid", label="data")
-    # plt.plot(phases_fine, template_fine, label="template fine")
     plt.plot(phas[:final_nbin], template, label="template values", ls="--", lw=2)
     plt.plot(
         phas[:final_nbin], template_func(phas[:final_nbin]), label="template func", ls=":", lw=2
@@ -432,10 +430,10 @@ def get_flat_samples(sampler):
     flat_samples = sampler.get_chain(discard=burnin, flat=True, thin=thin)
     log_prob_samples = sampler.get_log_prob(discard=burnin, flat=True, thin=thin)
     # log_prior_samples = sampler.get_blobs(discard=burnin, flat=True, thin=thin)
-    print("burn-in: {0}".format(burnin))
-    print("thin: {0}".format(thin))
-    print("flat chain shape: {0}".format(flat_samples.shape))
-    print("flat log prob shape: {0}".format(log_prob_samples.shape))
+    logging.info("burn-in: {0}".format(burnin))
+    logging.info("thin: {0}".format(thin))
+    logging.info("flat chain shape: {0}".format(flat_samples.shape))
+    logging.info("flat log prob shape: {0}".format(log_prob_samples.shape))
     return flat_samples, maxtau
 
 
@@ -504,11 +502,11 @@ def safe_run_sampler(
     if os.path.exists(backend_filename):
         initial_size = backend.iteration
 
-    print("Initial size: {0}".format(initial_size))
+    logging.info("Initial size: {0}".format(initial_size))
     # backend.reset(nwalkers, ndim)
     nwalkers = max(32, starting_pars.size * 2)
     if initial_size < 100:
-        print("Starting from zero")
+        logging.info("Starting from zero")
 
         pos = np.array(starting_pars) + np.random.normal(
             np.zeros((nwalkers, starting_pars.size)), 1e-5
@@ -516,7 +514,7 @@ def safe_run_sampler(
         _, ndim = pos.shape
         backend.reset(nwalkers, ndim)
     elif initial_size < max_n:
-        print("Starting from where we left")
+        logging.info("Starting from where we left")
         reader = emcee.backends.HDFBackend(backend_filename)
         samples = reader.get_chain(discard=initial_size // 2, flat=True)
 
@@ -529,7 +527,7 @@ def safe_run_sampler(
         reader = emcee.backends.HDFBackend(backend_filename)
 
         result_dict, flat_samples = calculate_result_array_from_samples(reader, labels)
-        print("Nothing to be done here")
+        logging.info("Nothing to be done here")
         return result_dict
 
     # Initialize the sampler
@@ -878,7 +876,6 @@ def optimize_solution(
         return _calculate_phases(times_from_pepoch, allpars, tolerance=tolerance)
 
     def func_to_maximize(pars):
-        # print(pars)
         lp = logprior(pars)
         if np.isinf(lp):
             return lp
@@ -970,29 +967,31 @@ def assign_logpriors(
 ):  # parvalunc is a dictionary with mean values ([0]) and uncertainties ([1])of the parameters.
 
     logps = []
-    print("Setting up priors")
+    logging.info("Setting up priors")
     for par in parnames:
-        print(f"{par}: ", end="")
+        log_line = f"{par}: "
         if par.startswith("EPS"):
-            print("uniform between -1 and 1")
+            log_line += "uniform between -1 and 1"
             logps.append(_flat_logprior(-1, 1))
         elif par.startswith("Phase"):
-            print("uniform between 0 and 1")
+            log_line += "uniform between 0 and 1"
             logps.append(_flat_logprior(0, 1))
         elif (
             np.isnan(parvalunc[par][1]) and par == "PBDOT"
         ):  # For now the uniform distribution is from/to +-np.inf.
-            print("uniform between -1 and 1")
+            log_line += "uniform between -1 and 1"
             logps.append(_flat_logprior(-1, 1))
         elif np.isnan(parvalunc[par][1]) and par[:2] in ["F0", "PB"]:
-            print("uniform between 0 and inf")
+            log_line += "uniform between 0 and inf"
             logps.append(_flat_logprior(0, np.inf))
         elif np.isnan(parvalunc[par][1]):
-            print("uniform between -inf and inf")
+            log_line += "uniform between -inf and inf"
             logps.append(_flat_logprior(-np.inf, np.inf))
         else:
-            print(f"normal with mean {parvalunc[par][0]} and std {abs(parvalunc[par][1]):.2e}")
+            log_line += f"normal with mean {parvalunc[par][0]} and std {abs(parvalunc[par][1]):.2e}"
             logps.append(norm(loc=parvalunc[par][0], scale=abs(parvalunc[par][1])).logpdf)
+        logging.info(log_line)
+
     return logps
 
 
@@ -1354,7 +1353,7 @@ def main(args=None):
     for i, table in enumerate(list_result):
         outfile = get_outroot(i) + "_results.ecsv"
         table.write(outfile, overwrite=True)
-        print(f"Writing {outfile}")
-        print(table)
+        logging.info(f"Writing {outfile}")
+        logging.info(table)
 
     return output_file
