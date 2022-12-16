@@ -19,7 +19,7 @@ from astropy.table import Table, vstack
 from astropy.time import Time
 from scipy.ndimage import gaussian_filter
 from scipy.optimize import minimize
-from scipy.stats import uniform, norm
+from scipy.stats import norm
 
 from numpy.fft import ifft, fft, fftfreq
 from . import version
@@ -792,7 +792,7 @@ def _get_par_dict(
     model,
 ):  # The dictionary contains lists [parameter mean, parameter uncertainty]
     def return_unc(param):
-        if param.uncertainty_value is None or param.uncertainty_value == 0.:
+        if param.uncertainty_value is None or param.uncertainty_value == 0:
             return np.nan
         return param.uncertainty_value.astype(float)
 
@@ -848,7 +848,7 @@ def optimize_solution(
     model_parameters,
     fit_parameters,
     values,
-    bounds,
+    logprior_funcs,
     factors,
     template_func,
     nsteps=1000,
@@ -862,11 +862,11 @@ def optimize_solution(
             return -np.inf
 
         logp = 0
-        for parname, bound, initial, local_value, f in zip(
-            fit_parameters, bounds, values, pars, factors
+        for parname, logp_func, initial, local_value, f in zip(
+            fit_parameters, logprior_funcs, values, pars, factors
         ):
             value = local_value * f + initial
-            logp += bound.logpdf(value)
+            logp += logp_func(value)
         return logp
 
     def local_phases(pars):
@@ -957,22 +957,43 @@ def optimize_solution(
     return results
 
 
-def create_bounds(
+def _flat_logprior(bound0, bound1):
+    def func(x):
+        if x < bound0 or x > bound1:
+            return -np.inf
+        return 0
+    return func
+
+
+def assign_logpriors(
     parnames, parvalunc
 ):  # parvalunc is a dictionary with mean values ([0]) and uncertainties ([1])of the parameters.
-    bounds = []
+
+    logps = []
+    print("Setting up priors")
     for par in parnames:
+        print(f"{par}: ", end="")
         if par.startswith("EPS"):
-            bounds.append(uniform(-1, 1))
+            print("uniform between -1 and 1")
+            logps.append(_flat_logprior(-1, 1))
+        elif par.startswith("Phase"):
+            print("uniform between 0 and 1")
+            logps.append(_flat_logprior(0, 1))
         elif (
             np.isnan(parvalunc[par][1]) and par == "PBDOT"
         ):  # For now the uniform distribution is from/to +-np.inf.
-            bounds.append(uniform(-np.inf, np.inf))
+            print("uniform between -1 and 1")
+            logps.append(_flat_logprior(-1, 1))
+        elif np.isnan(parvalunc[par][1]) and par[:2] in ["F0", "PB"]:
+            print("uniform between 0 and inf")
+            logps.append(_flat_logprior(0, np.inf))
         elif np.isnan(parvalunc[par][1]):
-            bounds.append(uniform(0, np.inf))
+            print("uniform between -inf and inf")
+            logps.append(_flat_logprior(-np.inf, np.inf))
         else:
-            bounds.append(norm(parvalunc[par][0], parvalunc[par][1]))
-    return bounds
+            print(f"normal with mean {parvalunc[par][0]} and std {abs(parvalunc[par][1]):.2e}")
+            logps.append(norm(loc=parvalunc[par][0], scale=abs(parvalunc[par][1])).logpdf)
+    return logps
 
 
 def order_of_magnitude(value):
@@ -1238,7 +1259,7 @@ def main(args=None):
 
         observation_length[i] = times_from_pepoch[i][-1] - times_from_pepoch[i][0]
 
-    bounds = create_bounds(parameter_names, parameters_with_unc)
+    logprior_funcs = assign_logpriors(parameter_names, parameters_with_unc)
     factors = get_factors(parameter_names, model, observation_length)
 
     profile = folded_profile(times_from_pepoch, parameters, nbin=nbin, tolerance=tolerance)
@@ -1261,7 +1282,7 @@ def main(args=None):
 
         for j, par in enumerate(parameter_names):
             if par == f"Phase_{i}":
-                bounds[j] = (ph0 - 0.5, ph0 + 0.5)
+                logprior_funcs[j] = _flat_logprior(ph0 - 0.5, ph0 + 0.5)
                 break
 
     try:
@@ -1274,7 +1295,7 @@ def main(args=None):
         parameters,
         parameter_names,
         input_mean_fit_pars,
-        bounds,
+        logprior_funcs,
         factors,
         template_func,
         nsteps=nsteps,
