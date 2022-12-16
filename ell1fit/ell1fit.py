@@ -959,6 +959,7 @@ def _flat_logprior(bound0, bound1):
         if x < bound0 or x > bound1:
             return -np.inf
         return 0
+
     return func
 
 
@@ -1099,74 +1100,26 @@ def split_output_results(result_table, n_files, fit_parameters):
     return output_tables
 
 
-def main(args=None):
-    """Main function called by the `ell1fit` script"""
-    import argparse
-
-    description = "Fit an ELL1 model and frequency derivatives to an X-ray " "pulsar observation."
-    parser = argparse.ArgumentParser(description=description)
-    parser.add_argument("files", help="List of files", nargs="+")
-    parser.add_argument(
-        "-p",
-        "--parfile",
-        type=str,
-        nargs="+",
-        default=None,
-        help=(
-            "Input parameter files, one per event file. Must contain a simple ELL1 binary model, "
-            "with no orbital derivatives, and a number of spin derivatives (F0, F1, ...). "
-            "All other models will be ignored."
-        ),
-    )
-    parser.add_argument("-o", "--outroot", type=str, default=None, help="Root of output file names")
-    parser.add_argument(
-        "-N",
-        "--nharm",
-        type=int,
-        help="Number of harmonics to describe the pulse profile",
-        default=1,
-    )
-    parser.add_argument(
-        "--deorb-tolerance",
-        type=float,
-        help="Tolerance of deorbit operation, in seconds",
-        default=1e-8,
-    )
-    parser.add_argument(
-        "-E",
-        "--erange",
-        nargs=2,
-        type=float,
-        help="Energy range",
-        default=None,
-    )
-    parser.add_argument(
-        "--nsteps",
-        type=int,
-        help="Maximum number of MCMC steps",
-        default=100_000,
-    )
-    parser.add_argument(
-        "-P",
-        "--parameters",
-        type=str,
-        help="Comma-separated list of parameters to fit",
-        default="F0,F1",
-    )
-    parser.add_argument("--minimize-first", action="store_true", default=False)
-
-    args = parser.parse_args(args)
-    files = args.files
-    parfile = args.parfile
+def ell1fit(
+    files,
+    parfiles,
+    nsteps=100,
+    nharm=1,
+    tolerance=1e-8,
+    energy_range=None,
+    fit_parameters=["F0"],
+    minimize_first=False,
+    general_outroot=None,
+):
     n_files = len(files)
-    assert len(parfile) == len(
+    assert len(parfiles) == len(
         files
     ), "The number of parameter files must match that of event files."
     model = []
     pepoch = []
 
     for i in range(n_files):
-        model.append(get_model(parfile[i]))
+        model.append(get_model(parfiles[i]))
         pepoch.append(model[i].PEPOCH.value)
 
         if hasattr(model[i], "T0") or model[i].BINARY.value != "ELL1":
@@ -1174,16 +1127,12 @@ def main(args=None):
 
         model[i].change_binary_epoch(pepoch[i])
 
-    nsteps = args.nsteps
-    nharm = args.nharm
-    tolerance = args.deorb_tolerance
     nbin = max(16, nharm * 8)
 
-    energy_range = args.erange
     energy_str = _format_energy_string(energy_range)
     nharm_str = ""
-    if args.nharm > 1:
-        nharm_str = f"_N{args.nharm}"
+    if nharm > 1:
+        nharm_str = f"_N{nharm}"
 
     ref_model = copy.deepcopy(model[0])
     ref_model.change_binary_epoch(np.mean(pepoch))
@@ -1220,7 +1169,7 @@ def main(args=None):
         parameters[f] = parameters_with_unc[f][0]
 
     parameter_names = []
-    list_parameter_names = sorted(args.parameters.split(","))
+    list_parameter_names = sorted(fit_parameters)
 
     for f in parameters:
         if f.startswith("Phase"):
@@ -1231,15 +1180,11 @@ def main(args=None):
             if f == g or (f.startswith(g) and freq_re.match(f)):
                 parameter_names.append(f)
 
-    minimize_first = args.minimize_first
-
     def get_outroot(file_n=None):
-        if args.outroot is None and file_n is not None:
+        if file_n is not None:
             initial_outroot = splitext_improved(files[file_n])[0]
-        elif args.outroot is not None and file_n is not None:
-            initial_outroot = args.outroot + f"_{file_n}"
-        elif args.outroot is not None:
-            initial_outroot = args.outroot
+        elif general_outroot is not None:
+            initial_outroot = general_outroot
         else:
             initial_outroot = "out"
 
@@ -1357,3 +1302,76 @@ def main(args=None):
         logging.info(table)
 
     return output_file
+
+
+def main(args=None):
+    """Main function called by the `ell1fit` script"""
+    import argparse
+
+    description = "Fit an ELL1 model and frequency derivatives to an X-ray " "pulsar observation."
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument("files", help="List of files", nargs="+")
+    parser.add_argument(
+        "-p",
+        "--parfile",
+        type=str,
+        nargs="+",
+        default=None,
+        help=(
+            "Input parameter files, one per event file. Must contain a simple ELL1 binary model, "
+            "with no orbital derivatives, and a number of spin derivatives (F0, F1, ...). "
+            "All other models will be ignored."
+        ),
+    )
+    parser.add_argument("-o", "--outroot", type=str, default=None, help="Root of output file names")
+    parser.add_argument(
+        "-N",
+        "--nharm",
+        type=int,
+        help="Number of harmonics to describe the pulse profile",
+        default=1,
+    )
+    parser.add_argument(
+        "--deorb-tolerance",
+        type=float,
+        help="Tolerance of deorbit operation, in seconds",
+        default=1e-8,
+    )
+    parser.add_argument(
+        "-E",
+        "--erange",
+        nargs=2,
+        type=float,
+        help="Energy range",
+        default=None,
+    )
+    parser.add_argument(
+        "--nsteps",
+        type=int,
+        help="Maximum number of MCMC steps",
+        default=100_000,
+    )
+    parser.add_argument(
+        "-P",
+        "--parameters",
+        type=str,
+        help="Comma-separated list of parameters to fit",
+        default="F0,F1",
+    )
+    parser.add_argument("--minimize-first", action="store_true", default=False)
+
+    args = parser.parse_args(args)
+    files = args.files
+    parfiles = args.parfile
+
+    ell1fit(
+        files,
+        parfiles,
+        nsteps=args.nsteps,
+        nharm=args.nharm,
+        tolerance=args.deorb_tolerance,
+        energy_range=args.erange,
+        fit_parameters=args.parameters.split(","),
+        minimize_first=args.minimize_first,
+        general_outroot=args.outroot,
+    )
