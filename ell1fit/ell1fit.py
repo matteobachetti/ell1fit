@@ -861,11 +861,13 @@ def optimize_solution(
         if np.any(np.isnan(pars)):
             return -np.inf
 
+        logp = 0
         for parname, bound, initial, local_value, f in zip(
             fit_parameters, bounds, values, pars, factors
         ):
             value = local_value * f + initial
-            return bound.logpdf(value)
+            logp += bound.logpdf(value)
+        return logp
 
     def local_phases(pars):
         allpars = copy.deepcopy(model_parameters)
