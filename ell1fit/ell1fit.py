@@ -792,7 +792,7 @@ def _get_par_dict(
     model,
 ):  # The dictionary contains lists [parameter mean, parameter uncertainty]
     def return_unc(param):
-        if param.uncertainty_value is None:
+        if param.uncertainty_value is None or param.uncertainty_value == 0.:
             return np.nan
         return param.uncertainty_value.astype(float)
 
