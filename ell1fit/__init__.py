@@ -8,3 +8,5 @@ from ._astropy_init import *  # noqa
 # ----------------------------------------------------------------------------
 
 __all__ = []
+from .logging import logging, logger
+logger.setLevel(logging.INFO)

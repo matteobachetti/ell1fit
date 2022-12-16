@@ -2,6 +2,7 @@ import copy
 from astropy.table import Table
 from pint.models import get_model
 from .ell1fit import splitext_improved
+import logging
 
 
 def update_model(model, value_dict):
@@ -27,9 +28,9 @@ def update_model(model, value_dict):
         if f"d{par}_mean" not in value_dict:
             continue
         if par != "Phase":
-            print(f"Updating {par}")
+            logging.info(f"Updating {par}")
         else:
-            print("Updating TZRMJD")
+            logging.info("Updating TZRMJD")
 
         mean = value_dict[f"d{par}_mean"]
         neg = mean - value_dict[f"d{par}_16"]
@@ -55,7 +56,7 @@ def update_model(model, value_dict):
         getattr(new_model, par).uncertainty_value = err
         getattr(new_model, par).frozen = False
 
-    print(new_model.as_parfile())
+    logging.info(new_model.as_parfile())
     return new_model
 
 
