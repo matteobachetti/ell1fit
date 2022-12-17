@@ -997,7 +997,7 @@ def assign_logpriors(
 
 
 def order_of_magnitude(value):
-    return 10 ** np.int(np.log10(np.abs(value)) - 1)
+    return 10 ** int(np.log10(np.abs(value)) - 1)
 
 
 def get_factors(parnames, model, observation_length):
