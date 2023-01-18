@@ -40,10 +40,13 @@ def update_model(model, value_dict):
         value = mean * factor + initial
         err = max(neg, pos) * factor
         if par == "Phase":
-            new_model.TZRMJD.value = -value / new_model.F0.value / 86400 + PEPOCH
-            new_model.TZRMJD.uncertainty_value = err / new_model.F0.value / 86400
-            new_model.TZRMJD.frozen = False
-            # new_model.TZRMJD.value =  PEPOCH
+            try:
+                new_model.TZRMJD.value = -value / new_model.F0.value / 86400 + PEPOCH
+                new_model.TZRMJD.uncertainty_value = err / new_model.F0.value / 86400
+                new_model.TZRMJD.frozen = False
+                # new_model.TZRMJD.value =  PEPOCH
+            except ValueError:
+                pass
             continue
         if par == "PB":
             value /= 86400

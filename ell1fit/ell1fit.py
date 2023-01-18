@@ -8,6 +8,7 @@ import logging
 import matplotlib.pyplot as plt
 import numpy as np
 from hendrics.io import load_events
+from stingray.pulse.pulsar import z_n_events
 from pint.models import get_model
 
 import matplotlib as mpl
@@ -17,7 +18,7 @@ from scipy.interpolate import interp1d
 import emcee
 import corner
 from numba import njit, vectorize, int64, float32, float64, prange
-from astropy.table import Table, vstack
+from astropy.table import Table, vstack, TableMergeError
 from astropy.time import Time
 from scipy.ndimage import gaussian_filter
 from scipy.optimize import minimize
@@ -329,12 +330,17 @@ def create_template_from_profile_harm(
     return template * final_nbin / nbin, additional_phase
 
 
-def likelihood(phases, template_func, weights=None):
+def pletsch_clarke_likelihood(phases, template_func, weights=None):
     probs = template_func(phases)
     if weights is None:
         return np.log(probs).sum()
     else:
         return np.log(weights * probs + 1.0 - weights).sum()
+
+
+def rayleigh_as_likelihood(phases, *args, **kwargs):
+    prob = z_n_events(phases, 1)
+    return prob
 
 
 def get_template_func(template):
@@ -854,6 +860,7 @@ def optimize_solution(
     nharm=1,
     outroot="out",
     tolerance=1e-8,
+    likelihood_func=pletsch_clarke_likelihood,
 ):
     def logprior(pars):
         if np.any(np.isnan(pars)):
@@ -883,7 +890,7 @@ def optimize_solution(
 
         ll = 0
         for i in range(len(phases)):
-            ll += likelihood(phases[i], template_func[i])
+            ll += likelihood_func(phases[i], template_func[i])
 
         return ll + lp
 
@@ -1100,6 +1107,35 @@ def split_output_results(result_table, n_files, fit_parameters):
     return output_tables
 
 
+def safe_save(results, output_file, **write_kwargs):
+    """
+    Examples
+    --------
+    >>> results = Table({"a": [2]})
+    >>> results_2 = Table({"a": ["3"]})
+    >>> output_file = "blabla.csv"
+    >>> safe_save(results, output_file)
+    >>> safe_save(results, output_file)
+    >>> out = Table.read(output_file)
+    >>> len(out)
+    2
+    >>> os.unlink(output_file)
+    >>> os.unlink("old_" + output_file)
+    """
+    if os.path.exists(output_file):
+        old = Table.read(output_file)
+        old.write("old_" + output_file, overwrite=True)
+        try:
+            results = vstack([old, results])
+        except TableMergeError:
+            warnings.warn(
+                "Merging old and new results failed. Old results were saved in a separate file."
+            )
+
+    results.write(output_file, overwrite=True, **write_kwargs)
+    return
+
+
 def ell1fit(
     files,
     parfiles,
@@ -1110,6 +1146,7 @@ def ell1fit(
     fit_parameters=["F0"],
     minimize_first=False,
     general_outroot=None,
+    likelihood_func=pletsch_clarke_likelihood,
 ):
     n_files = len(files)
     assert len(parfiles) == len(
@@ -1130,6 +1167,10 @@ def ell1fit(
     nbin = max(16, nharm * 8)
 
     energy_str = _format_energy_string(energy_range)
+    likelihood_str = ""
+    if likelihood_func == rayleigh_as_likelihood:
+        likelihood_str = "_rayleigh"
+
     nharm_str = ""
     if nharm > 1:
         nharm_str = f"_N{nharm}"
@@ -1172,7 +1213,7 @@ def ell1fit(
     list_parameter_names = sorted(fit_parameters)
 
     for f in parameters:
-        if f.startswith("Phase"):
+        if f.startswith("Phase") and likelihood_func == pletsch_clarke_likelihood:
             parameter_names.append(f)
             continue
         for g in list_parameter_names:
@@ -1188,7 +1229,14 @@ def ell1fit(
         else:
             initial_outroot = "out"
 
-        outroot = initial_outroot + "_" + "_".join(list_parameter_names) + energy_str + nharm_str
+        outroot = (
+            initial_outroot
+            + "_"
+            + "_".join(list_parameter_names)
+            + energy_str
+            + nharm_str
+            + likelihood_str
+        )
         return outroot
 
     times_from_pepoch = [[] for _ in range(n_files)]
@@ -1247,6 +1295,7 @@ def ell1fit(
         nharm=nharm,
         outroot=[get_outroot(i) for i in range(n_files)] + [get_outroot(None)],
         tolerance=tolerance,
+        likelihood_func=likelihood_func,
     )
 
     for i in range(n_files):
@@ -1286,12 +1335,7 @@ def ell1fit(
 
     output_file = get_outroot(None) + "_results.ecsv"
 
-    if os.path.exists(output_file):
-        old = Table.read(output_file)
-        old.write("old_" + output_file, overwrite=True)
-        results = vstack([old, results])
-
-    results.write(output_file, overwrite=True)
+    safe_save(results, output_file)
 
     list_result = split_output_results(results, n_files, list_parameter_names)
 
@@ -1358,11 +1402,21 @@ def main(args=None):
         help="Comma-separated list of parameters to fit",
         default="F0,F1",
     )
+    parser.add_argument(
+        "--likelihood",
+        type=str,
+        help="Can be PC (Pletsch & Clarke, default) or Rayleigh",
+        default="PC",
+    )
     parser.add_argument("--minimize-first", action="store_true", default=False)
 
     args = parser.parse_args(args)
     files = args.files
     parfiles = args.parfile
+
+    like = pletsch_clarke_likelihood
+    if args.likelihood.lower() == "rayleigh":
+        like = rayleigh_as_likelihood
 
     ell1fit(
         files,
@@ -1374,4 +1428,5 @@ def main(args=None):
         fit_parameters=args.parameters.split(","),
         minimize_first=args.minimize_first,
         general_outroot=args.outroot,
+        likelihood_func=like,
     )
