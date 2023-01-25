@@ -59,7 +59,12 @@ def update_model(model, value_dict):
         getattr(new_model, par).uncertainty_value = err
         getattr(new_model, par).frozen = False
 
-    logging.info(new_model.as_parfile())
+    try:
+        # This fails on windows
+        logging.info(new_model.as_parfile())
+    except Exception as e:
+        print(e)
+        pass
     return new_model
 
 
