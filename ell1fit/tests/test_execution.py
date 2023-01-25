@@ -30,7 +30,7 @@ class TestExecution:
         # Get to 100, then continue up to 200
         main_ell1fit(cmdline1)
         main_ell1fit(cmdline2)
-        label = f"_A1_F0_PB_TASC"
+        label = "_A1_F0_PB_TASC"
         if likelihood == "Rayleigh":
             label += "_rayleigh"
 
