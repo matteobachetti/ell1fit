@@ -8,7 +8,7 @@ import logging
 import matplotlib.pyplot as plt
 import numpy as np
 from hendrics.io import load_events
-from stingray.pulse.pulsar import z_n_events
+from stingray.pulse.pulsar import z_n_events, z_n_binned_events
 from pint.models import get_model
 
 import matplotlib as mpl
@@ -1321,6 +1321,7 @@ def ell1fit(
 
     for i in range(n_files):
         results[f"pf_{i}"] = pulsed_frac[i]
+        results[f"Z11_{i}"] = z_n_binned_events(profile[i], nharm)
 
     for i in range(n_files):
         results[f"ctrate_{i}"] = times_from_pepoch[i].size / expo[i]
