@@ -189,16 +189,11 @@ def phases_from_zero_to_one(phase):
     """Normalize pulse phases from 0 to 1
     Examples
     --------
-    >>> phases_from_zero_to_one(0.1)
-    0.1
-    >>> phases_from_zero_to_one(-0.9)
-    0.1
-    >>> phases_from_zero_to_one(0.9)
-    0.9
-    >>> phases_from_zero_to_one(3.1)
-    0.1
+    >>> assert np.isclose(phases_from_zero_to_one(0.1), 0.1)
+    >>> assert np.isclose(phases_from_zero_to_one(-0.9), 0.1)
+    >>> assert np.isclose(phases_from_zero_to_one(0.9), 0.9)
+    >>> assert np.isclose(phases_from_zero_to_one(3.1), 0.1)
     >>> assert np.allclose(phases_from_zero_to_one([0.1, 3.1, -0.9]), 0.1)
-    True
     """
 
     return phase - np.floor(phase)
@@ -209,14 +204,10 @@ def phases_around_zero(phase):
     """Normalize pulse phases from -0.5 to 0.5
     Examples
     --------
-    >>> phases_around_zero(0.6)
-    -0.4
-    >>> phases_around_zero(-0.9)
-    0.1
-    >>> phases_around_zero(3.9)
-    -0.1
-    >>> assert np.allclose(phases_from_zero_to_one([0.6, -0.4]), -0.4)
-    True
+    >>> assert np.isclose(phases_around_zero(0.6), -0.4)
+    >>> assert np.isclose(phases_around_zero(-0.9), 0.1)
+    >>> assert np.isclose(phases_around_zero(3.9), -0.1)
+    >>> assert np.allclose(phases_around_zero([0.6, -0.4]), -0.4)
     """
     ph = phase - np.floor(phase)
     while ph >= 0.5:
@@ -289,7 +280,9 @@ def create_template_from_profile_harm(
 
         phases_fine = np.arange(0.5 * dph_fine, 3, dph_fine)
 
-        templ_func_fine = interp1d(phases_fine, template_fine, kind="cubic", assume_sorted=True)
+        templ_func_fine = interp1d(
+            phases_fine, template_fine, kind="cubic", assume_sorted=True
+        )
 
         additional_phase = (
             np.argmax(template_fine[: final_nbin * oversample_factor])
@@ -312,10 +305,16 @@ def create_template_from_profile_harm(
     template = template[:final_nbin].real
 
     fig = plt.figure(figsize=(3.5, 2.65))
-    plt.plot(np.arange(0.5 / nbin, 1, 1 / nbin), profile, drawstyle="steps-mid", label="data")
+    plt.plot(
+        np.arange(0.5 / nbin, 1, 1 / nbin), profile, drawstyle="steps-mid", label="data"
+    )
     plt.plot(phas[:final_nbin], template, label="template values", ls="--", lw=2)
     plt.plot(
-        phas[:final_nbin], template_func(phas[:final_nbin]), label="template func", ls=":", lw=2
+        phas[:final_nbin],
+        template_func(phas[:final_nbin]),
+        label="template func",
+        ls=":",
+        lw=2,
     )
     plt.plot(
         phas[:final_nbin],
@@ -411,7 +410,9 @@ def simple_ell1_deorbit_numba(times, PB, A1, TASC, EPS1, EPS2, tolerance=1e-8):
             old_out = out_times[i]
             phase = omega * out_times[i]
             twophase = 2 * phase
-            out_times[i] = t - A1 * (np.sin(phase) + k1 * np.sin(twophase) + k2 * np.cos(twophase))
+            out_times[i] = t - A1 * (
+                np.sin(phase) + k1 * np.sin(twophase) + k2 * np.cos(twophase)
+            )
         out_times[i] += TASC
 
         # out_times[i] = times[i] - A1 * np.sin(omega * (out_times[i] - TASC))
@@ -463,7 +464,12 @@ def calculate_result_array_from_samples(sampler, labels):
 
 
 def plot_mcmc_results(
-    sampler=None, backend=None, flat_samples=None, labels=None, fname="results.jpg", **plot_kwargs
+    sampler=None,
+    backend=None,
+    flat_samples=None,
+    labels=None,
+    fname="results.jpg",
+    **plot_kwargs,
 ):
     assert np.any([a is not None for a in [sampler, backend, flat_samples]]), (
         "At least one between backend, sampler, or flat_samples, should be specified, in",
@@ -478,7 +484,9 @@ def plot_mcmc_results(
 
         flat_samples, _ = get_flat_samples(sampler)
 
-    fig = corner.corner(flat_samples, labels=labels, quantiles=[0.16, 0.5, 0.84], **plot_kwargs)
+    fig = corner.corner(
+        flat_samples, labels=labels, quantiles=[0.16, 0.5, 0.84], **plot_kwargs
+    )
     fig.savefig(fname, dpi=300)
 
 
@@ -491,7 +499,6 @@ def safe_run_sampler(
     corner_labels=None,
     n_autocorr=200,
 ):
-
     # https://emcee.readthedocs.io/en/stable/tutorials/monitor/?highlight=run_mcmc#saving-monitoring-progress
     # We'll track how the average autocorrelation time estimate changes
     starting_pars = np.asarray(starting_pars)
@@ -567,7 +574,10 @@ def safe_run_sampler(
 
     result_dict, flat_samples = calculate_result_array_from_samples(sampler, labels)
     plot_mcmc_results(
-        flat_samples=flat_samples, labels=labels, fname=outroot + "_corner.jpg", backend=backend
+        flat_samples=flat_samples,
+        labels=labels,
+        fname=outroot + "_corner.jpg",
+        backend=backend,
     )
 
     return result_dict
@@ -722,17 +732,21 @@ def fast_phase(times, frequency_derivatives):
     if len(frequency_derivatives) == 1:
         return _fast_phase(times, frequency_derivatives[0])
     elif len(frequency_derivatives) == 2:
-        return _fast_phase_fdot(times, frequency_derivatives[0], frequency_derivatives[1])
+        return _fast_phase_fdot(
+            times, frequency_derivatives[0], frequency_derivatives[1]
+        )
     elif len(frequency_derivatives) == 3:
         return _fast_phase_fddot(
-            times, frequency_derivatives[0], frequency_derivatives[1], frequency_derivatives[2]
+            times,
+            frequency_derivatives[0],
+            frequency_derivatives[1],
+            frequency_derivatives[2],
         )
 
     return _fast_phase_generic(times, np.array(frequency_derivatives))
 
 
 def _calculate_phases(times_from_pepoch, pars_dict, tolerance=1e-8):
-
     n_files = len(times_from_pepoch)
     list_phases_from_zero_to_one = []
     pb = pars_dict["PB"]
@@ -808,7 +822,10 @@ def _get_par_dict(
         "EPS1": [model.EPS1.value.astype(float), return_unc(model.EPS1)],
         "EPS2": [model.EPS2.value.astype(float), return_unc(model.EPS2)],
         "PBDOT": [model.PBDOT.value.astype(float), return_unc(model.PBDOT)],
-        "PEPOCH": [model.PEPOCH.value.astype(float), return_unc(model.PEPOCH)],  # I added Pepoch
+        "PEPOCH": [
+            model.PEPOCH.value.astype(float),
+            return_unc(model.PEPOCH),
+        ],  # I added Pepoch
     }
 
     count = 0
@@ -973,7 +990,6 @@ def _flat_logprior(bound0, bound1):
 def assign_logpriors(
     parnames, parvalunc
 ):  # parvalunc is a dictionary with mean values ([0]) and uncertainties ([1])of the parameters.
-
     logps = []
     logging.info("Setting up priors")
     for par in parnames:
@@ -997,7 +1013,9 @@ def assign_logpriors(
             logps.append(_flat_logprior(-np.inf, np.inf))
         else:
             log_line += f"normal with mean {parvalunc[par][0]} and std {abs(parvalunc[par][1]):.2e}"
-            logps.append(norm(loc=parvalunc[par][0], scale=abs(parvalunc[par][1])).logpdf)
+            logps.append(
+                norm(loc=parvalunc[par][0], scale=abs(parvalunc[par][1])).logpdf
+            )
         logging.info(log_line)
 
     return logps
@@ -1008,7 +1026,6 @@ def order_of_magnitude(value):
 
 
 def get_factors(parnames, model, observation_length):
-
     n_files = len(observation_length)
     zoom = []
     P = model[0].PB.value * 86400
@@ -1022,7 +1039,9 @@ def get_factors(parnames, model, observation_length):
         if matchobj:
             order = int(matchobj.group(1))
             file_n = int(matchobj.group(2))
-            zoom.append(order_of_magnitude(1 / observation_length[file_n] ** (order + 1)))
+            zoom.append(
+                order_of_magnitude(1 / observation_length[file_n] ** (order + 1))
+            )
         elif par == "A1":
             zoom.append(min(1, order_of_magnitude(1 / np.pi / 2 / F)))
         elif par == "PB":
@@ -1093,7 +1112,9 @@ def split_output_results(result_table, n_files, fit_parameters):
         for i in list(range(n_files))[::-1]:
             par_to_test = f"{par}_{i}"
 
-            cols = look_for_string_in_list_of_strings(common_table.colnames, par_to_test)
+            cols = look_for_string_in_list_of_strings(
+                common_table.colnames, par_to_test
+            )
             for colname in cols:
                 clean_colname = colname.replace(f"{par}_{i}", f"{par}")
 
@@ -1160,7 +1181,9 @@ def ell1fit(
         pepoch.append(model[i].PEPOCH.value)
 
         if hasattr(model[i], "T0") or model[i].BINARY.value != "ELL1":
-            raise ValueError("This script wants an ELL1 model, with TASC, not T0, defined")
+            raise ValueError(
+                "This script wants an ELL1 model, with TASC, not T0, defined"
+            )
 
         model[i].change_binary_epoch(pepoch[i])
 
@@ -1245,7 +1268,10 @@ def ell1fit(
     for i in range(n_files):
         fname = files[i]
         times_from_pepoch[i], gtis = _load_and_format_events(
-            fname, energy_range, pepoch[i], plotfile=get_outroot(i) + f"_lightcurve_{i}.jpg"
+            fname,
+            energy_range,
+            pepoch[i],
+            plotfile=get_outroot(i) + f"_lightcurve_{i}.jpg",
         )
         expo[i] += np.sum(np.diff(gtis, axis=1))
 
@@ -1254,14 +1280,19 @@ def ell1fit(
     logprior_funcs = assign_logpriors(parameter_names, parameters_with_unc)
     factors = get_factors(parameter_names, model, observation_length)
 
-    profile = folded_profile(times_from_pepoch, parameters, nbin=nbin, tolerance=tolerance)
+    profile = folded_profile(
+        times_from_pepoch, parameters, nbin=nbin, tolerance=tolerance
+    )
 
     template_func = []
     pulsed_frac = []
 
     for i in range(n_files):
         template, additional_phase = create_template_from_profile_harm(
-            profile[i], nharm=nharm, final_nbin=200, imagefile=get_outroot(i) + "_template.jpg"
+            profile[i],
+            nharm=nharm,
+            final_nbin=200,
+            imagefile=get_outroot(i) + "_template.jpg",
         )
 
         template_func.append(get_template_func(template))
@@ -1353,7 +1384,9 @@ def main(args=None):
     """Main function called by the `ell1fit` script"""
     import argparse
 
-    description = "Fit an ELL1 model and frequency derivatives to an X-ray " "pulsar observation."
+    description = (
+        "Fit an ELL1 model and frequency derivatives to an X-ray " "pulsar observation."
+    )
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("files", help="List of files", nargs="+")
     parser.add_argument(
@@ -1368,7 +1401,9 @@ def main(args=None):
             "All other models will be ignored."
         ),
     )
-    parser.add_argument("-o", "--outroot", type=str, default=None, help="Root of output file names")
+    parser.add_argument(
+        "-o", "--outroot", type=str, default=None, help="Root of output file names"
+    )
     parser.add_argument(
         "-N",
         "--nharm",
