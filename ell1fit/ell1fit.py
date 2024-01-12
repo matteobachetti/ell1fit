@@ -842,16 +842,13 @@ def _load_and_format_events(
     event_file, energy_range, pepoch, plotlc=True, plotfile="lightcurve.jpg"
 ):
     events = load_events(event_file)
+    events.apply_gtis(inplace=True)
+
     if plotlc:
         lc = events.to_lc(100)
 
         fig = plt.figure("LC", figsize=(3.5, 2.65))
-        plt.plot(_sec_to_mjd(lc.time, events.mjdref), lc.counts / lc.dt)
-        GTI = _sec_to_mjd(events.gti, events.mjdref)
-        for g0, g1 in zip(GTI[:, 1], GTI[:, 0]):
-            plt.axvspan(g0, g1, color="r", alpha=0.5)
-        plt.xlabel("MJD")
-        plt.ylabel("Count rate")
+        lc.plot(ax=plt.gca())
         plt.savefig(plotfile)
         plt.close(fig)
 
