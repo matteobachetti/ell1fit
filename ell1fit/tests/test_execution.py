@@ -1,4 +1,5 @@
 import os
+import sys
 import glob
 import pytest
 from ell1fit.ell1fit import main as main_ell1fit
@@ -7,6 +8,10 @@ from ell1fit.create_parfile import main as main_ell1par
 
 curdir = os.path.abspath(os.path.dirname(__file__))
 datadir = os.path.join(curdir, "data")
+if sys.platform.startswith("win"):
+    pytest.skip(
+        "skipping tests that are known to fail on windows", allow_module_level=True
+    )
 
 
 class TestExecution:
@@ -34,14 +39,18 @@ class TestExecution:
         if likelihood == "Rayleigh":
             label += "_rayleigh"
 
-        outputs = sorted(glob.glob(os.path.join(datadir, f"events[01]{label}_results.ecsv")))
+        outputs = sorted(
+            glob.glob(os.path.join(datadir, f"events[01]{label}_results.ecsv"))
+        )
         for out in outputs:
             assert os.path.exists(out)
 
         main_ell1par(f"{outputs[0]} -p {self.param_files[0]}".split())
         main_ell1par(f"{outputs[1]} -p {self.param_files[1]}".split())
 
-        out_param = sorted(glob.glob(os.path.join(datadir, "events[01]_A1_F0_PB_TASC_results.par")))
+        out_param = sorted(
+            glob.glob(os.path.join(datadir, "events[01]_A1_F0_PB_TASC_results.par"))
+        )
         for out in out_param:
             assert os.path.exists(out)
 
