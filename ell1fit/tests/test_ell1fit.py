@@ -1,6 +1,9 @@
+import os
+
 import pytest
 import numpy as np
-from ..ell1fit import add_circular_orbit_numba, add_ell1_orbit_numba
+from astropy.table import Table
+from ..ell1fit import add_circular_orbit_numba, add_ell1_orbit_numba, safe_save
 from ..ell1fit import simple_circular_deorbit_numba, simple_ell1_deorbit_numba
 
 
@@ -28,3 +31,15 @@ def test_ell1_orbit(PB, A1, E1, E2):
     orbited = add_ell1_orbit_numba(times, PB, A1, TASC, E1, E2)
     deorbited = simple_ell1_deorbit_numba(orbited, PB, A1, TASC, E1, E2, tolerance=1e-8)
     assert np.all(np.abs(deorbited - times) < 1e-8)
+
+
+def test_safe_save():
+    results = Table({"a": [2]})
+    results_2 = Table({"a": ["3"]})
+    output_file = "blabla.csv"
+    safe_save(results, output_file)
+    safe_save(results_2, output_file)
+    with pytest.warns(UserWarning, match="Merging old and new"):
+        safe_save(results_2, output_file)
+    os.unlink(output_file)
+    os.unlink("old_" + output_file)

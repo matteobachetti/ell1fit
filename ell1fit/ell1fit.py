@@ -8,6 +8,7 @@ import logging
 import matplotlib.pyplot as plt
 import numpy as np
 from hendrics.io import load_events
+from stingray.pulse.pulsar import z_n_events, z_n_binned_events
 from pint.models import get_model
 
 import matplotlib as mpl
@@ -17,7 +18,7 @@ from scipy.interpolate import interp1d
 import emcee
 import corner
 from numba import njit, vectorize, int64, float32, float64, prange
-from astropy.table import Table, vstack
+from astropy.table import Table, vstack, TableMergeError
 from astropy.time import Time
 from scipy.ndimage import gaussian_filter
 from scipy.optimize import minimize
@@ -41,7 +42,7 @@ params = {
     "grid.color": "grey",
     "grid.linewidth": 0.3,
     "grid.linestyle": ":",
-    "axes.grid.axis": "y",
+    "axes.grid.axis": "both",
     "axes.grid.which": "both",
     "axes.axisbelow": False,
     "axes.labelsize": 8,
@@ -188,16 +189,11 @@ def phases_from_zero_to_one(phase):
     """Normalize pulse phases from 0 to 1
     Examples
     --------
-    >>> phases_from_zero_to_one(0.1)
-    0.1
-    >>> phases_from_zero_to_one(-0.9)
-    0.1
-    >>> phases_from_zero_to_one(0.9)
-    0.9
-    >>> phases_from_zero_to_one(3.1)
-    0.1
+    >>> assert np.isclose(phases_from_zero_to_one(0.1), 0.1)
+    >>> assert np.isclose(phases_from_zero_to_one(-0.9), 0.1)
+    >>> assert np.isclose(phases_from_zero_to_one(0.9), 0.9)
+    >>> assert np.isclose(phases_from_zero_to_one(3.1), 0.1)
     >>> assert np.allclose(phases_from_zero_to_one([0.1, 3.1, -0.9]), 0.1)
-    True
     """
 
     return phase - np.floor(phase)
@@ -208,14 +204,10 @@ def phases_around_zero(phase):
     """Normalize pulse phases from -0.5 to 0.5
     Examples
     --------
-    >>> phases_around_zero(0.6)
-    -0.4
-    >>> phases_around_zero(-0.9)
-    0.1
-    >>> phases_around_zero(3.9)
-    -0.1
-    >>> assert np.allclose(phases_from_zero_to_one([0.6, -0.4]), -0.4)
-    True
+    >>> assert np.isclose(phases_around_zero(0.6), -0.4)
+    >>> assert np.isclose(phases_around_zero(-0.9), 0.1)
+    >>> assert np.isclose(phases_around_zero(3.9), -0.1)
+    >>> assert np.allclose(phases_around_zero([0.6, -0.4]), -0.4)
     """
     ph = phase - np.floor(phase)
     while ph >= 0.5:
@@ -288,7 +280,9 @@ def create_template_from_profile_harm(
 
         phases_fine = np.arange(0.5 * dph_fine, 3, dph_fine)
 
-        templ_func_fine = interp1d(phases_fine, template_fine, kind="cubic", assume_sorted=True)
+        templ_func_fine = interp1d(
+            phases_fine, template_fine, kind="cubic", assume_sorted=True
+        )
 
         additional_phase = (
             np.argmax(template_fine[: final_nbin * oversample_factor])
@@ -311,10 +305,16 @@ def create_template_from_profile_harm(
     template = template[:final_nbin].real
 
     fig = plt.figure(figsize=(3.5, 2.65))
-    plt.plot(np.arange(0.5 / nbin, 1, 1 / nbin), profile, drawstyle="steps-mid", label="data")
+    plt.plot(
+        np.arange(0.5 / nbin, 1, 1 / nbin), profile, drawstyle="steps-mid", label="data"
+    )
     plt.plot(phas[:final_nbin], template, label="template values", ls="--", lw=2)
     plt.plot(
-        phas[:final_nbin], template_func(phas[:final_nbin]), label="template func", ls=":", lw=2
+        phas[:final_nbin],
+        template_func(phas[:final_nbin]),
+        label="template func",
+        ls=":",
+        lw=2,
     )
     plt.plot(
         phas[:final_nbin],
@@ -329,12 +329,17 @@ def create_template_from_profile_harm(
     return template * final_nbin / nbin, additional_phase
 
 
-def likelihood(phases, template_func, weights=None):
+def pletsch_clarke_likelihood(phases, template_func, weights=None):
     probs = template_func(phases)
     if weights is None:
         return np.log(probs).sum()
     else:
         return np.log(weights * probs + 1.0 - weights).sum()
+
+
+def rayleigh_as_likelihood(phases, *args, **kwargs):
+    prob = z_n_events(phases, 1)
+    return prob
 
 
 def get_template_func(template):
@@ -405,7 +410,9 @@ def simple_ell1_deorbit_numba(times, PB, A1, TASC, EPS1, EPS2, tolerance=1e-8):
             old_out = out_times[i]
             phase = omega * out_times[i]
             twophase = 2 * phase
-            out_times[i] = t - A1 * (np.sin(phase) + k1 * np.sin(twophase) + k2 * np.cos(twophase))
+            out_times[i] = t - A1 * (
+                np.sin(phase) + k1 * np.sin(twophase) + k2 * np.cos(twophase)
+            )
         out_times[i] += TASC
 
         # out_times[i] = times[i] - A1 * np.sin(omega * (out_times[i] - TASC))
@@ -457,7 +464,12 @@ def calculate_result_array_from_samples(sampler, labels):
 
 
 def plot_mcmc_results(
-    sampler=None, backend=None, flat_samples=None, labels=None, fname="results.jpg", **plot_kwargs
+    sampler=None,
+    backend=None,
+    flat_samples=None,
+    labels=None,
+    fname="results.jpg",
+    **plot_kwargs,
 ):
     assert np.any([a is not None for a in [sampler, backend, flat_samples]]), (
         "At least one between backend, sampler, or flat_samples, should be specified, in",
@@ -472,7 +484,9 @@ def plot_mcmc_results(
 
         flat_samples, _ = get_flat_samples(sampler)
 
-    fig = corner.corner(flat_samples, labels=labels, quantiles=[0.16, 0.5, 0.84], **plot_kwargs)
+    fig = corner.corner(
+        flat_samples, labels=labels, quantiles=[0.16, 0.5, 0.84], **plot_kwargs
+    )
     fig.savefig(fname, dpi=300)
 
 
@@ -485,7 +499,6 @@ def safe_run_sampler(
     corner_labels=None,
     n_autocorr=200,
 ):
-
     # https://emcee.readthedocs.io/en/stable/tutorials/monitor/?highlight=run_mcmc#saving-monitoring-progress
     # We'll track how the average autocorrelation time estimate changes
     starting_pars = np.asarray(starting_pars)
@@ -561,7 +574,10 @@ def safe_run_sampler(
 
     result_dict, flat_samples = calculate_result_array_from_samples(sampler, labels)
     plot_mcmc_results(
-        flat_samples=flat_samples, labels=labels, fname=outroot + "_corner.jpg", backend=backend
+        flat_samples=flat_samples,
+        labels=labels,
+        fname=outroot + "_corner.jpg",
+        backend=backend,
     )
 
     return result_dict
@@ -716,17 +732,21 @@ def fast_phase(times, frequency_derivatives):
     if len(frequency_derivatives) == 1:
         return _fast_phase(times, frequency_derivatives[0])
     elif len(frequency_derivatives) == 2:
-        return _fast_phase_fdot(times, frequency_derivatives[0], frequency_derivatives[1])
+        return _fast_phase_fdot(
+            times, frequency_derivatives[0], frequency_derivatives[1]
+        )
     elif len(frequency_derivatives) == 3:
         return _fast_phase_fddot(
-            times, frequency_derivatives[0], frequency_derivatives[1], frequency_derivatives[2]
+            times,
+            frequency_derivatives[0],
+            frequency_derivatives[1],
+            frequency_derivatives[2],
         )
 
     return _fast_phase_generic(times, np.array(frequency_derivatives))
 
 
 def _calculate_phases(times_from_pepoch, pars_dict, tolerance=1e-8):
-
     n_files = len(times_from_pepoch)
     list_phases_from_zero_to_one = []
     pb = pars_dict["PB"]
@@ -802,7 +822,10 @@ def _get_par_dict(
         "EPS1": [model.EPS1.value.astype(float), return_unc(model.EPS1)],
         "EPS2": [model.EPS2.value.astype(float), return_unc(model.EPS2)],
         "PBDOT": [model.PBDOT.value.astype(float), return_unc(model.PBDOT)],
-        "PEPOCH": [model.PEPOCH.value.astype(float), return_unc(model.PEPOCH)],  # I added Pepoch
+        "PEPOCH": [
+            model.PEPOCH.value.astype(float),
+            return_unc(model.PEPOCH),
+        ],  # I added Pepoch
     }
 
     count = 0
@@ -819,16 +842,13 @@ def _load_and_format_events(
     event_file, energy_range, pepoch, plotlc=True, plotfile="lightcurve.jpg"
 ):
     events = load_events(event_file)
+    events.apply_gtis(inplace=True)
+
     if plotlc:
         lc = events.to_lc(100)
 
         fig = plt.figure("LC", figsize=(3.5, 2.65))
-        plt.plot(_sec_to_mjd(lc.time, events.mjdref), lc.counts / lc.dt)
-        GTI = _sec_to_mjd(events.gti, events.mjdref)
-        for g0, g1 in zip(GTI[:, 1], GTI[:, 0]):
-            plt.axvspan(g0, g1, color="r", alpha=0.5)
-        plt.xlabel("MJD")
-        plt.ylabel("Count rate")
+        lc.plot(ax=plt.gca())
         plt.savefig(plotfile)
         plt.close(fig)
 
@@ -854,6 +874,7 @@ def optimize_solution(
     nharm=1,
     outroot="out",
     tolerance=1e-8,
+    likelihood_func=pletsch_clarke_likelihood,
 ):
     def logprior(pars):
         if np.any(np.isnan(pars)):
@@ -883,7 +904,7 @@ def optimize_solution(
 
         ll = 0
         for i in range(len(phases)):
-            ll += likelihood(phases[i], template_func[i])
+            ll += likelihood_func(phases[i], template_func[i])
 
         return ll + lp
 
@@ -966,7 +987,6 @@ def _flat_logprior(bound0, bound1):
 def assign_logpriors(
     parnames, parvalunc
 ):  # parvalunc is a dictionary with mean values ([0]) and uncertainties ([1])of the parameters.
-
     logps = []
     logging.info("Setting up priors")
     for par in parnames:
@@ -990,7 +1010,9 @@ def assign_logpriors(
             logps.append(_flat_logprior(-np.inf, np.inf))
         else:
             log_line += f"normal with mean {parvalunc[par][0]} and std {abs(parvalunc[par][1]):.2e}"
-            logps.append(norm(loc=parvalunc[par][0], scale=abs(parvalunc[par][1])).logpdf)
+            logps.append(
+                norm(loc=parvalunc[par][0], scale=abs(parvalunc[par][1])).logpdf
+            )
         logging.info(log_line)
 
     return logps
@@ -1001,7 +1023,6 @@ def order_of_magnitude(value):
 
 
 def get_factors(parnames, model, observation_length):
-
     n_files = len(observation_length)
     zoom = []
     P = model[0].PB.value * 86400
@@ -1015,7 +1036,9 @@ def get_factors(parnames, model, observation_length):
         if matchobj:
             order = int(matchobj.group(1))
             file_n = int(matchobj.group(2))
-            zoom.append(order_of_magnitude(1 / observation_length[file_n] ** (order + 1)))
+            zoom.append(
+                order_of_magnitude(1 / observation_length[file_n] ** (order + 1))
+            )
         elif par == "A1":
             zoom.append(min(1, order_of_magnitude(1 / np.pi / 2 / F)))
         elif par == "PB":
@@ -1086,7 +1109,9 @@ def split_output_results(result_table, n_files, fit_parameters):
         for i in list(range(n_files))[::-1]:
             par_to_test = f"{par}_{i}"
 
-            cols = look_for_string_in_list_of_strings(common_table.colnames, par_to_test)
+            cols = look_for_string_in_list_of_strings(
+                common_table.colnames, par_to_test
+            )
             for colname in cols:
                 clean_colname = colname.replace(f"{par}_{i}", f"{par}")
 
@@ -1100,6 +1125,35 @@ def split_output_results(result_table, n_files, fit_parameters):
     return output_tables
 
 
+def safe_save(results, output_file, **write_kwargs):
+    """
+    Examples
+    --------
+    >>> results = Table({"a": [2]})
+    >>> results_2 = Table({"a": ["3"]})
+    >>> output_file = "blabla.csv"
+    >>> safe_save(results, output_file)
+    >>> safe_save(results, output_file)
+    >>> out = Table.read(output_file)
+    >>> len(out)
+    2
+    >>> os.unlink(output_file)
+    >>> os.unlink("old_" + output_file)
+    """
+    if os.path.exists(output_file):
+        old = Table.read(output_file)
+        old.write("old_" + output_file, overwrite=True)
+        try:
+            results = vstack([old, results])
+        except TableMergeError:
+            warnings.warn(
+                "Merging old and new results failed. Old results were saved in a separate file."
+            )
+
+    results.write(output_file, overwrite=True, **write_kwargs)
+    return
+
+
 def ell1fit(
     files,
     parfiles,
@@ -1110,6 +1164,7 @@ def ell1fit(
     fit_parameters=["F0"],
     minimize_first=False,
     general_outroot=None,
+    likelihood_func=pletsch_clarke_likelihood,
 ):
     n_files = len(files)
     assert len(parfiles) == len(
@@ -1123,13 +1178,19 @@ def ell1fit(
         pepoch.append(model[i].PEPOCH.value)
 
         if hasattr(model[i], "T0") or model[i].BINARY.value != "ELL1":
-            raise ValueError("This script wants an ELL1 model, with TASC, not T0, defined")
+            raise ValueError(
+                "This script wants an ELL1 model, with TASC, not T0, defined"
+            )
 
         model[i].change_binary_epoch(pepoch[i])
 
     nbin = max(16, nharm * 8)
 
     energy_str = _format_energy_string(energy_range)
+    likelihood_str = ""
+    if likelihood_func == rayleigh_as_likelihood:
+        likelihood_str = "_rayleigh"
+
     nharm_str = ""
     if nharm > 1:
         nharm_str = f"_N{nharm}"
@@ -1172,7 +1233,7 @@ def ell1fit(
     list_parameter_names = sorted(fit_parameters)
 
     for f in parameters:
-        if f.startswith("Phase"):
+        if f.startswith("Phase") and likelihood_func == pletsch_clarke_likelihood:
             parameter_names.append(f)
             continue
         for g in list_parameter_names:
@@ -1188,7 +1249,14 @@ def ell1fit(
         else:
             initial_outroot = "out"
 
-        outroot = initial_outroot + "_" + "_".join(list_parameter_names) + energy_str + nharm_str
+        outroot = (
+            initial_outroot
+            + "_"
+            + "_".join(list_parameter_names)
+            + energy_str
+            + nharm_str
+            + likelihood_str
+        )
         return outroot
 
     times_from_pepoch = [[] for _ in range(n_files)]
@@ -1197,7 +1265,10 @@ def ell1fit(
     for i in range(n_files):
         fname = files[i]
         times_from_pepoch[i], gtis = _load_and_format_events(
-            fname, energy_range, pepoch[i], plotfile=get_outroot(i) + f"_lightcurve_{i}.jpg"
+            fname,
+            energy_range,
+            pepoch[i],
+            plotfile=get_outroot(i) + f"_lightcurve_{i}.jpg",
         )
         expo[i] += np.sum(np.diff(gtis, axis=1))
 
@@ -1206,14 +1277,19 @@ def ell1fit(
     logprior_funcs = assign_logpriors(parameter_names, parameters_with_unc)
     factors = get_factors(parameter_names, model, observation_length)
 
-    profile = folded_profile(times_from_pepoch, parameters, nbin=nbin, tolerance=tolerance)
+    profile = folded_profile(
+        times_from_pepoch, parameters, nbin=nbin, tolerance=tolerance
+    )
 
     template_func = []
     pulsed_frac = []
 
     for i in range(n_files):
         template, additional_phase = create_template_from_profile_harm(
-            profile[i], nharm=nharm, final_nbin=200, imagefile=get_outroot(i) + "_template.jpg"
+            profile[i],
+            nharm=nharm,
+            final_nbin=200,
+            imagefile=get_outroot(i) + "_template.jpg",
         )
 
         template_func.append(get_template_func(template))
@@ -1247,6 +1323,7 @@ def ell1fit(
         nharm=nharm,
         outroot=[get_outroot(i) for i in range(n_files)] + [get_outroot(None)],
         tolerance=tolerance,
+        likelihood_func=likelihood_func,
     )
 
     for i in range(n_files):
@@ -1272,6 +1349,7 @@ def ell1fit(
 
     for i in range(n_files):
         results[f"pf_{i}"] = pulsed_frac[i]
+        results[f"Z11_{i}"] = z_n_binned_events(profile[i], nharm)
 
     for i in range(n_files):
         results[f"ctrate_{i}"] = times_from_pepoch[i].size / expo[i]
@@ -1286,12 +1364,7 @@ def ell1fit(
 
     output_file = get_outroot(None) + "_results.ecsv"
 
-    if os.path.exists(output_file):
-        old = Table.read(output_file)
-        old.write("old_" + output_file, overwrite=True)
-        results = vstack([old, results])
-
-    results.write(output_file, overwrite=True)
+    safe_save(results, output_file)
 
     list_result = split_output_results(results, n_files, list_parameter_names)
 
@@ -1308,7 +1381,9 @@ def main(args=None):
     """Main function called by the `ell1fit` script"""
     import argparse
 
-    description = "Fit an ELL1 model and frequency derivatives to an X-ray " "pulsar observation."
+    description = (
+        "Fit an ELL1 model and frequency derivatives to an X-ray " "pulsar observation."
+    )
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("files", help="List of files", nargs="+")
     parser.add_argument(
@@ -1323,7 +1398,9 @@ def main(args=None):
             "All other models will be ignored."
         ),
     )
-    parser.add_argument("-o", "--outroot", type=str, default=None, help="Root of output file names")
+    parser.add_argument(
+        "-o", "--outroot", type=str, default=None, help="Root of output file names"
+    )
     parser.add_argument(
         "-N",
         "--nharm",
@@ -1358,11 +1435,21 @@ def main(args=None):
         help="Comma-separated list of parameters to fit",
         default="F0,F1",
     )
+    parser.add_argument(
+        "--likelihood",
+        type=str,
+        help="Can be PC (Pletsch & Clarke, default) or Rayleigh",
+        default="PC",
+    )
     parser.add_argument("--minimize-first", action="store_true", default=False)
 
     args = parser.parse_args(args)
     files = args.files
     parfiles = args.parfile
+
+    like = pletsch_clarke_likelihood
+    if args.likelihood.lower() == "rayleigh":
+        like = rayleigh_as_likelihood
 
     ell1fit(
         files,
@@ -1374,4 +1461,5 @@ def main(args=None):
         fit_parameters=args.parameters.split(","),
         minimize_first=args.minimize_first,
         general_outroot=args.outroot,
+        likelihood_func=like,
     )

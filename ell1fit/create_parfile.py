@@ -40,10 +40,13 @@ def update_model(model, value_dict):
         value = mean * factor + initial
         err = max(neg, pos) * factor
         if par == "Phase":
-            new_model.TZRMJD.value = -value / new_model.F0.value / 86400 + PEPOCH
-            new_model.TZRMJD.uncertainty_value = err / new_model.F0.value / 86400
-            new_model.TZRMJD.frozen = False
-            # new_model.TZRMJD.value =  PEPOCH
+            try:
+                new_model.TZRMJD.value = -value / new_model.F0.value / 86400 + PEPOCH
+                new_model.TZRMJD.uncertainty_value = err / new_model.F0.value / 86400
+                new_model.TZRMJD.frozen = False
+                # new_model.TZRMJD.value =  PEPOCH
+            except ValueError:
+                pass
             continue
         if par == "PB":
             value /= 86400
@@ -56,7 +59,12 @@ def update_model(model, value_dict):
         getattr(new_model, par).uncertainty_value = err
         getattr(new_model, par).frozen = False
 
-    logging.info(new_model.as_parfile())
+    try:
+        # This fails on windows
+        logging.info(new_model.as_parfile())
+    except Exception as e:
+        print(e)
+        pass
     return new_model
 
 
