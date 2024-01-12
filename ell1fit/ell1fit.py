@@ -42,7 +42,7 @@ params = {
     "grid.color": "grey",
     "grid.linewidth": 0.3,
     "grid.linestyle": ":",
-    "axes.grid.axis": "y",
+    "axes.grid.axis": "both",
     "axes.grid.which": "both",
     "axes.axisbelow": False,
     "axes.labelsize": 8,
