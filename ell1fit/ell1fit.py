@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from hendrics.io import load_events
 from stingray.pulse.pulsar import z_n_events, z_n_binned_events
+from stingray.stats import a_from_ssig
 from pint.models import get_model
 
 import matplotlib as mpl
@@ -65,6 +66,128 @@ mpl.rcParams.update(params)
 
 simple_freq_re = re.compile(r"^d?F([0-9]+)")
 freq_re = re.compile(r"^d?F([0-9]+)_([0-9]+)$")
+
+
+# def pf_weight_versus_energy(times, energies, parameters, nbin=32, nharm=1, tolerance=1e-8):
+#     n_files = len(times)
+#     phases = _calculate_phases(times, parameters, tolerance=tolerance)
+
+#     weights = []
+#     for i in range(n_files):
+#         local_phases = phases[i]
+#         local_energies = energies[i]
+#         energy_edges = [local_energies.min()]
+#         amps = []
+
+#         est_n_bins = local_phases.size // 1000
+#         if est_n_bins < 10:
+#             est_n_bins = 10
+#         if est_n_bins > 15:
+#             est_n_bins = 15
+
+#         for e_i in range(est_n_bins):
+#             emin = np.percentile(local_energies, e_i * 100 / est_n_bins)
+#             emax = np.percentile(local_energies, (e_i + 1) * 100 / est_n_bins)
+#             filt_phases = local_phases[(local_energies >= emin) & (local_energies < emax)]
+
+#             prof = np.histogram(filt_phases, bins=np.linspace(0, 1, nbin + 1))[0]
+#             z_n = z_n_binned_events(prof, nharm)
+#             amp = a_from_ssig(z_n, ncounts=filt_phases.size)
+#             energy_edges.append(emin)
+#             amps.append(amp)
+#             energy_edges.append(emax)
+#             amps.append(amp)
+
+#         energy_edges = np.array(energy_edges)
+#         amp = np.array(amps)
+
+#         energy_points = (energy_edges[:-1] + energy_edges[1:]) / 2
+#         print(energy_edges, energy_points)
+#         func = interp1d(
+#             np.concatenate([energy_edges[:1], energy_points, energy_edges[-1:]]),
+#             np.concatenate([[0], amps, [0]]),
+#             kind="linear",
+#             assume_sorted=True,
+#         )
+#         fine_energy_range = np.linspace(energy_edges[0], energy_edges[-1], 1000)
+#         fine_amps = func(fine_energy_range)
+#         # normalize to an integral of 1.
+#         d_energy = fine_energy_range[1] - fine_energy_range[0]
+#         # fine_amps /= np.sum(fine_amps) * d_energy
+
+#         plt.semilogx(fine_energy_range, fine_amps, label=f"File {i}")
+#         plt.show()
+#         # No, actually, normalize so that the weight is 1 when the pf is high
+#         fine_amps /= np.max(fine_amps)
+#         weight_func = interp1d(
+#             fine_energy_range,
+#             fine_amps,
+#             kind="linear",
+#             assume_sorted=True,
+#         )
+#         weights.append(weight_func(local_energies))
+
+#     return weights
+
+
+def pf_weight_versus_energy(times, energies, parameters, nbin=32, nharm=1, tolerance=1e-8):
+    n_files = len(times)
+    phases = _calculate_phases(times, parameters, tolerance=tolerance)
+
+    weights = []
+    for i in range(n_files):
+        local_phases = phases[i]
+        local_energies = energies[i]
+        amps = []
+        print(local_energies)
+
+        est_n_bins = local_phases.size // 1000
+        if est_n_bins < 15:
+            est_n_bins = 15
+        if est_n_bins > 25:
+            est_n_bins = 25
+
+        logging.info(
+            f"Estimating the pulsed fraction in {est_n_bins} energy bins using {nharm} harmonics"
+        )
+
+        e_percentiles = np.percentile(local_energies, np.linspace(0, 100, est_n_bins + 1))
+        energy_edges = np.array(list(zip(e_percentiles[:-4], e_percentiles[4:])))
+        for emin, emax in energy_edges:
+            filt_phases = local_phases[(local_energies >= emin) & (local_energies < emax)]
+
+            prof = np.histogram(filt_phases, bins=np.linspace(0, 1, nbin + 1))[0]
+            z_n = z_n_binned_events(prof, nharm)
+            amp = a_from_ssig(z_n, ncounts=filt_phases.size)
+            amps.append(amp)
+
+        amp = np.array(amps)
+        energy_points = (energy_edges[:, 1] + energy_edges[:, 0]) / 2
+        amp = np.concatenate([[0], amp, [0]])
+        energy_points = np.concatenate([[energy_edges[0, 0]], energy_points, [energy_edges[-1, 1]]])
+
+        func = interp1d(energy_points, amp, kind="linear", assume_sorted=True)
+
+        fine_energy_range = np.linspace(energy_points[0], energy_points[-1], 1000)
+        fine_amps = func(fine_energy_range)
+        # normalize to an integral of 1.
+        # d_energy = fine_energy_range[1] - fine_energy_range[0]
+        # fine_amps /= np.sum(fine_amps) * d_energy
+        plt.figure(f"File {i}")
+        plt.scatter(energy_points, amp)
+        plt.semilogx(fine_energy_range, fine_amps, label=f"File {i}")
+        # plt.show()
+        # No, actually, normalize so that the weight is 1 when the pf is high
+        fine_amps /= np.max(fine_amps)
+        weight_func = interp1d(
+            fine_energy_range,
+            fine_amps,
+            kind="linear",
+            assume_sorted=True,
+        )
+        weights.append(weight_func(local_energies))
+
+    return weights
 
 
 def splitext_improved(path):
@@ -280,9 +403,7 @@ def create_template_from_profile_harm(
 
         phases_fine = np.arange(0.5 * dph_fine, 3, dph_fine)
 
-        templ_func_fine = interp1d(
-            phases_fine, template_fine, kind="cubic", assume_sorted=True
-        )
+        templ_func_fine = interp1d(phases_fine, template_fine, kind="cubic", assume_sorted=True)
 
         additional_phase = (
             np.argmax(template_fine[: final_nbin * oversample_factor])
@@ -305,9 +426,7 @@ def create_template_from_profile_harm(
     template = template[:final_nbin].real
 
     fig = plt.figure(figsize=(3.5, 2.65))
-    plt.plot(
-        np.arange(0.5 / nbin, 1, 1 / nbin), profile, drawstyle="steps-mid", label="data"
-    )
+    plt.plot(np.arange(0.5 / nbin, 1, 1 / nbin), profile, drawstyle="steps-mid", label="data")
     plt.plot(phas[:final_nbin], template, label="template values", ls="--", lw=2)
     plt.plot(
         phas[:final_nbin],
@@ -329,12 +448,28 @@ def create_template_from_profile_harm(
     return template * final_nbin / nbin, additional_phase
 
 
+@njit()
+def _pc_like_weight(probs, weights):
+    like = 0.0
+    for i in range(probs.size):
+        like += np.log(weights[i] * probs[i] + (1 - weights[i]))
+    return like
+
+
+@njit()
+def _pc_like(probs):
+    like = 0.0
+    for i in range(probs.size):
+        like += np.log(probs[i])
+    return like
+
+
 def pletsch_clarke_likelihood(phases, template_func, weights=None):
     probs = template_func(phases)
     if weights is None:
-        return np.log(probs).sum()
+        return _pc_like(probs)
     else:
-        return np.log(weights * probs + 1.0 - weights).sum()
+        return _pc_like_weight(probs, weights)
 
 
 def rayleigh_as_likelihood(phases, *args, **kwargs):
@@ -410,9 +545,7 @@ def simple_ell1_deorbit_numba(times, PB, A1, TASC, EPS1, EPS2, tolerance=1e-8):
             old_out = out_times[i]
             phase = omega * out_times[i]
             twophase = 2 * phase
-            out_times[i] = t - A1 * (
-                np.sin(phase) + k1 * np.sin(twophase) + k2 * np.cos(twophase)
-            )
+            out_times[i] = t - A1 * (np.sin(phase) + k1 * np.sin(twophase) + k2 * np.cos(twophase))
         out_times[i] += TASC
 
         # out_times[i] = times[i] - A1 * np.sin(omega * (out_times[i] - TASC))
@@ -484,9 +617,7 @@ def plot_mcmc_results(
 
         flat_samples, _ = get_flat_samples(sampler)
 
-    fig = corner.corner(
-        flat_samples, labels=labels, quantiles=[0.16, 0.5, 0.84], **plot_kwargs
-    )
+    fig = corner.corner(flat_samples, labels=labels, quantiles=[0.16, 0.5, 0.84], **plot_kwargs)
     fig.savefig(fname, dpi=300)
 
 
@@ -732,9 +863,7 @@ def fast_phase(times, frequency_derivatives):
     if len(frequency_derivatives) == 1:
         return _fast_phase(times, frequency_derivatives[0])
     elif len(frequency_derivatives) == 2:
-        return _fast_phase_fdot(
-            times, frequency_derivatives[0], frequency_derivatives[1]
-        )
+        return _fast_phase_fdot(times, frequency_derivatives[0], frequency_derivatives[1])
     elif len(frequency_derivatives) == 3:
         return _fast_phase_fddot(
             times,
@@ -797,12 +926,19 @@ def _calculate_phases(times_from_pepoch, pars_dict, tolerance=1e-8):
     return list_phases_from_zero_to_one
 
 
-def folded_profile(times, parameters, nbin=16, tolerance=1e-8):
+def folded_profile(times, parameters, weights=None, nbin=16, tolerance=1e-8):
     n_files = len(times)
     phases = _calculate_phases(times, parameters, tolerance=tolerance)
     profile = []
     for i in range(n_files):
-        profile.append(np.histogram(phases[i], bins=np.linspace(0, 1, nbin + 1))[0])
+        if weights is None:
+            profile.append(
+                np.histogram(phases[i], bins=np.linspace(0, 1, nbin + 1))[0],
+            )
+        else:
+            profile.append(
+                np.histogram(phases[i], bins=np.linspace(0, 1, nbin + 1), weights=weights[i])[0],
+            )
     return profile
 
 
@@ -839,7 +975,13 @@ def _get_par_dict(
 
 
 def _load_and_format_events(
-    event_file, energy_range, pepoch, plotlc=True, plotfile="lightcurve.jpg"
+    event_file,
+    energy_range,
+    pepoch,
+    plotlc=True,
+    plotfile="lightcurve.jpg",
+    return_energy=False,
+    use_pi=False,
 ):
     events = load_events(event_file)
     events.apply_gtis(inplace=True)
@@ -858,6 +1000,12 @@ def _load_and_format_events(
     pepoch_met = _mjd_to_sec(pepoch, mjdref)
     times_from_pepoch = (events.time - pepoch_met).astype(float)
     gtis_from_pepoch = (events.gti - pepoch_met).astype(float)
+    if not use_pi:
+        energy = events.energy
+    else:
+        energy = events.pi
+    if return_energy:
+        return times_from_pepoch, gtis_from_pepoch, energy
     return times_from_pepoch, gtis_from_pepoch
 
 
@@ -917,6 +1065,8 @@ def optimize_solution(
         fit_pars = res.x
     else:
         fit_pars = all_zeros
+
+    print("Initial parameters", fit_pars)
 
     pars_dict = copy.deepcopy(model_parameters)
 
@@ -1010,9 +1160,7 @@ def assign_logpriors(
             logps.append(_flat_logprior(-np.inf, np.inf))
         else:
             log_line += f"normal with mean {parvalunc[par][0]} and std {abs(parvalunc[par][1]):.2e}"
-            logps.append(
-                norm(loc=parvalunc[par][0], scale=abs(parvalunc[par][1])).logpdf
-            )
+            logps.append(norm(loc=parvalunc[par][0], scale=abs(parvalunc[par][1])).logpdf)
         logging.info(log_line)
 
     return logps
@@ -1036,9 +1184,7 @@ def get_factors(parnames, model, observation_length):
         if matchobj:
             order = int(matchobj.group(1))
             file_n = int(matchobj.group(2))
-            zoom.append(
-                order_of_magnitude(1 / observation_length[file_n] ** (order + 1))
-            )
+            zoom.append(order_of_magnitude(1 / observation_length[file_n] ** (order + 1)))
         elif par == "A1":
             zoom.append(min(1, order_of_magnitude(1 / np.pi / 2 / F)))
         elif par == "PB":
@@ -1109,9 +1255,7 @@ def split_output_results(result_table, n_files, fit_parameters):
         for i in list(range(n_files))[::-1]:
             par_to_test = f"{par}_{i}"
 
-            cols = look_for_string_in_list_of_strings(
-                common_table.colnames, par_to_test
-            )
+            cols = look_for_string_in_list_of_strings(common_table.colnames, par_to_test)
             for colname in cols:
                 clean_colname = colname.replace(f"{par}_{i}", f"{par}")
 
@@ -1165,6 +1309,7 @@ def ell1fit(
     minimize_first=False,
     general_outroot=None,
     likelihood_func=pletsch_clarke_likelihood,
+    use_weight=False,
 ):
     n_files = len(files)
     assert len(parfiles) == len(
@@ -1178,9 +1323,7 @@ def ell1fit(
         pepoch.append(model[i].PEPOCH.value)
 
         if hasattr(model[i], "T0") or model[i].BINARY.value != "ELL1":
-            raise ValueError(
-                "This script wants an ELL1 model, with TASC, not T0, defined"
-            )
+            raise ValueError("This script wants an ELL1 model, with TASC, not T0, defined")
 
         model[i].change_binary_epoch(pepoch[i])
 
@@ -1190,6 +1333,9 @@ def ell1fit(
     likelihood_str = ""
     if likelihood_func == rayleigh_as_likelihood:
         likelihood_str = "_rayleigh"
+    weight_str = ""
+    if use_weight:
+        weight_str = "_pf_weight"
 
     nharm_str = ""
     if nharm > 1:
@@ -1256,19 +1402,23 @@ def ell1fit(
             + energy_str
             + nharm_str
             + likelihood_str
+            + weight_str
         )
         return outroot
 
     times_from_pepoch = [[] for _ in range(n_files)]
     observation_length = [[] for _ in range(n_files)]
+    energies = [[] for _ in range(n_files)]
     expo = np.zeros(n_files)
     for i in range(n_files):
         fname = files[i]
-        times_from_pepoch[i], gtis = _load_and_format_events(
+        times_from_pepoch[i], gtis, energies[i] = _load_and_format_events(
             fname,
             energy_range,
             pepoch[i],
             plotfile=get_outroot(i) + f"_lightcurve_{i}.jpg",
+            return_energy=True,
+            use_pi=False,
         )
         expo[i] += np.sum(np.diff(gtis, axis=1))
 
@@ -1277,10 +1427,27 @@ def ell1fit(
     logprior_funcs = assign_logpriors(parameter_names, parameters_with_unc)
     factors = get_factors(parameter_names, model, observation_length)
 
-    profile = folded_profile(
-        times_from_pepoch, parameters, nbin=nbin, tolerance=tolerance
-    )
+    profile = folded_profile(times_from_pepoch, parameters, nbin=nbin, tolerance=tolerance)
 
+    if use_weight:
+        weights = pf_weight_versus_energy(
+            times_from_pepoch, energies, parameters, nbin=32, nharm=1, tolerance=1e-8
+        )
+
+        profile_weight = folded_profile(
+            times_from_pepoch, parameters, weights, nbin=nbin, tolerance=tolerance
+        )
+        for p, pw in zip(profile, profile_weight):
+            plt.figure()
+            plt.plot(np.concatenate((p, p)) / p.max())
+            plt.plot(np.concatenate((pw, pw)) / pw.max())
+
+    else:
+        profile_weight = profile
+
+    # plt.show()
+
+    # raise ValueError
     template_func = []
     pulsed_frac = []
 
@@ -1381,9 +1548,7 @@ def main(args=None):
     """Main function called by the `ell1fit` script"""
     import argparse
 
-    description = (
-        "Fit an ELL1 model and frequency derivatives to an X-ray " "pulsar observation."
-    )
+    description = "Fit an ELL1 model and frequency derivatives to an X-ray " "pulsar observation."
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("files", help="List of files", nargs="+")
     parser.add_argument(
@@ -1398,9 +1563,7 @@ def main(args=None):
             "All other models will be ignored."
         ),
     )
-    parser.add_argument(
-        "-o", "--outroot", type=str, default=None, help="Root of output file names"
-    )
+    parser.add_argument("-o", "--outroot", type=str, default=None, help="Root of output file names")
     parser.add_argument(
         "-N",
         "--nharm",
