@@ -69,68 +69,6 @@ simple_freq_re = re.compile(r"^d?F([0-9]+)")
 freq_re = re.compile(r"^d?F([0-9]+)_([0-9]+)$")
 
 
-# def pf_weight_versus_energy(times, energies, parameters, nbin=32, nharm=1, tolerance=1e-8):
-#     n_files = len(times)
-#     phases = _calculate_phases(times, parameters, tolerance=tolerance)
-
-#     weights = []
-#     for i in range(n_files):
-#         local_phases = phases[i]
-#         local_energies = energies[i]
-#         energy_edges = [local_energies.min()]
-#         amps = []
-
-#         est_n_bins = local_phases.size // 1000
-#         if est_n_bins < 10:
-#             est_n_bins = 10
-#         if est_n_bins > 15:
-#             est_n_bins = 15
-
-#         for e_i in range(est_n_bins):
-#             emin = np.percentile(local_energies, e_i * 100 / est_n_bins)
-#             emax = np.percentile(local_energies, (e_i + 1) * 100 / est_n_bins)
-#             filt_phases = local_phases[(local_energies >= emin) & (local_energies < emax)]
-
-#             prof = np.histogram(filt_phases, bins=np.linspace(0, 1, nbin + 1))[0]
-#             z_n = z_n_binned_events(prof, nharm)
-#             amp = a_from_ssig(z_n, ncounts=filt_phases.size)
-#             energy_edges.append(emin)
-#             amps.append(amp)
-#             energy_edges.append(emax)
-#             amps.append(amp)
-
-#         energy_edges = np.array(energy_edges)
-#         amp = np.array(amps)
-
-#         energy_points = (energy_edges[:-1] + energy_edges[1:]) / 2
-#         print(energy_edges, energy_points)
-#         func = interp1d(
-#             np.concatenate([energy_edges[:1], energy_points, energy_edges[-1:]]),
-#             np.concatenate([[0], amps, [0]]),
-#             kind="linear",
-#             assume_sorted=True,
-#         )
-#         fine_energy_range = np.linspace(energy_edges[0], energy_edges[-1], 1000)
-#         fine_amps = func(fine_energy_range)
-#         # normalize to an integral of 1.
-#         d_energy = fine_energy_range[1] - fine_energy_range[0]
-#         # fine_amps /= np.sum(fine_amps) * d_energy
-
-#         plt.semilogx(fine_energy_range, fine_amps, label=f"File {i}")
-#         plt.show()
-#         # No, actually, normalize so that the weight is 1 when the pf is high
-#         fine_amps /= np.max(fine_amps)
-#         weight_func = interp1d(
-#             fine_energy_range,
-#             fine_amps,
-#             kind="linear",
-#             assume_sorted=True,
-#         )
-#         weights.append(weight_func(local_energies))
-
-#     return weights
-
-
 def pf_weight_versus_energy(times, energies, parameters, nbin=32, nharm=1, tolerance=1e-8):
     n_files = len(times)
     phases = _calculate_phases(times, parameters, tolerance=tolerance)
@@ -847,21 +785,17 @@ def _calculate_phases(times_from_pepoch, pars_dict, tolerance=1e-8):
     n_files = len(times_from_pepoch)
     list_phases_from_zero_to_one = []
     pb = pars_dict["PB"]
-    pbdot = pars_dict["PBDOT"]
+    # NB: No PBDOT correction needed, we changed the binary model epoch at the start
+    # of the processing!
     for i in range(n_files):
         tasc = _mjd_to_sec(pars_dict["TASC"], pars_dict[f"PEPOCH_{i}"])
+        assert np.abs(tasc) < pb, "TASC is not within one orbital period of the pulsar"
 
-        dt = -tasc
-        d_orbits = dt / pb - pbdot * dt**2 / (2.0 * pb**2)
-        n_orbits = np.rint(d_orbits)
-        dt_integer_orbits = pb * n_orbits + pb * pbdot * n_orbits**2 / 2.0
-        closest_tasc = tasc + dt_integer_orbits
-        new_pb = pb + pbdot * dt_integer_orbits
         deorbit_times_from_pepoch = simple_ell1_deorbit_numba(
             times_from_pepoch[i],
-            new_pb,
+            pb,
             pars_dict["A1"],
-            closest_tasc,
+            tasc,
             pars_dict["EPS1"],
             pars_dict["EPS2"],
             tolerance=tolerance,
@@ -869,9 +803,9 @@ def _calculate_phases(times_from_pepoch, pars_dict, tolerance=1e-8):
 
         deorbited_pepoch = simple_ell1_deorbit_numba(
             np.array([0.0]),
-            new_pb,
+            pb,
             pars_dict["A1"],
-            closest_tasc,
+            tasc,
             pars_dict["EPS1"],
             pars_dict["EPS2"],
             tolerance=tolerance,
