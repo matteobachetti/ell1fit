@@ -136,8 +136,8 @@ def pf_weight_versus_energy(times, energies, parameters, nbin=32, nharm=1, toler
 
     weights = []
     for i in range(n_files):
-        local_phases = phases[i]
-        local_energies = energies[i]
+        local_phases = np.array(phases[i])
+        local_energies = np.array(energies[i])
         amps = []
         print(local_energies)
 
