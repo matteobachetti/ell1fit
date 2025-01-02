@@ -1604,8 +1604,18 @@ def main(args=None):
         help="Can be PC (Pletsch & Clarke, default) or Rayleigh",
         default="PC",
     )
-    parser.add_argument("--minimize-first", action="store_true", default=False)
-    parser.add_argument("--use-weight", action="store_true", default=False)
+    parser.add_argument(
+        "--minimize-first",
+        action="store_true",
+        default=False,
+        help="Minimize first, then MCMC (don't trust the solution in the par file)",
+    )
+    parser.add_argument(
+        "--use-weight",
+        action="store_true",
+        default=False,
+        help="Use pulse energy dependence of profile as weight",
+    )
 
     args = parser.parse_args(args)
     files = args.files
