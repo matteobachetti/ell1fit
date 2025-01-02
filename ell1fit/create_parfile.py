@@ -40,9 +40,23 @@ def update_model(model, value_dict):
         value = mean * factor + initial
         err = max(neg, pos) * factor
         if par == "Phase":
+            tzrmjd = -value / new_model.F0.value / 86400 + PEPOCH
+            tzrmjd_uncert = err / new_model.F0.value / 86400
+
+            if "TZRMJD" not in new_model:
+                from pint.models.absolute_phase import AbsPhase
+
+                absph = AbsPhase()
+                absph.TZRMJD.value = tzrmjd
+                absph.TZRMJD.frozen = False
+                absph.TZRMJD.uncertainty_value = tzrmjd_uncert
+                absph.TZRSITE.value = "@"
+                absph.TZRFRQ.value = 0.0
+                new_model.add_component(absph)
+
             try:
-                new_model.TZRMJD.value = -value / new_model.F0.value / 86400 + PEPOCH
-                new_model.TZRMJD.uncertainty_value = err / new_model.F0.value / 86400
+                new_model.TZRMJD.value = tzrmjd
+                new_model.TZRMJD.uncertainty_value = tzrmjd_uncert
                 new_model.TZRMJD.frozen = False
                 # new_model.TZRMJD.value =  PEPOCH
             except ValueError:
