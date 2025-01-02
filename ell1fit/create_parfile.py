@@ -1,7 +1,7 @@
 import copy
 from astropy.table import Table
 from pint.models import get_model
-from .ell1fit import splitext_improved
+from . import splitext_improved
 import logging
 
 
