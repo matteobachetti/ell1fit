@@ -1605,6 +1605,7 @@ def main(args=None):
         default="PC",
     )
     parser.add_argument("--minimize-first", action="store_true", default=False)
+    parser.add_argument("--use-weight", action="store_true", default=False)
 
     args = parser.parse_args(args)
     files = args.files
@@ -1625,4 +1626,5 @@ def main(args=None):
         minimize_first=args.minimize_first,
         general_outroot=args.outroot,
         likelihood_func=like,
+        use_weight=args.use_weight,
     )
