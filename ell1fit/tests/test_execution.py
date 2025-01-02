@@ -9,9 +9,7 @@ from ell1fit.create_parfile import main as main_ell1par
 curdir = os.path.abspath(os.path.dirname(__file__))
 datadir = os.path.join(curdir, "data")
 if sys.platform.startswith("win"):
-    pytest.skip(
-        "skipping tests that are known to fail on windows", allow_module_level=True
-    )
+    pytest.skip("skipping tests that are known to fail on windows", allow_module_level=True)
 
 
 class TestExecution:
@@ -39,20 +37,35 @@ class TestExecution:
         if likelihood == "Rayleigh":
             label += "_rayleigh"
 
-        outputs = sorted(
-            glob.glob(os.path.join(datadir, f"events[01]{label}_results.ecsv"))
-        )
-        for out in outputs:
-            assert os.path.exists(out)
+        for ev in self.event_files:
+            root = ev.replace(".nc", "")
+            ecsv_res = f"{root}{label}_results.ecsv"
+            ecsv_par = f"{root}{label}_results.par"
+            assert os.path.exists(ecsv_res)
+            assert os.path.exists(ecsv_par)
+            os.rename(ecsv_par, ecsv_par.replace(".par", "_e1fit.par"))
 
-        main_ell1par(f"{outputs[0]} -p {self.param_files[0]}".split())
-        main_ell1par(f"{outputs[1]} -p {self.param_files[1]}".split())
+        # If we want to reproduce them with ell1par... we can do that
+        from pint.models import get_model
 
-        out_param = sorted(
-            glob.glob(os.path.join(datadir, "events[01]_A1_F0_PB_TASC_results.par"))
-        )
-        for out in out_param:
-            assert os.path.exists(out)
+        for ev, par in zip(self.event_files, self.param_files):
+            root = ev.replace(".nc", "")
+            ecsv_res = f"{root}{label}_results.ecsv"
+            par_res = f"{root}{label}_results.par"
+            main_ell1par(f"{ecsv_res} -p {par}".split())
+            # NB: we renamed the one from ell1fit
+            assert os.path.exists(par_res)
+            model1 = get_model(par_res)
+            model2 = get_model(par_res.replace(".par", "_e1fit.par"))
+            # Compare the two models. They have to be identical (They are produced by the same function!)
+            comparison_table = model1.compare(model2, verbosity="min", format="text").split("\n")
+
+            for line in comparison_table:
+                if "parameter" in line.lower():
+                    continue
+                if "-----" in line:
+                    continue
+                raise AssertionError(f"Comparison failed: {line}")
 
     @classmethod
     def teardown_class(cls):

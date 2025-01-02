@@ -28,6 +28,7 @@ from scipy.stats import norm
 
 from numpy.fft import ifft, fft, fftfreq
 from . import version
+from .create_parfile import update_model
 
 params = {
     "font.size": 7,
@@ -1442,6 +1443,12 @@ def ell1fit(
         table.write(outfile, overwrite=True)
         logging.info(f"Writing {outfile}")
         logging.info(table)
+
+        outpar = get_outroot(i) + "_results.par"
+        new_model = update_model(model[i], table[-1])
+        logging.info(f"Writing model to {outpar}")
+        with open(outpar, "w") as fobj:
+            print(new_model.as_parfile(), file=fobj)
 
     return output_file
 
