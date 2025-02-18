@@ -1255,7 +1255,7 @@ def ell1fit(
 
     for i in range(n_files):
         count = 0
-        local_pars_uncs = _get_par_dict(model[i])
+        local_pars_uncs = _get_par_dict(model[i], ignore_uncertainties=ignore_uncertainties)
         while f"F{count}" in local_pars_uncs:
             parameters_with_unc[f"F{count}_{i}"] = [
                 local_pars_uncs[f"F{count}"][0],
