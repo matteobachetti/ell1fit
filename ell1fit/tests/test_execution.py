@@ -57,7 +57,8 @@ class TestExecution:
             assert os.path.exists(par_res)
             model1 = get_model(par_res)
             model2 = get_model(par_res.replace(".par", "_e1fit.par"))
-            # Compare the two models. They have to be identical (They are produced by the same function!)
+            # Compare the two models. They have to be identical
+            # (They are produced by the same function!)
             comparison_table = model1.compare(model2, verbosity="min", format="text").split("\n")
 
             for line in comparison_table:
