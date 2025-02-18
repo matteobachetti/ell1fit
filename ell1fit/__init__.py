@@ -17,6 +17,7 @@ def splitext_improved(path):
     """
     Examples
     --------
+    >>> import os
     >>> import numpy as np
     >>> np.all(splitext_improved("a.tar.gz") ==  ('a', '.tar.gz'))
     True
