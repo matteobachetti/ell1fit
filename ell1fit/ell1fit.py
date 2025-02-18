@@ -847,9 +847,10 @@ def folded_profile(times, parameters, weights=None, nbin=16, tolerance=1e-8):
 
 def _get_par_dict(
     model,
+    ignore_uncertainties=False,
 ):  # The dictionary contains lists [parameter mean, parameter uncertainty]
     def return_unc(param):
-        if param.uncertainty_value is None or param.uncertainty_value == 0:
+        if param.uncertainty_value is None or param.uncertainty_value == 0 or ignore_uncertainties:
             return np.nan
         return param.uncertainty_value.astype(float)
 
@@ -1213,6 +1214,7 @@ def ell1fit(
     general_outroot=None,
     likelihood_func=pletsch_clarke_likelihood,
     use_weight=False,
+    ignore_uncertainties=False,
 ):
     n_files = len(files)
     assert len(parfiles) == len(
@@ -1247,7 +1249,7 @@ def ell1fit(
     ref_model = copy.deepcopy(model[0])
     ref_model.change_binary_epoch(np.mean(pepoch))
 
-    parameters_with_unc = _get_par_dict(ref_model)
+    parameters_with_unc = _get_par_dict(ref_model, ignore_uncertainties=ignore_uncertainties)
 
     del parameters_with_unc["PEPOCH"]
 
@@ -1525,6 +1527,7 @@ def main(args=None):
         default=False,
         help="Use pulse energy dependence of profile as weight",
     )
+    parser.add_argument("--ignore-uncertainties", action="store_true", default=False)
 
     args = parser.parse_args(args)
     files = args.files
@@ -1546,4 +1549,5 @@ def main(args=None):
         general_outroot=args.outroot,
         likelihood_func=like,
         use_weight=args.use_weight,
+        ignore_uncertainties=args.ignore_uncertainties,
     )
