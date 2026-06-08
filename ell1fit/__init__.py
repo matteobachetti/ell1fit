@@ -19,22 +19,17 @@ def splitext_improved(path):
     --------
     >>> import os
     >>> import numpy as np
-    >>> np.all(splitext_improved("a.tar.gz") ==  ('a', '.tar.gz'))
-    True
-    >>> np.all(splitext_improved("a.tar") ==  ('a', '.tar'))
-    True
+    >>> assert np.all(splitext_improved("a.tar.gz") ==  ('a', '.tar.gz'))
+    >>> assert np.all(splitext_improved("a.tar") ==  ('a', '.tar'))
     >>> path_with_dirs = os.path.join("a.f", "a.tar")
     >>> path_without_ext = os.path.join("a.f", "a")
-    >>> np.all(splitext_improved(path_with_dirs) ==  (path_without_ext, '.tar'))
-    True
+    >>> assert np.all(splitext_improved(path_with_dirs) ==  (path_without_ext, '.tar'))
     >>> path_with_dirs = os.path.join("a.a.a.f", "a.tar.gz")
     >>> path_without_ext = os.path.join("a.a.a.f", "a")
-    >>> np.all(splitext_improved(path_with_dirs) ==  (path_without_ext, '.tar.gz'))
-    True
+    >>> assert np.all(splitext_improved(path_with_dirs) ==  (path_without_ext, '.tar.gz'))
     >>> path_with_dirs = os.path.join("a.a.a.f", "a.1.tar")
     >>> path_without_ext = os.path.join("a.a.a.f", "a.1")
-    >>> np.all(splitext_improved(path_with_dirs) ==  (path_without_ext, '.tar'))
-    True
+    >>> assert np.all(splitext_improved(path_with_dirs) ==  (path_without_ext, '.tar'))
     """
     import os
 

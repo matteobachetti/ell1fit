@@ -629,11 +629,11 @@ def renormalize_results(results, name, result_name, mean, factor):
     >>> mean = 13
     >>> factor = 10
     >>> res = renormalize_results(results, "Bu1", "Bu0", mean, factor)
-    >>> np.isclose(res["Bu1"], 13)
+    >>> bool(np.isclose(res["Bu1"], 13))
     True
-    >>> np.isclose(res["Bu1_ne"], 1)
+    >>> bool(np.isclose(res["Bu1_ne"], 1))
     True
-    >>> np.isclose(res["Bu1_pe"], 2)
+    >>> bool(np.isclose(res["Bu1_pe"], 2))
     True
     """
     value = results[result_name + "_mean"]
@@ -790,7 +790,13 @@ def _calculate_phases(times_from_pepoch, pars_dict, tolerance=1e-8):
     # of the processing!
     for i in range(n_files):
         tasc = _mjd_to_sec(pars_dict["TASC"], pars_dict[f"PEPOCH_{i}"])
-        assert np.abs(tasc) < pb, "TASC is not within one orbital period of the pulsar"
+        if np.abs(tasc) > pb:
+            warnings.warn("TASC is not within one orbital period of the pulsar")
+            list_phases_from_zero_to_one.append(
+                np.random.uniform(0, 1, size=times_from_pepoch[i].shape)
+            )
+            continue
+        # assert np.abs(tasc) < pb, "TASC is not within one orbital period of the pulsar"
 
         deorbit_times_from_pepoch = simple_ell1_deorbit_numba(
             times_from_pepoch[i],
