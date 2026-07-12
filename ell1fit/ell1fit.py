@@ -1388,6 +1388,11 @@ def ell1fit(
     except KeyError:
         raise ValueError("One or more parameters are missing from the parameter file")
 
+    outroots = [get_outroot(i) for i in range(n_files)]
+    if n_files == 1:
+        outroots += [get_outroot(i)]
+    else:
+        outroots += [get_outroot(None)]
     results = optimize_solution(
         times_from_pepoch,
         parameters,
@@ -1399,7 +1404,7 @@ def ell1fit(
         nsteps=nsteps,
         minimize_first=minimize_first,
         nharm=nharm,
-        outroot=[get_outroot(i) for i in range(n_files)] + [get_outroot(None)],
+        outroot=outroots,
         tolerance=tolerance,
         likelihood_func=likelihood_func,
     )
