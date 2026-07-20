@@ -831,7 +831,7 @@ def _calculate_phases(times_from_pepoch, pars_dict, tolerance=1e-8):
             - phase_pepoch
             + fast_phase(deorbit_times_from_pepoch.astype(float), freq_ders)
         )
-        list_phases_from_zero_to_one.append(phases_from_zero_to_one(phases))
+        list_phases_from_zero_to_one.append(phases_from_zero_to_one(phases.astype(float)))
     return list_phases_from_zero_to_one
 
 
