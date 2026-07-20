@@ -821,7 +821,7 @@ def _calculate_phases(times_from_pepoch, pars_dict, tolerance=1e-8):
         count = 0
         freq_ders = []
         while f"F{count}_{i}" in pars_dict:
-            freq_ders.append(pars_dict[f"F{count}_{i}"])
+            freq_ders.append(float(pars_dict[f"F{count}_{i}"]))
             count += 1
 
         phase_pepoch = fast_phase(deorbited_pepoch.astype(float), freq_ders)
