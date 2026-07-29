@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from ell1fit import splitext_improved
 from hendrics.io import load_events
-from stingray.pulse.pulsar import z_n_events, z_n_binned_events
+from stingray.pulse.pulsar import z_n_events, z_n_binned_events, z_n_gauss
 from stingray.stats import a_from_ssig
 from pint.models import get_model
 
@@ -97,8 +97,10 @@ def pf_weight_versus_energy(times, energies, parameters, nbin=32, nharm=1, toler
             filt_phases = local_phases[(local_energies >= emin) & (local_energies < emax)]
 
             prof = np.histogram(filt_phases, bins=np.linspace(0, 1, nbin + 1))[0]
+
             z_n = z_n_binned_events(prof, nharm)
             amp = a_from_ssig(z_n, ncounts=filt_phases.size)
+
             amps.append(amp)
 
         amp = np.array(amps)
@@ -116,9 +118,10 @@ def pf_weight_versus_energy(times, energies, parameters, nbin=32, nharm=1, toler
         plt.figure(f"File {i}")
         plt.scatter(energy_points, amp)
         plt.semilogx(fine_energy_range, fine_amps, label=f"File {i}")
+        plt.show()
         # plt.show()
         # No, actually, normalize so that the weight is 1 when the pf is high
-        fine_amps /= np.max(fine_amps)
+        # fine_amps /= np.max(fine_amps)
         weight_func = interp1d(
             fine_energy_range,
             fine_amps,
@@ -933,6 +936,7 @@ def optimize_solution(
     outroot="out",
     tolerance=1e-8,
     likelihood_func=pletsch_clarke_likelihood,
+    weights=None,
 ):
     def logprior(pars):
         if np.any(np.isnan(pars)):
@@ -962,7 +966,9 @@ def optimize_solution(
 
         ll = 0
         for i in range(len(phases)):
-            ll += likelihood_func(phases[i], template_func[i])
+            ll += likelihood_func(
+                phases[i], template_func[i], weights=weights[i] if weights is not None else None
+            )
 
         return ll + lp
 
@@ -1356,19 +1362,54 @@ def ell1fit(
     else:
         profile_weight = profile
 
-    # plt.show()
-
     # raise ValueError
     template_func = []
     pulsed_frac = []
 
     for i in range(n_files):
-        template, additional_phase = create_template_from_profile_harm(
+        template_raw, additional_phase_raw = create_template_from_profile_harm(
             profile[i],
             nharm=nharm,
             final_nbin=200,
-            imagefile=get_outroot(i) + "_template.jpg",
+            imagefile=get_outroot(i) + "_template_raw.jpg",
         )
+        if use_weight:
+            template, additional_phase = create_template_from_profile_harm(
+                profile_weight[i],
+                nharm=nharm,
+                final_nbin=200,
+                imagefile=get_outroot(i) + "_template.jpg",
+            )
+        else:
+            template = template_raw
+            additional_phase = additional_phase_raw
+
+        logging.info(f"File {files[i]}: ")
+        logging.info("  Profile:")
+        logging.info(f"  + phase = {additional_phase_raw:.4f}")
+
+        z2 = z_n_binned_events(profile[i], nharm)
+        logging.info(f"  + Z^2_{nharm} = {z2:.1f}")
+        logging.info(
+            f"  + pulsed fraction = {(template_raw.max() - template_raw.min()) / (template_raw.max() + template_raw.min()) * 100:.1f}%"
+        )
+        logging.info(
+            f"  + pulsed fraction from Z^2_{nharm} = {np.sqrt(2 * z2 / np.sum(profile[i])) * 100:.1f}%"
+        )
+
+        if use_weight:
+            logging.info("  Weighted profile:")
+            logging.info(f"  + phase = {additional_phase:.4f}")
+            est_std = np.std(np.diff(profile[i]))
+            est_std_weight = np.std(np.diff(profile_weight[i]))
+            poisson_std = np.sqrt(np.mean(profile[i]))
+            err = poisson_std * est_std_weight / est_std
+
+            weighted_z2 = z_n_gauss(profile_weight[i], err=err, n=nharm)
+            logging.info(f"  + Z^2_{nharm} = {weighted_z2:.1f}")
+            logging.info(
+                f"  + pulsed fraction (weighted) = {(template.max() - template.min()) / (template.max() + template.min()) * 100:.1f}%"
+            )
 
         template_func.append(get_template_func(template))
         mint = template.min()
@@ -1407,6 +1448,7 @@ def ell1fit(
         outroot=outroots,
         tolerance=tolerance,
         likelihood_func=likelihood_func,
+        weights=weights if use_weight else None,
     )
 
     for i in range(n_files):
