@@ -70,7 +70,9 @@ simple_freq_re = re.compile(r"^d?F([0-9]+)")
 freq_re = re.compile(r"^d?F([0-9]+)_([0-9]+)$")
 
 
-def pf_weight_versus_energy(times, energies, parameters, nbin=32, nharm=1, tolerance=1e-8):
+def pf_weight_versus_energy(
+    times, energies, parameters, nbin=32, nharm=1, tolerance=1e-8, plot_root_file_name=None
+):
     n_files = len(times)
     phases = _calculate_phases(times, parameters, tolerance=tolerance)
 
@@ -79,7 +81,8 @@ def pf_weight_versus_energy(times, energies, parameters, nbin=32, nharm=1, toler
         local_phases = np.array(phases[i])
         local_energies = np.array(energies[i])
         amps = []
-        limit_amps = []
+        limit_amps_50 = []
+        limit_amps_90 = []
 
         est_n_bins = local_phases.size // 1000
         if est_n_bins < 15:
@@ -92,7 +95,7 @@ def pf_weight_versus_energy(times, energies, parameters, nbin=32, nharm=1, toler
         )
 
         e_percentiles = np.percentile(local_energies, np.linspace(0, 100, est_n_bins + 1))
-        energy_edges = np.array(list(zip(e_percentiles[:-4], e_percentiles[4:])))
+        energy_edges = np.array(list(zip(e_percentiles[:-1], e_percentiles[1:])))
 
         for emin, emax in energy_edges:
             filt_phases = local_phases[(local_energies >= emin) & (local_energies < emax)]
@@ -103,35 +106,51 @@ def pf_weight_versus_energy(times, energies, parameters, nbin=32, nharm=1, toler
             amp = a_from_ssig(z_n, ncounts=filt_phases.size)
 
             det_lev_05 = z2_n_detection_level(n=nharm, epsilon=0.5)
+            det_lev_09 = z2_n_detection_level(n=nharm, epsilon=0.1)
 
             amps.append(amp)
-            limit_amps.append(a_from_ssig(det_lev_05, ncounts=filt_phases.size))
+            limit_amps_50.append(a_from_ssig(det_lev_05, ncounts=filt_phases.size))
+            limit_amps_90.append(a_from_ssig(det_lev_09, ncounts=filt_phases.size))
 
         amp = np.array(amps)
-        limit_amps = np.array(limit_amps)
-        energy_points = (energy_edges[:, 1] + energy_edges[:, 0]) / 2
-        amp = np.concatenate([[0], amp, [0]])
+        limit_amps_50 = np.array(limit_amps_50)
+        limit_amps_90 = np.array(limit_amps_90)
+        amp = np.concatenate([[0, amp[0]], amp, [0]])
 
-        limit_amps = np.concatenate([[0], limit_amps, [0]])
-
-        energy_points = np.concatenate([[energy_edges[0, 0]], energy_points, [energy_edges[-1, 1]]])
-
+        limit_amps_50 = np.concatenate([[0, limit_amps_50[0]], limit_amps_50, [0]])
+        limit_amps_90 = np.concatenate([[0, limit_amps_90[0]], limit_amps_90, [0]])
+        energy_points = np.concatenate(
+            [
+                [e_percentiles[0] - 1e-15],
+                e_percentiles,
+                [e_percentiles[-1] + 1e-15],
+            ]
+        )
         amp_corr = np.copy(amp)
         # Never give less credibility than the amplitude that would be detected
         # with 50% probability from noise!
-        amp_corr[amp < limit_amps] = limit_amps[amp < limit_amps]
+        amp_corr[amp < limit_amps_50] = limit_amps_50[amp < limit_amps_50]
 
         func = interp1d(energy_points, amp_corr, kind="linear", assume_sorted=True)
 
         fine_energy_range = np.linspace(energy_points[0], energy_points[-1], 1000)
         fine_amps = func(fine_energy_range)
-        # normalize to an integral of 1.
-        # d_energy = fine_energy_range[1] - fine_energy_range[0]
-        # fine_amps /= np.sum(fine_amps) * d_energy
-        plt.figure(f"File {i}")
-        plt.scatter(energy_points, amp)
-        plt.semilogx(fine_energy_range, fine_amps, label=f"File {i}")
-        plt.show()
+        fine_amps_50 = interp1d(energy_points, limit_amps_50, kind="linear", assume_sorted=True)(
+            fine_energy_range
+        )
+        fine_amps_90 = interp1d(energy_points, limit_amps_90, kind="linear", assume_sorted=True)(
+            fine_energy_range
+        )
+
+        if plot_root_file_name is not None:
+            plt.figure(f"{plot_root_file_name[i]}")
+            plt.scatter(energy_points, amp)
+            plt.semilogx(fine_energy_range, fine_amps)
+            plt.plot(fine_energy_range, fine_amps_50, color="red", label=f"50% detection limit")
+            plt.plot(fine_energy_range, fine_amps_90, color="grey", label=f"90% detection limit")
+            plt.legend()
+            plt.savefig(f"{plot_root_file_name[i]}.jpg")
+            plt.close()
         # plt.show()
         # No, actually, normalize so that the weight is 1 when the pf is high
         # fine_amps /= np.max(fine_amps)
@@ -1443,7 +1462,13 @@ def ell1fit(
 
     if use_weight:
         weights = pf_weight_versus_energy(
-            times_from_pepoch, energies, parameters, nbin=32, nharm=1, tolerance=1e-8
+            times_from_pepoch,
+            energies,
+            parameters,
+            nbin=32,
+            nharm=1,
+            tolerance=1e-8,
+            plot_root_file_name=[get_outroot(i) + "_pf_weight_spectrum" for i in range(n_files)],
         )
 
         profile_weight = folded_profile(
