@@ -1323,7 +1323,7 @@ def ell1fit(
 
         model[i].change_binary_epoch(pepoch[i])
 
-    nbin = max(16, nharm * 8)
+    nbin = max(32, nharm * 8)
 
     energy_str = _format_energy_string(energy_range)
     likelihood_str = ""
