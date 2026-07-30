@@ -1061,7 +1061,7 @@ def optimize_solution(
     else:
         fit_pars = all_zeros
 
-    logging.info("Initial parameters", fit_pars)
+    logging.info("Initial parameters: " + str(fit_pars))
 
     pars_dict = copy.deepcopy(model_parameters)
 
