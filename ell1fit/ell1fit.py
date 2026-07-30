@@ -1019,7 +1019,8 @@ def optimize_solution(
     def logprior(pars):
         if np.any(np.isnan(pars)):
             return -np.inf
-
+        if np.any(np.isinf(pars)):
+            return -np.inf
         logp = 0
         for parname, logp_func, initial, local_value, f in zip(
             fit_parameters, logprior_funcs, values, pars, factors
