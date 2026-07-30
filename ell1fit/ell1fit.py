@@ -10,7 +10,12 @@ import numpy as np
 from ell1fit import splitext_improved
 from hendrics.io import load_events
 from stingray.pulse.pulsar import z_n_events, z_n_binned_events, z_n_gauss
-from stingray.stats import a_from_ssig, z2_n_detection_level
+from stingray.stats import (
+    a_from_ssig,
+    z2_n_detection_level,
+    power_confidence_limits,
+    amplitude_upper_limit,
+)
 from pint.models import get_model
 
 import matplotlib as mpl
@@ -81,6 +86,7 @@ def pf_weight_versus_energy(
         local_phases = np.array(phases[i])
         local_energies = np.array(energies[i])
         amps = []
+        amp_errs = []
         limit_amps_50 = []
         limit_amps_90 = []
 
@@ -96,6 +102,7 @@ def pf_weight_versus_energy(
 
         e_percentiles = np.percentile(local_energies, np.linspace(0, 100, est_n_bins + 1))
         energy_edges = np.array(list(zip(e_percentiles[:-1], e_percentiles[1:])))
+        mid_energies = np.array([(e[0] + e[1]) / 2 for e in energy_edges])
 
         for emin, emax in energy_edges:
             filt_phases = local_phases[(local_energies >= emin) & (local_energies < emax)]
@@ -103,33 +110,49 @@ def pf_weight_versus_energy(
             prof = np.histogram(filt_phases, bins=np.linspace(0, 1, nbin + 1))[0]
 
             z_n = z_n_binned_events(prof, nharm)
-            amp = a_from_ssig(z_n, ncounts=filt_phases.size)
 
+            z_lims = power_confidence_limits(z_n, n=nharm, c=0.68, summed_flag=True)
             det_lev_05 = z2_n_detection_level(n=nharm, epsilon=0.5)
             det_lev_09 = z2_n_detection_level(n=nharm, epsilon=0.1)
 
+            amp = a_from_ssig(z_n, ncounts=filt_phases.size)
+            a_low = a_from_ssig(z_lims[0], ncounts=filt_phases.size)
+            a_high = a_from_ssig(z_lims[1], ncounts=filt_phases.size)
+            if a_low > amp or a_high / 2 > amp:
+                a_low = 0
+
             amps.append(amp)
+            amp_errs.append((amp - a_low, a_high - amp))
             limit_amps_50.append(a_from_ssig(det_lev_05, ncounts=filt_phases.size))
             limit_amps_90.append(a_from_ssig(det_lev_09, ncounts=filt_phases.size))
 
         amp = np.array(amps)
+        amp_corr = np.copy(amp)
+        amp_errs = np.array(amp_errs)
+
+        amp_errs = [np.array(amp_errs)[:, 0], np.array(amp_errs)[:, 1]]
+
         limit_amps_50 = np.array(limit_amps_50)
         limit_amps_90 = np.array(limit_amps_90)
-        amp = np.concatenate([[0, amp[0]], amp, [0]])
+        amp_corr = np.concatenate([[0, amp_corr[0]], amp_corr, [amp_corr[-1], 0]])
+        limit_amps_50 = np.concatenate(
+            [[0, limit_amps_50[0]], limit_amps_50, [limit_amps_50[-1], 0]]
+        )
+        limit_amps_90 = np.concatenate(
+            [[0, limit_amps_90[0]], limit_amps_90, [limit_amps_90[-1], 0]]
+        )
 
-        limit_amps_50 = np.concatenate([[0, limit_amps_50[0]], limit_amps_50, [0]])
-        limit_amps_90 = np.concatenate([[0, limit_amps_90[0]], limit_amps_90, [0]])
         energy_points = np.concatenate(
             [
-                [e_percentiles[0] - 1e-15],
-                e_percentiles,
-                [e_percentiles[-1] + 1e-15],
+                [e_percentiles[0] - 1e-15, e_percentiles[0]],
+                mid_energies,
+                [e_percentiles[-1], e_percentiles[-1] + 1e-15],
             ]
         )
-        amp_corr = np.copy(amp)
         # Never give less credibility than the amplitude that would be detected
         # with 50% probability from noise!
-        amp_corr[amp < limit_amps_50] = limit_amps_50[amp < limit_amps_50]
+        low_amp = amp_corr < limit_amps_50
+        amp_corr[low_amp] = limit_amps_50[low_amp]
 
         func = interp1d(energy_points, amp_corr, kind="linear", assume_sorted=True)
 
@@ -144,8 +167,14 @@ def pf_weight_versus_energy(
 
         if plot_root_file_name is not None:
             plt.figure(f"{plot_root_file_name[i]}")
-            plt.scatter(energy_points, amp)
-            plt.semilogx(fine_energy_range, fine_amps)
+            plt.errorbar(
+                mid_energies,
+                amp,
+                yerr=amp_errs,
+                xerr=[mid_energies - energy_edges[:, 0], energy_edges[:, 1] - mid_energies],
+                fmt="o",
+            )
+            plt.semilogx(fine_energy_range, fine_amps, color="black", label="Estimated weight")
             plt.plot(fine_energy_range, fine_amps_50, color="red", label=f"50% detection limit")
             plt.plot(fine_energy_range, fine_amps_90, color="grey", label=f"90% detection limit")
             plt.legend()
