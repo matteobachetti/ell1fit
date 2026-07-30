@@ -939,9 +939,10 @@ def folded_profile(times, parameters, weights=None, nbin=16, tolerance=1e-8):
 def _get_par_dict(
     model,
     ignore_uncertainties=False,
+    obs_length=1,
 ):  # The dictionary contains lists [parameter mean, parameter uncertainty]
     def return_unc(param):
-        if param.uncertainty_value is None or param.uncertainty_value == 0 or ignore_uncertainties:
+        if param.uncertainty_value is None or param.uncertainty_value == 0:
             return np.nan
         return param.uncertainty_value.astype(float)
 
@@ -966,6 +967,38 @@ def _get_par_dict(
             return_unc(getattr(model, f"F{count}")),
         ]
         count += 1
+
+    if ignore_uncertainties:
+        # Start from a clean slate
+        for par in parameters:
+            parameters[par][1] = np.nan
+
+    # Then, give sensible defaults for the uncertainties of some critical
+    # parameters that are not set
+    def check_uncertainty(par, default_uncertainty):
+        if np.isnan(parameters[par][1]) or ignore_uncertainties:
+            parameters[par][1] = default_uncertainty
+
+    check_uncertainty("PB", parameters["PB"][0] / 2)
+
+    Omega = 2 * np.pi / parameters["PB"][0]
+    X = parameters["A1"][0]
+    f = parameters["F0"][0]
+
+    parameters["F0"][1] = parameters["F0"][0]
+
+    count = 0
+
+    while hasattr(model, f"F{count}"):
+        obs_length_change = 10 / obs_length ** (count + 1)
+        max_orbital_change = X * Omega ** (count + 1) * f
+        logging.debug(
+            f"F{count}: max_orbital_change={max_orbital_change}, obs_length_change={obs_length_change}"
+        )
+        default_unc = 10 * max_orbital_change * f + obs_length_change
+        check_uncertainty(f"F{count}", default_unc)
+        count += 1
+
     return parameters
 
 
@@ -1096,13 +1129,14 @@ def optimize_solution(
 
         for par, initial, value, f in zip(fit_parameters, values, pars, factors):
             allpars[par] = value * f + initial
-
+        logging.debug(f"Local phases for parameters: {allpars}")
         return _calculate_phases(times_from_pepoch, allpars, tolerance=tolerance)
 
     def func_to_maximize(pars):
         lp = logprior(pars)
         if np.isinf(lp):
             return lp
+
         phases = local_phases(pars)
 
         ll = 0
@@ -1111,6 +1145,7 @@ def optimize_solution(
                 phases[i], template_func[i], weights=weights[i] if weights is not None else None
             )
 
+        logging.debug(f"pars: {pars}, func: {ll + lp}")
         return ll + lp
 
     def func_to_minimize(pars):
@@ -1183,7 +1218,12 @@ def optimize_solution(
 
 
 def _flat_logprior(bound0, bound1):
+    val = 1 / (bound1 - bound0)
+    if np.isinf(val) or np.isnan(val):
+        val = 0
+
     def func(x):
+
         if x < bound0 or x > bound1:
             return -np.inf
         return 0
@@ -1192,10 +1232,11 @@ def _flat_logprior(bound0, bound1):
 
 
 def assign_logpriors(
-    parnames, parvalunc
+    parnames, parvalunc, obs_length=1
 ):  # parvalunc is a dictionary with mean values ([0]) and uncertainties ([1])of the parameters.
     logps = []
     logging.info("Setting up priors")
+
     for par in parnames:
         log_line = f"{par}: "
         if par.startswith("EPS"):
@@ -1210,8 +1251,23 @@ def assign_logpriors(
             log_line += "uniform between -1 and 1"
             logps.append(_flat_logprior(-1, 1))
         elif np.isnan(parvalunc[par][1]) and par[:2] in ["F0", "PB"]:
-            log_line += "uniform between 0 and inf"
-            logps.append(_flat_logprior(0, np.inf))
+            log_line += "uniform between 1/2 and 2 times the mean value"
+            logps.append(_flat_logprior(parvalunc[par][0] / 2, parvalunc[par][0] * 2))
+        elif np.isnan(parvalunc[par][1]) and par == "A1":
+            log_line += "uniform between 0 and 2 times the mean value"
+            logps.append(_flat_logprior(0, parvalunc[par][0] * 2))
+        elif np.isnan(parvalunc[par][1]) and par == "TASC":
+            log_line += (
+                f"uniform between "
+                f"{parvalunc['TASC'][0] - parvalunc['PB'][0] / 86400/ 2} and "
+                f"{parvalunc['TASC'][0] + parvalunc['PB'][0] / 86400/ 2}"
+            )
+            logps.append(
+                _flat_logprior(
+                    parvalunc["TASC"][0] - parvalunc["PB"][0] / 86400 / 2,
+                    parvalunc["TASC"][0] + parvalunc["PB"][0] / 86400 / 2,
+                )
+            )
         elif np.isnan(parvalunc[par][1]):
             log_line += "uniform between -inf and inf"
             logps.append(_flat_logprior(-np.inf, np.inf))
@@ -1404,48 +1460,7 @@ def ell1fit(
     ref_model = copy.deepcopy(model[0])
     ref_model.change_binary_epoch(np.mean(pepoch))
 
-    parameters_with_unc = _get_par_dict(ref_model, ignore_uncertainties=ignore_uncertainties)
-
-    del parameters_with_unc["PEPOCH"]
-
-    for i in range(n_files):
-        count = 0
-        local_pars_uncs = _get_par_dict(model[i], ignore_uncertainties=ignore_uncertainties)
-        while f"F{count}" in local_pars_uncs:
-            parameters_with_unc[f"F{count}_{i}"] = [
-                local_pars_uncs[f"F{count}"][0],
-                local_pars_uncs[f"F{count}"][1],
-            ]
-            if f"F{count}" in parameters_with_unc:
-                del parameters_with_unc[f"F{count}"]
-            count += 1
-
-        parameters_with_unc[f"PEPOCH_{i}"] = [
-            local_pars_uncs["PEPOCH"][0],
-            local_pars_uncs["PEPOCH"][1],
-        ]
-        parameters_with_unc[f"Phase_{i}"] = [
-            parameters_with_unc["Phase"][0],
-            parameters_with_unc["Phase"][1],
-        ]
-        #  I initialized the phases because _calculate_phases calls parameters[f"Phase_{i}"]
-    del parameters_with_unc["Phase"]
-
-    parameters = {}
-    for f in parameters_with_unc:
-        parameters[f] = parameters_with_unc[f][0]
-
-    parameter_names = []
     list_parameter_names = sorted(fit_parameters)
-
-    for f in parameters:
-        if f.startswith("Phase") and likelihood_func == pletsch_clarke_likelihood:
-            parameter_names.append(f)
-            continue
-        for g in list_parameter_names:
-            # Startswith alone was confusing PBDOT for PB
-            if f == g or (f.startswith(g) and freq_re.match(f)):
-                parameter_names.append(f)
 
     def get_outroot(file_n=None):
         if file_n is not None:
@@ -1484,7 +1499,55 @@ def ell1fit(
 
         observation_length[i] = times_from_pepoch[i][-1] - times_from_pepoch[i][0]
 
-    logprior_funcs = assign_logpriors(parameter_names, parameters_with_unc)
+    parameters_with_unc = _get_par_dict(
+        ref_model, ignore_uncertainties=ignore_uncertainties, obs_length=np.min(observation_length)
+    )
+
+    del parameters_with_unc["PEPOCH"]
+
+    for i in range(n_files):
+        count = 0
+        local_pars_uncs = _get_par_dict(
+            model[i], ignore_uncertainties=ignore_uncertainties, obs_length=observation_length[i]
+        )
+        while f"F{count}" in local_pars_uncs:
+            parameters_with_unc[f"F{count}_{i}"] = [
+                local_pars_uncs[f"F{count}"][0],
+                local_pars_uncs[f"F{count}"][1],
+            ]
+            if f"F{count}" in parameters_with_unc:
+                del parameters_with_unc[f"F{count}"]
+            count += 1
+
+        parameters_with_unc[f"PEPOCH_{i}"] = [
+            local_pars_uncs["PEPOCH"][0],
+            local_pars_uncs["PEPOCH"][1],
+        ]
+        parameters_with_unc[f"Phase_{i}"] = [
+            parameters_with_unc["Phase"][0],
+            parameters_with_unc["Phase"][1],
+        ]
+        #  I initialized the phases because _calculate_phases calls parameters[f"Phase_{i}"]
+    del parameters_with_unc["Phase"]
+
+    parameters = {}
+    for f in parameters_with_unc:
+        parameters[f] = parameters_with_unc[f][0]
+
+    parameter_names = []
+
+    for f in parameters:
+        if f.startswith("Phase") and likelihood_func == pletsch_clarke_likelihood:
+            parameter_names.append(f)
+            continue
+        for g in list_parameter_names:
+            # Startswith alone was confusing PBDOT for PB
+            if f == g or (f.startswith(g) and freq_re.match(f)):
+                parameter_names.append(f)
+
+    logprior_funcs = assign_logpriors(
+        parameter_names, parameters_with_unc, obs_length=observation_length
+    )
     factors = get_factors(parameter_names, model, observation_length)
 
     profile = folded_profile(times_from_pepoch, parameters, nbin=nbin, tolerance=tolerance)
