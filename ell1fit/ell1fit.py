@@ -838,6 +838,26 @@ def _calculate_phases(times_from_pepoch, pars_dict, tolerance=1e-8):
     return list_phases_from_zero_to_one
 
 
+def estimate_weighted_profile_std(weights, nbin=16, ntrials=100):
+
+    logging.info(f"Estimating weighted profile std (ntrials={ntrials}, nbin={nbin})")
+
+    std = np.mean(
+        [
+            np.std(
+                np.histogram(
+                    np.random.uniform(0, 1, len(weights)),
+                    bins=np.linspace(0, 1, nbin + 1),
+                    weights=weights,
+                )[0]
+            )
+            for j in range(ntrials)
+        ]
+    )
+
+    return std
+
+
 def folded_profile(times, parameters, weights=None, nbin=16, tolerance=1e-8):
     n_files = len(times)
     phases = _calculate_phases(times, parameters, tolerance=tolerance)
@@ -920,6 +940,64 @@ def _load_and_format_events(
     if return_energy:
         return times_from_pepoch, gtis_from_pepoch, energy
     return times_from_pepoch, gtis_from_pepoch
+
+
+def trace_likelihood_over_parameter(
+    times_from_pepoch,
+    model_parameters,
+    fit_parameters,
+    values,
+    logprior_funcs,
+    factors,
+    template_func,
+    parameter_name,
+    parameter_values,
+    likelihood_func=pletsch_clarke_likelihood,
+):
+    """"""
+
+    def logprior(pars):
+        if np.any(np.isnan(pars)):
+            return -np.inf
+        if np.any(np.isinf(pars)):
+            return -np.inf
+
+        logp = 0
+        for parname, logp_func, initial, local_value, f in zip(
+            fit_parameters, logprior_funcs, values, pars, factors
+        ):
+            value = local_value * f + initial
+            logp += logp_func(value)
+        return logp
+
+    def local_phases(pars):
+        allpars = copy.deepcopy(model_parameters)
+
+        for par, initial, value, f in zip(fit_parameters, values, pars, factors):
+            allpars[par] = value * f + initial
+
+        return _calculate_phases(times_from_pepoch, allpars)
+
+    def func_to_maximize(pars):
+        lp = logprior(pars)
+        if np.isinf(lp):
+            return lp
+        phases = local_phases(pars)
+
+        ll = 0
+        for i in range(len(phases)):
+            ll += likelihood_func(phases[i], template_func[i])
+
+        return ll + lp
+
+    results = {}
+    for val in parameter_values:
+        idx = fit_parameters.index(parameter_name)
+        pars = [0] * len(values)
+        pars[idx] = val
+        results[val] = func_to_maximize(pars)
+
+    return results
 
 
 def optimize_solution(
@@ -1400,10 +1478,8 @@ def ell1fit(
         if use_weight:
             logging.info("  Weighted profile:")
             logging.info(f"  + phase = {additional_phase:.4f}")
-            est_std = np.std(np.diff(profile[i]))
-            est_std_weight = np.std(np.diff(profile_weight[i]))
-            poisson_std = np.sqrt(np.mean(profile[i]))
-            err = poisson_std * est_std_weight / est_std
+
+            err = estimate_weighted_profile_std(weights[i], nbin=nbin, ntrials=400)
 
             weighted_z2 = z_n_gauss(profile_weight[i], err=err, n=nharm)
             logging.info(f"  + Z^2_{nharm} = {weighted_z2:.1f}")
@@ -1434,6 +1510,36 @@ def ell1fit(
         outroots += [get_outroot(i)]
     else:
         outroots += [get_outroot(None)]
+
+    for parameter in ["Phase_0"]:
+        results_trace = trace_likelihood_over_parameter(
+            times_from_pepoch,
+            parameters,
+            parameter_names,
+            input_mean_fit_pars,
+            logprior_funcs,
+            factors,
+            template_func,
+            parameter_name=parameter,
+            parameter_values=np.linspace(
+                parameters[parameter] - 2 * factors[parameter_names.index(parameter)],
+                parameters[parameter] + 2 * factors[parameter_names.index(parameter)],
+                100,
+            ),
+            likelihood_func=likelihood_func,
+        )
+        plt.figure("trace_" + parameter)
+        plt.plot(list(results_trace.keys()), list(results_trace.values()))
+        plt.axvline(parameters[parameter], color="k", ls="--")
+        plt.xlabel(parameter)
+        plt.ylabel("log likelihood")
+        ll_values = np.array(
+            [ll for ll in list(results_trace.values()) if not np.isnan(ll) and not np.isinf(ll)]
+        )
+        min_ll = np.nanmin(ll_values)
+        max_ll = np.nanmax(ll_values)
+        logging.info(f"Delta log likelihood for {parameter}: {max_ll - min_ll:.2f}")
+
     results = optimize_solution(
         times_from_pepoch,
         parameters,
