@@ -79,7 +79,6 @@ def pf_weight_versus_energy(times, energies, parameters, nbin=32, nharm=1, toler
         local_phases = np.array(phases[i])
         local_energies = np.array(energies[i])
         amps = []
-        print(local_energies)
 
         est_n_bins = local_phases.size // 1000
         if est_n_bins < 15:
@@ -871,6 +870,7 @@ def folded_profile(times, parameters, weights=None, nbin=16, tolerance=1e-8):
             profile.append(
                 np.histogram(phases[i], bins=np.linspace(0, 1, nbin + 1), weights=weights[i])[0],
             )
+
     return profile
 
 
@@ -1061,7 +1061,7 @@ def optimize_solution(
     else:
         fit_pars = all_zeros
 
-    print("Initial parameters", fit_pars)
+    logging.info("Initial parameters", fit_pars)
 
     pars_dict = copy.deepcopy(model_parameters)
 
@@ -1191,6 +1191,8 @@ def get_factors(parnames, model, observation_length):
             zoom.append(order_of_magnitude(Pd))
         else:
             zoom.append(1.0)
+
+        logging.info(f"Zoom factor for {par}: {zoom}")
     return zoom
 
 
