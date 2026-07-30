@@ -10,7 +10,7 @@ import numpy as np
 from ell1fit import splitext_improved
 from hendrics.io import load_events
 from stingray.pulse.pulsar import z_n_events, z_n_binned_events, z_n_gauss
-from stingray.stats import a_from_ssig
+from stingray.stats import a_from_ssig, z2_n_detection_level
 from pint.models import get_model
 
 import matplotlib as mpl
@@ -79,6 +79,7 @@ def pf_weight_versus_energy(times, energies, parameters, nbin=32, nharm=1, toler
         local_phases = np.array(phases[i])
         local_energies = np.array(energies[i])
         amps = []
+        limit_amps = []
 
         est_n_bins = local_phases.size // 1000
         if est_n_bins < 15:
@@ -92,6 +93,7 @@ def pf_weight_versus_energy(times, energies, parameters, nbin=32, nharm=1, toler
 
         e_percentiles = np.percentile(local_energies, np.linspace(0, 100, est_n_bins + 1))
         energy_edges = np.array(list(zip(e_percentiles[:-4], e_percentiles[4:])))
+
         for emin, emax in energy_edges:
             filt_phases = local_phases[(local_energies >= emin) & (local_energies < emax)]
 
@@ -100,14 +102,26 @@ def pf_weight_versus_energy(times, energies, parameters, nbin=32, nharm=1, toler
             z_n = z_n_binned_events(prof, nharm)
             amp = a_from_ssig(z_n, ncounts=filt_phases.size)
 
+            det_lev_05 = z2_n_detection_level(n=nharm, epsilon=0.5)
+
             amps.append(amp)
+            limit_amps.append(a_from_ssig(det_lev_05, ncounts=filt_phases.size))
 
         amp = np.array(amps)
+        limit_amps = np.array(limit_amps)
         energy_points = (energy_edges[:, 1] + energy_edges[:, 0]) / 2
         amp = np.concatenate([[0], amp, [0]])
+
+        limit_amps = np.concatenate([[0], limit_amps, [0]])
+
         energy_points = np.concatenate([[energy_edges[0, 0]], energy_points, [energy_edges[-1, 1]]])
 
-        func = interp1d(energy_points, amp, kind="linear", assume_sorted=True)
+        amp_corr = np.copy(amp)
+        # Never give less credibility than the amplitude that would be detected
+        # with 50% probability from noise!
+        amp_corr[amp < limit_amps] = limit_amps[amp < limit_amps]
+
+        func = interp1d(energy_points, amp_corr, kind="linear", assume_sorted=True)
 
         fine_energy_range = np.linspace(energy_points[0], energy_points[-1], 1000)
         fine_amps = func(fine_energy_range)
