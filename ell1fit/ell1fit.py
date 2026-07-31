@@ -1078,7 +1078,7 @@ def _fast_phase(ts, mean_f):
 
 @njit(parallel=True)
 def _fast_phase_generic(times, frequency_derivatives):
-    """Compute absolute phase for an arbitrary number of frequency derivatives.
+    r"""Compute absolute phase for an arbitrary number of frequency derivatives.
 
     The phase polynomial is evaluated as
     :math:`\phi(t)=\sum_{k\ge0} F_k t^{k+1}/(k+1)!`.
@@ -1772,6 +1772,75 @@ def order_of_magnitude(value):
     return 10 ** int(np.log10(np.abs(value)) - 1)
 
 
+def estimate_uncertainties_from_model(model, parameter_names, observation_length):
+    r"""Estimate heuristic 1-sigma scales for selected fit parameters.
+
+    This helper derives approximate uncertainty magnitudes from the binary and
+    spin scales of the input model(s), not from covariance propagation or a
+    timing fit. It is intended to provide coarse parameter scales for
+    initialization/tuning.
+
+    Parameters
+    ----------
+    model : list
+        List of PINT timing models (one per file). The first model provides
+        orbital parameters ``PB``, ``PBDOT``, ``A1`` and the maximum ``F0``
+        across models is used in the estimates.
+    parameter_names : list of str
+        Parameter names to estimate. Supported entries are ``PB``, ``A1``,
+        ``TASC``, and frequency-derivative names matching ``F<n>_<i>``.
+    observation_length : array-like
+        Per-file observation durations in seconds. The maximum value is used.
+
+    Returns
+    -------
+    dict
+        Mapping ``{parameter_name: estimated_uncertainty}``.
+        Returned units follow parameter units used by this module:
+        ``PB`` (s), ``A1`` (light-seconds), ``TASC`` (s, relative to epoch),
+        and ``F<n>_<i>`` in the native derivative units.
+
+    Notes
+    -----
+    The implemented heuristics are:
+
+    - ``PB``: :math:`\sigma_{PB} \approx \frac{\sqrt{3}}{\pi}\frac{1}{2\pi F0}\frac{PB^2}{A1\,T_{obs}}`
+    - ``A1``: :math:`\sigma_{A1} \approx \frac{1}{2\pi F0}`
+    - ``TASC``: :math:`\sigma_{TASC} \approx \frac{1}{2\pi F0}\frac{PB}{2\pi A1}`
+    - ``F_k``: :math:`\sigma_{F_k} \approx \max(A1\,\Omega^{k+1}F0,\;10/T_{obs}^{k+1})`,
+      with :math:`\Omega=2\pi/PB`.
+    """
+    n_files = len(observation_length)
+
+    P = model[0].PB.value * 86400
+    X = model[0].A1.value
+    F = np.max([model[i].F0.value for i in range(n_files)])
+    TWOPI = 2 * np.pi
+    Omega = TWOPI / P
+
+    common_factor = 1 / TWOPI / F
+
+    obs_length = np.max(observation_length)
+
+    parameter_uncertainties = {}
+    for name in parameter_names:
+        if name == "PB":
+            parameter_uncertainties["PB"] = (
+                np.sqrt(3) / np.pi * common_factor * P**2 / X / obs_length
+            )
+        elif name == "A1":
+            parameter_uncertainties["A1"] = common_factor
+        elif name == "TASC":
+            parameter_uncertainties["TASC"] = common_factor * P / 86400 / TWOPI / X
+        elif simple_freq_re.match(name):
+            order = int(simple_freq_re.match(name).group(1))
+            parameter_uncertainties[name] = max(
+                X * Omega ** (order + 1) * F, 10 / obs_length ** (order + 1)
+            )
+
+    return parameter_uncertainties
+
+
 def get_factors(parnames, model, observation_length, parvalunc=None):
     """Compute parameter scaling factors for numerically stable local fitting.
 
@@ -1791,9 +1860,20 @@ def get_factors(parnames, model, observation_length, parvalunc=None):
     # perturbations while remaining conservative.
     unc_to_factor_scale = 1e6
 
+    common_parnames = [p for p in parnames if "_" not in p]
+    model_parnames = [p for p in parnames if p not in common_parnames]
+
+    approximate_uncertainties = estimate_uncertainties_from_model(
+        model, parnames, observation_length
+    )
+    print(parnames)
+    print(approximate_uncertainties)
     for par in parnames:
-        if parvalunc is not None and par in parvalunc:
-            unc = np.abs(parvalunc[par][1])
+        if (
+            parvalunc is not None
+            and par in parvalunc
+            and not np.isnan(unc := np.abs(parvalunc[par][1]))
+        ):
             if np.isfinite(unc) and unc > 0:
                 zoom_from_unc = order_of_magnitude(unc * unc_to_factor_scale)
                 zoom_from_unc = max(zoom_from_unc, 1e-12)
@@ -1802,26 +1882,25 @@ def get_factors(parnames, model, observation_length, parvalunc=None):
                     f"Zoom factor for {par} from uncertainty: {zoom_from_unc} "
                     f"(unc={unc}, local_jitter=1e-5)"
                 )
-                continue
-
-        matchobj = freq_re.match(par)
-        if matchobj:
-            order = int(matchobj.group(1))
-            file_n = int(matchobj.group(2))
-            zoom.append(order_of_magnitude(1 / observation_length[file_n] ** (order + 1)))
-        elif par == "A1":
-            zoom.append(min(1, order_of_magnitude(1 / np.pi / 2 / F)))
-        elif par == "PB":
-            dp = np.sqrt(3) / (2 * np.pi**2 * F) * P**2 / X / obs_length
-            zoom.append(min(1.0, order_of_magnitude(dp)))
-        elif par.startswith("EPS"):
-            zoom.append(0.001)
-        elif par == "PBDOT":
-            zoom.append(order_of_magnitude(Pd))
+        elif par in approximate_uncertainties:
+            zoom_from_model = order_of_magnitude(
+                approximate_uncertainties[par] * unc_to_factor_scale
+            )
+            zoom_from_model = max(zoom_from_model, 1e-12)
+            zoom.append(zoom_from_model)
+            logging.info(
+                f"Zoom factor for {par} from model: {zoom_from_model} "
+                f"(approx_unc={approximate_uncertainties[par]})"
+            )
         else:
-            zoom.append(1.0)
+            if par.startswith("EPS"):
+                zoom.append(0.001)
+            elif par == "PBDOT":
+                zoom.append(order_of_magnitude(Pd))
+            else:
+                zoom.append(1.0)
+            logging.info(f"Zoom factor for {par}: {zoom[-1]} (default)")
 
-        logging.info(f"Zoom factor for {par}: {zoom}")
     return zoom
 
 
