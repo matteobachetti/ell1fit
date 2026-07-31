@@ -1591,7 +1591,6 @@ def optimize_solution(
         outroot=outroot[-1],
         labels=["d" + par for par in fit_parameters],
         corner_labels=corner_labels,
-        n_autocorr=0,
     )
 
     count = 0
