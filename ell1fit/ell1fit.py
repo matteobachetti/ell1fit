@@ -1640,6 +1640,66 @@ def _flat_logprior(bound0, bound1):
     return func
 
 
+def _periodic_uniform_logprior(center, period, half_width=None):
+    """Create a periodic uniform log-prior around a center value.
+
+    Parameters
+    ----------
+    center : float
+        Reference value at the center of the periodic interval.
+    period : float
+        Period of the wrapped parameter.
+    half_width : float or None, optional
+        Half-width of accepted interval around ``center`` after wrapping.
+        Defaults to ``period / 2``.
+
+    Returns
+    -------
+    callable
+        Function returning ``0`` inside interval and ``-inf`` outside.
+    """
+    if half_width is None:
+        half_width = period / 2
+
+    def func(x):
+        dx = ((x - center + 0.5 * period) % period) - 0.5 * period
+        if np.abs(dx) > half_width:
+            return -np.inf
+        return 0
+
+    return func
+
+
+def _periodic_normal_logprior(center, sigma, period):
+    """Create a periodic Gaussian log-prior around a center value.
+
+    Parameters
+    ----------
+    center : float
+        Reference value.
+    sigma : float
+        Gaussian standard deviation in the same units as ``center``.
+    period : float
+        Period of the wrapped parameter.
+
+    Returns
+    -------
+    callable
+        Function returning the wrapped Gaussian log-pdf value.
+    """
+    sigma = np.abs(sigma)
+    if sigma == 0 or not np.isfinite(sigma):
+        return _periodic_uniform_logprior(center, period)
+
+    norm_const = -0.5 * np.log(2 * np.pi) - np.log(sigma)
+
+    def func(x):
+        dx = ((x - center + 0.5 * period) % period) - 0.5 * period
+        return norm_const - 0.5 * (dx / sigma) ** 2
+
+    return func
+
+
 def assign_logpriors(
     parnames, parvalunc, obs_length=1
 ):  # parvalunc is a dictionary with mean values ([0]) and uncertainties ([1])of the parameters.
@@ -1654,6 +1714,25 @@ def assign_logpriors(
 
     for par in parnames:
         log_line = f"{par}: "
+        if par == "TASC":
+            period = parvalunc["PB"][0] / 86400.0
+            tasc_center = parvalunc["TASC"][0]
+            tasc_unc = parvalunc["TASC"][1]
+
+            if np.isnan(tasc_unc):
+                log_line += (
+                    "periodic uniform prior over one orbital cycle " f"(period={period:.6g} d)"
+                )
+                logps.append(_periodic_uniform_logprior(tasc_center, period, half_width=period / 2))
+            else:
+                log_line += (
+                    "periodic normal prior with "
+                    f"mean {tasc_center} d, std {abs(tasc_unc):.2e} d, period {period:.6g} d"
+                )
+                logps.append(_periodic_normal_logprior(tasc_center, tasc_unc, period))
+            logging.info(log_line)
+            continue
+
         if par.startswith("EPS"):
             log_line += "uniform between -1 and 1"
             logps.append(_flat_logprior(-1, 1))
@@ -1671,18 +1750,6 @@ def assign_logpriors(
         elif np.isnan(parvalunc[par][1]) and par == "A1":
             log_line += "uniform between 0 and 2 times the mean value"
             logps.append(_flat_logprior(0, parvalunc[par][0] * 2))
-        elif np.isnan(parvalunc[par][1]) and par == "TASC":
-            log_line += (
-                f"uniform between "
-                f"{parvalunc['TASC'][0] - parvalunc['PB'][0] / 86400/ 2} and "
-                f"{parvalunc['TASC'][0] + parvalunc['PB'][0] / 86400/ 2}"
-            )
-            logps.append(
-                _flat_logprior(
-                    parvalunc["TASC"][0] - parvalunc["PB"][0] / 86400 / 2,
-                    parvalunc["TASC"][0] + parvalunc["PB"][0] / 86400 / 2,
-                )
-            )
         elif np.isnan(parvalunc[par][1]):
             log_line += "uniform between -inf and inf"
             logps.append(_flat_logprior(-np.inf, np.inf))
