@@ -1772,7 +1772,7 @@ def order_of_magnitude(value):
     return 10 ** int(np.log10(np.abs(value)) - 1)
 
 
-def get_factors(parnames, model, observation_length):
+def get_factors(parnames, model, observation_length, parvalunc=None):
     """Compute parameter scaling factors for numerically stable local fitting.
 
     The factors set the size of local parameter variations sampled by the
@@ -1786,7 +1786,24 @@ def get_factors(parnames, model, observation_length):
     F = np.max([model[i].F0.value for i in range(n_files)])
     obs_length = np.max(observation_length)
 
+    # Fixed local walker jitter in safe_run_sampler is 1e-5. Multiplying
+    # uncertainties by this value should give physically meaningful initial
+    # perturbations while remaining conservative.
+    unc_to_factor_scale = 1e6
+
     for par in parnames:
+        if parvalunc is not None and par in parvalunc:
+            unc = np.abs(parvalunc[par][1])
+            if np.isfinite(unc) and unc > 0:
+                zoom_from_unc = order_of_magnitude(unc * unc_to_factor_scale)
+                zoom_from_unc = max(zoom_from_unc, 1e-12)
+                zoom.append(zoom_from_unc)
+                logging.info(
+                    f"Zoom factor for {par} from uncertainty: {zoom_from_unc} "
+                    f"(unc={unc}, local_jitter=1e-5)"
+                )
+                continue
+
         matchobj = freq_re.match(par)
         if matchobj:
             order = int(matchobj.group(1))
@@ -2106,7 +2123,12 @@ def ell1fit(
     logprior_funcs = assign_logpriors(
         parameter_names, parameters_with_unc, obs_length=observation_length
     )
-    factors = get_factors(parameter_names, model, observation_length)
+    factors = get_factors(
+        parameter_names,
+        model,
+        observation_length,
+        parvalunc=parameters_with_unc,
+    )
 
     profile = folded_profile(times_from_pepoch, parameters, nbin=nbin, tolerance=tolerance)
 
