@@ -1,3 +1,19 @@
+"""Utilities and pipeline to fit ELL1 pulsar timing parameters from event data.
+
+This module implements an end-to-end workflow for X-ray pulsar timing in
+binary systems modeled with ELL1 orbital parameters.
+
+Main stages are:
+
+1. Load and pre-process event lists.
+2. Deorbit event times and compute pulse phases.
+3. Build pulse templates and evaluate profile likelihoods.
+4. Fit selected spin/orbital parameters with optional minimization.
+5. Explore the posterior with MCMC and save diagnostics/results.
+
+The high-level entry point is :func:`ell1fit`; :func:`main` exposes the CLI.
+"""
+
 import warnings
 
 import os
@@ -78,6 +94,38 @@ freq_re = re.compile(r"^d?F([0-9]+)_([0-9]+)$")
 def pf_weight_versus_energy(
     times, energies, parameters, nbin=32, nharm=1, tolerance=1e-8, plot_root_file_name=None
 ):
+    """Estimate per-event weights from pulse amplitude versus energy.
+
+    For each input observation, this function computes phases with the current
+    timing model, bins events in energy quantiles, and estimates pulsed
+    amplitude in each energy bin from the :math:`Z_n^2` statistic. The resulting
+    amplitude trend is interpolated and evaluated at each event energy to obtain
+    per-event weights.
+
+    Parameters
+    ----------
+    times : list of np.ndarray
+        Event times (seconds from each file PEPOCH), one array per file.
+    energies : list of np.ndarray
+        Event energies (or PI channels if provided upstream), one array per file.
+    parameters : dict
+        Timing/orbital parameter dictionary consumed by
+        :func:`_calculate_phases`.
+    nbin : int, optional
+        Number of phase bins used to evaluate :math:`Z_n^2` in each energy bin.
+    nharm : int, optional
+        Number of harmonics for :math:`Z_n^2` and pulsed amplitude estimation.
+    tolerance : float, optional
+        Convergence tolerance (seconds) for deorbiting iterations.
+    plot_root_file_name : list of str or None, optional
+        If provided, save one diagnostic amplitude-versus-energy plot per file
+        using these roots.
+
+    Returns
+    -------
+    list of np.ndarray
+        Event weights for each file, aligned with ``times`` and ``energies``.
+    """
     n_files = len(times)
     phases = _calculate_phases(times, parameters, tolerance=tolerance)
 
@@ -180,22 +228,51 @@ def pf_weight_versus_energy(
             plt.legend()
             plt.savefig(f"{plot_root_file_name[i]}.jpg")
             plt.close()
-        # plt.show()
-        # No, actually, normalize so that the weight is 1 when the pf is high
-        # fine_amps /= np.max(fine_amps)
+
+        # Normalize weights so that the maximum expected pulsed amplitude maps
+        # to weight=1. This keeps the weighted likelihood well behaved.
+        amp_norm = np.nanmax(fine_amps)
+        if not np.isfinite(amp_norm) or amp_norm <= 0:
+            warnings.warn(
+                "Could not normalize pulsed-fraction weights; falling back to uniform weights."
+            )
+            fine_amps = np.ones_like(fine_amps)
+        else:
+            fine_amps = fine_amps / amp_norm
+            fine_amps = np.clip(fine_amps, 0.0, 1.0)
+
         weight_func = interp1d(
             fine_energy_range,
             fine_amps,
             kind="linear",
             assume_sorted=True,
         )
-        weights.append(weight_func(local_energies))
+        local_weights = np.asarray(weight_func(local_energies), dtype=float)
+        local_weights = np.nan_to_num(local_weights, nan=0.0, posinf=1.0, neginf=0.0)
+        local_weights = np.clip(local_weights, 0.0, 1.0)
+        weights.append(local_weights)
 
     return weights
 
 
 @njit
 def interp_nb(x_vals, x, y):
+    """Numba-friendly wrapper around :func:`numpy.interp`.
+
+    Parameters
+    ----------
+    x_vals : np.ndarray
+        Coordinates where interpolation is evaluated.
+    x : np.ndarray
+        Monotonic sample coordinates.
+    y : np.ndarray
+        Sample values at ``x``.
+
+    Returns
+    -------
+    np.ndarray
+        Interpolated values at ``x_vals``.
+    """
     return np.interp(x_vals, x, y)
 
 
@@ -317,18 +394,33 @@ def create_template_from_profile_harm(
     nharm=None,
     final_nbin=None,
 ):
-    """
+    """Create a smooth pulse template from a folded profile.
+
+    For ``nharm=1`` this builds a sinusoidal template. For larger ``nharm``,
+    the profile is represented in Fourier space, truncated to the requested
+    harmonics, transformed back, and sampled at ``final_nbin``.
+
     Parameters
     ----------
-    phase: :class:`np.array`
-    profile: :class:`np.array`
-    imagefile: str
-    final_nbin: int
+    profile : np.ndarray
+        Input pulse profile over one phase cycle.
+    imagefile : str, optional
+        Path of the diagnostic plot written to disk.
+    nharm : int or None, optional
+        Number of harmonics retained in the template. If ``None``, a heuristic
+        value based on profile length is used.
+    final_nbin : int or None, optional
+        Number of bins in the returned template. Defaults to
+        ``profile.size`` when not provided.
+
     Returns
     -------
-    template: :class:`np.array`
-        The calculated template
-    additional_phase: float
+    template : np.ndarray
+        Normalized template sampled on ``final_nbin`` phase bins.
+    additional_phase : float
+        Phase offset required to align the template peak, wrapped to
+        ``[-0.5, 0.5)``.
+
     Examples
     --------
     >>> phase = np.arange(0.005, 1, 0.01)
@@ -421,6 +513,20 @@ def create_template_from_profile_harm(
 
 @njit()
 def _pc_like_weight(probs, weights):
+    """Compute weighted Pletsch-Clarke log-likelihood contribution.
+
+    Parameters
+    ----------
+    probs : np.ndarray
+        Template probabilities at event phases.
+    weights : np.ndarray
+        Per-event weights in ``[0, 1]``.
+
+    Returns
+    -------
+    float
+        Summed weighted log-likelihood.
+    """
     like = 0.0
     for i in range(probs.size):
         like += np.log(weights[i] * probs[i] + (1 - weights[i]))
@@ -429,6 +535,18 @@ def _pc_like_weight(probs, weights):
 
 @njit()
 def _pc_like(probs):
+    """Compute unweighted Pletsch-Clarke log-likelihood contribution.
+
+    Parameters
+    ----------
+    probs : np.ndarray
+        Template probabilities at event phases.
+
+    Returns
+    -------
+    float
+        Summed log-likelihood.
+    """
     like = 0.0
     for i in range(probs.size):
         like += np.log(probs[i])
@@ -436,14 +554,49 @@ def _pc_like(probs):
 
 
 def pletsch_clarke_likelihood(phases, template_func, weights=None):
+    """Evaluate the Pletsch-Clarke profile likelihood for event phases.
+
+    Parameters
+    ----------
+    phases : np.ndarray
+        Event phases.
+    template_func : callable
+        Pulse-template function returning probability density at each phase.
+    weights : np.ndarray or None, optional
+        Event weights in [0, 1]. If provided, uses weighted log-likelihood.
+
+    Returns
+    -------
+    float
+        Total log-likelihood.
+    """
     probs = template_func(phases)
+    probs = np.asarray(probs, dtype=float)
+    probs = np.nan_to_num(probs, nan=1e-12, posinf=1e12, neginf=1e-12)
+    probs = np.clip(probs, 1e-12, None)
+
     if weights is None:
         return _pc_like(probs)
     else:
-        return _pc_like_weight(probs, weights)
+        local_weights = np.asarray(weights, dtype=float)
+        local_weights = np.nan_to_num(local_weights, nan=0.0, posinf=1.0, neginf=0.0)
+        local_weights = np.clip(local_weights, 0.0, 1.0)
+        return _pc_like_weight(probs, local_weights)
 
 
 def rayleigh_as_likelihood(phases, *args, **kwargs):
+    """Use the Rayleigh test statistic as a surrogate likelihood.
+
+    Parameters
+    ----------
+    phases : np.ndarray
+        Event phases.
+
+    Returns
+    -------
+    float
+        :math:`Z_1^2` value for the input phases.
+    """
     prob = z_n_events(phases, 1)
     return prob
 
@@ -479,6 +632,16 @@ def get_template_func(template):
 
 @njit(fastmath=True, parallel=True)
 def simple_circular_deorbit_numba(times, PB, A1, TASC, tolerance=1e-8):
+    """Iteratively remove circular-orbit delays from event times.
+
+    Parameters are in ELL1-compatible units: ``times`` and ``TASC`` in seconds,
+    ``PB`` in seconds, and ``A1`` in light-seconds.
+
+    Returns
+    -------
+    np.ndarray
+        Deorbited event times.
+    """
     twopi = 2 * np.pi
     omega = twopi / PB
     out_times = np.empty_like(times)
@@ -496,6 +659,13 @@ def simple_circular_deorbit_numba(times, PB, A1, TASC, tolerance=1e-8):
 
 
 def add_circular_orbit_numba(times, PB, A1, TASC):
+    """Apply circular-orbit delays to times using a sinusoidal model.
+
+    Returns
+    -------
+    np.ndarray
+        Arrival times including circular orbital delays.
+    """
     twopi = 2 * np.pi
     omega = twopi / PB
     return times + A1 * np.sin(omega * (times - TASC))
@@ -503,6 +673,16 @@ def add_circular_orbit_numba(times, PB, A1, TASC):
 
 @njit(fastmath=True, parallel=True)
 def simple_ell1_deorbit_numba(times, PB, A1, TASC, EPS1, EPS2, tolerance=1e-8):
+    """Iteratively remove ELL1 orbital delays from event times.
+
+    This solves the implicit ELL1 delay equation by fixed-point iteration for
+    each event time.
+
+    Returns
+    -------
+    np.ndarray
+        Deorbited event times.
+    """
     twopi = 2 * np.pi
     omega = twopi / PB
     out_times = np.empty_like(times)
@@ -524,6 +704,13 @@ def simple_ell1_deorbit_numba(times, PB, A1, TASC, EPS1, EPS2, tolerance=1e-8):
 
 
 def add_ell1_orbit_numba(times, PB, A1, TASC, EPS1, EPS2):
+    """Apply ELL1 orbital delays to times (forward model).
+
+    Returns
+    -------
+    np.ndarray
+        Arrival times including ELL1 delays.
+    """
     twopi = 2 * np.pi
     omega = twopi / PB
     phase = omega * (times - TASC)
@@ -534,6 +721,18 @@ def add_ell1_orbit_numba(times, PB, A1, TASC, EPS1, EPS2):
 
 
 def get_flat_samples(sampler):
+    """Extract flattened post-burn-in MCMC samples from an emcee sampler.
+
+    Burn-in and thinning are derived from the maximum estimated autocorrelation
+    time.
+
+    Returns
+    -------
+    flat_samples : np.ndarray
+        Flattened chain with shape ``(nsamples, ndim)``.
+    maxtau : float
+        Maximum integrated autocorrelation time across parameters.
+    """
     tau = sampler.get_autocorr_time(quiet=True)
     maxtau = np.max(tau)
     burnin = int(2 * maxtau)
@@ -549,6 +748,22 @@ def get_flat_samples(sampler):
 
 
 def calculate_result_array_from_samples(sampler, labels):
+    """Summarize posterior samples into percentile-based result fields.
+
+    Parameters
+    ----------
+    sampler : emcee.EnsembleSampler or emcee.backends.HDFBackend
+        Sampler/backend exposing ``get_chain`` and ``get_log_prob`` APIs.
+    labels : list of str
+        Parameter labels used as prefixes in output keys.
+
+    Returns
+    -------
+    result_dict : dict
+        Dictionary of parameter percentiles and sampling metadata.
+    flat_samples : np.ndarray
+        Flattened posterior samples.
+    """
     flat_samples, maxtau = get_flat_samples(sampler)
     result_dict = {}
     ndim = flat_samples.shape[1]
@@ -575,6 +790,11 @@ def plot_mcmc_results(
     fname="results.jpg",
     **plot_kwargs,
 ):
+    """Create a corner plot from posterior samples.
+
+    Samples can be supplied directly, via a live sampler, or from an emcee HDF5
+    backend file.
+    """
     assert np.any([a is not None for a in [sampler, backend, flat_samples]]), (
         "At least one between backend, sampler, or flat_samples, should be specified, in",
         "increasing order of priority",
@@ -601,6 +821,18 @@ def safe_run_sampler(
     corner_labels=None,
     n_autocorr=200,
 ):
+    """Run emcee with checkpointing, restart support, and convergence checks.
+
+    The chain is stored in an HDF5 backend (``outroot + '.h5'``). If a previous
+    chain exists, sampling resumes from the stored state. Convergence is checked
+    from the integrated autocorrelation time.
+
+    Returns
+    -------
+    dict
+        Posterior summary dictionary from
+        :func:`calculate_result_array_from_samples`.
+    """
     # https://emcee.readthedocs.io/en/stable/tutorials/monitor/?highlight=run_mcmc#saving-monitoring-progress
     # We'll track how the average autocorrelation time estimate changes
     starting_pars = np.asarray(starting_pars)
@@ -712,6 +944,19 @@ def renormalize_results(results, name, result_name, mean, factor):
 
 
 def _plot_phaseogram(phases, times, ax0, ax1, norm="meansub_smooth"):
+    """Plot folded profile and phaseogram for one event list.
+
+    Parameters
+    ----------
+    phases : np.ndarray
+        Event phases in [0, 1).
+    times : np.ndarray
+        Event times in seconds from PEPOCH.
+    ax0, ax1 : matplotlib.axes.Axes
+        Axes for the 1D profile and 2D phaseogram.
+    norm : str, optional
+        Normalization mode passed to :func:`normalize_dyn_profile`.
+    """
     ph = np.concatenate((phases, phases + 1)).astype(float)
     tm = np.concatenate((times, times)).astype(float) / 86400
 
@@ -735,6 +980,17 @@ def _plot_phaseogram(phases, times, ax0, ax1, norm="meansub_smooth"):
 
 
 def _compare_phaseograms(phase1, phase2, times, fname):
+    """Compare two phase solutions by plotting side-by-side phaseograms.
+
+    Parameters
+    ----------
+    phase1, phase2 : np.ndarray
+        Candidate phase arrays to compare.
+    times : np.ndarray
+        Event times in seconds from PEPOCH.
+    fname : str
+        Output figure filename.
+    """
     fig = plt.figure(figsize=(7, 7))
     gs = plt.GridSpec(2, 2, height_ratios=(1, 3))
     ax00 = plt.subplot(gs[0, 0])
@@ -750,6 +1006,20 @@ def _compare_phaseograms(phase1, phase2, times, fname):
 
 
 def _list_zoom_factors(input_fit_par_labels, zoom):
+    """Build a list of per-parameter scaling factors from a zoom mapping.
+
+    Parameters
+    ----------
+    input_fit_par_labels : list of str
+        Parameters in fit order.
+    zoom : dict or None
+        Optional dictionary of explicit scale factors by parameter name.
+
+    Returns
+    -------
+    list of float
+        Scale factor per input label, defaulting to ``1``.
+    """
     factors = []
     for par in input_fit_par_labels:
         if zoom is not None and par in zoom:
@@ -760,15 +1030,30 @@ def _list_zoom_factors(input_fit_par_labels, zoom):
 
 
 def _mjd_to_sec(mjd, mjdref):
+    """Convert MJD timestamps to seconds from ``mjdref``.
+
+    Returns
+    -------
+    np.ndarray or float
+        Seconds from ``mjdref``.
+    """
     return ((mjd - mjdref) * 86400).astype(float)
 
 
 def _sec_to_mjd(met, mjdref):
+    """Convert seconds from ``mjdref`` back to MJD.
+
+    Returns
+    -------
+    np.ndarray or float
+        MJD values.
+    """
     return met / 86400 + mjdref
 
 
 @njit(parallel=True)
 def _fast_phase_fdot(ts, mean_f, mean_fdot):
+    """Compute absolute phase for a spin model with ``F0`` and ``F1``."""
     phases = ts * mean_f + 0.5 * ts * ts * mean_fdot
     return phases
 
@@ -778,6 +1063,7 @@ ONE_SIXTH = 1 / 6
 
 @njit(parallel=True)
 def _fast_phase_fddot(ts, mean_f, mean_fdot, mean_fddot):
+    """Compute absolute phase for a spin model with ``F0``, ``F1``, and ``F2``."""
     tssq = ts * ts
     phases = ts * mean_f + 0.5 * tssq * mean_fdot + ONE_SIXTH * tssq * ts * mean_fddot
     return phases
@@ -785,12 +1071,18 @@ def _fast_phase_fddot(ts, mean_f, mean_fdot, mean_fddot):
 
 @njit(parallel=True)
 def _fast_phase(ts, mean_f):
+    """Compute absolute phase for a constant-frequency model (``F0`` only)."""
     phases = ts * mean_f
     return phases
 
 
 @njit(parallel=True)
 def _fast_phase_generic(times, frequency_derivatives):
+    """Compute absolute phase for an arbitrary number of frequency derivatives.
+
+    The phase polynomial is evaluated as
+    :math:`\phi(t)=\sum_{k\ge0} F_k t^{k+1}/(k+1)!`.
+    """
     if len(frequency_derivatives) == 1:
         return times / frequency_derivatives[0]
 
@@ -847,20 +1139,41 @@ def fast_phase(times, frequency_derivatives):
 
 
 def _calculate_phases(times_from_pepoch, pars_dict, tolerance=1e-8):
+    """Compute pulse phases for each file given spin and ELL1 orbital parameters.
+
+    Steps per file are: convert ``TASC`` to seconds from that file PEPOCH,
+    deorbit event times with the ELL1 approximation, evaluate the spin phase
+    polynomial, and wrap phases to [0, 1).
+
+    Parameters
+    ----------
+    times_from_pepoch : list of np.ndarray
+        Event times in seconds from each file-specific PEPOCH.
+    pars_dict : dict
+        Parameter dictionary containing shared orbital terms (``PB``, ``A1``,
+        ``EPS1``, ``EPS2``, ``TASC``) and per-file spin/phase terms
+        (``F0_i``, ``F1_i``, ..., ``Phase_i``, ``PEPOCH_i``).
+    tolerance : float, optional
+        Deorbit iteration tolerance in seconds.
+
+    Returns
+    -------
+    list of np.ndarray
+        Wrapped phases per file.
+    """
     n_files = len(times_from_pepoch)
     list_phases_from_zero_to_one = []
     pb = pars_dict["PB"]
     # NB: No PBDOT correction needed, we changed the binary model epoch at the start
     # of the processing!
     for i in range(n_files):
-        tasc = _mjd_to_sec(pars_dict["TASC"], pars_dict[f"PEPOCH_{i}"])
-        if np.abs(tasc) > pb:
-            warnings.warn("TASC is not within one orbital period of the pulsar")
-            list_phases_from_zero_to_one.append(
-                np.random.uniform(0, 1, size=times_from_pepoch[i].shape)
-            )
-            continue
-        # assert np.abs(tasc) < pb, "TASC is not within one orbital period of the pulsar"
+        tasc_raw = _mjd_to_sec(pars_dict["TASC"], pars_dict[f"PEPOCH_{i}"])
+        # TASC is periodic with PB. Wrap to the principal interval to keep the
+        # likelihood continuous and avoid sampler artifacts from equivalent
+        # orbital-cycle solutions.
+        tasc = ((tasc_raw + 0.5 * pb) % pb) - 0.5 * pb
+        if np.abs(tasc_raw - tasc) > 1e-9:
+            warnings.warn("Wrapping TASC to the principal interval modulo PB")
 
         deorbit_times_from_pepoch = simple_ell1_deorbit_numba(
             times_from_pepoch[i],
@@ -900,6 +1213,16 @@ def _calculate_phases(times_from_pepoch, pars_dict, tolerance=1e-8):
 
 
 def estimate_weighted_profile_std(weights, nbin=16, ntrials=100):
+    """Estimate expected weighted-profile scatter under pure noise.
+
+    A Monte Carlo estimate is obtained by repeatedly histogramming uniform
+    phases with the provided event weights.
+
+    Returns
+    -------
+    float
+        Mean standard deviation of simulated weighted profile bins.
+    """
 
     logging.info(f"Estimating weighted profile std (ntrials={ntrials}, nbin={nbin})")
 
@@ -920,6 +1243,26 @@ def estimate_weighted_profile_std(weights, nbin=16, ntrials=100):
 
 
 def folded_profile(times, parameters, weights=None, nbin=16, tolerance=1e-8):
+    """Fold events into pulse profiles for one or multiple files.
+
+    Parameters
+    ----------
+    times : list of np.ndarray
+        Event times in seconds from PEPOCH, one array per file.
+    parameters : dict
+        Timing model parameters used to compute phases.
+    weights : list of np.ndarray or None, optional
+        Optional per-event weights for weighted folding.
+    nbin : int, optional
+        Number of phase bins.
+    tolerance : float, optional
+        Deorbiting tolerance in seconds.
+
+    Returns
+    -------
+    list of np.ndarray
+        Folded profile (counts or weighted counts) per file.
+    """
     n_files = len(times)
     phases = _calculate_phases(times, parameters, tolerance=tolerance)
     profile = []
@@ -941,6 +1284,12 @@ def _get_par_dict(
     ignore_uncertainties=False,
     obs_length=1,
 ):  # The dictionary contains lists [parameter mean, parameter uncertainty]
+    """Build a parameter/uncertainty dictionary from a PINT timing model.
+
+    The returned mapping stores ``[value, uncertainty]`` for each parameter and
+    fills missing uncertainties with heuristic defaults suitable for priors.
+    """
+
     def return_unc(param):
         if param.uncertainty_value is None or param.uncertainty_value == 0:
             return np.nan
@@ -1011,6 +1360,31 @@ def _load_and_format_events(
     return_energy=False,
     use_pi=False,
 ):
+    """Load an event file, apply filtering, and express times from PEPOCH.
+
+    Parameters
+    ----------
+    event_file : str
+        Input event file readable by ``hendrics.io.load_events``.
+    energy_range : tuple or None
+        ``(emin, emax)`` range applied through ``filter_energy_range``.
+    pepoch : float
+        Reference epoch (MJD) used to compute ``times_from_pepoch``.
+    plotlc : bool, optional
+        If True, save a quick-look light curve.
+    plotfile : str, optional
+        Output filename for the light-curve plot.
+    return_energy : bool, optional
+        If True, also return event energies (or PI if ``use_pi=True``).
+    use_pi : bool, optional
+        Use PI channels instead of energy values.
+
+    Returns
+    -------
+    tuple
+        ``(times_from_pepoch, gtis_from_pepoch)`` or
+        ``(times_from_pepoch, gtis_from_pepoch, energy)``.
+    """
     events = load_events(event_file)
     events.apply_gtis(inplace=True)
 
@@ -1049,7 +1423,18 @@ def trace_likelihood_over_parameter(
     parameter_values,
     likelihood_func=pletsch_clarke_likelihood,
 ):
-    """"""
+    """Trace the posterior (log-likelihood + log-prior) over one parameter.
+
+    All fitted parameters are represented in a normalized local coordinate
+    system used by :func:`optimize_solution`. This helper fixes every local
+    parameter at zero except ``parameter_name``, which is scanned over
+    ``parameter_values``.
+
+    Returns
+    -------
+    dict
+        Mapping from scanned local parameter value to posterior value.
+    """
 
     def logprior(pars):
         if np.any(np.isnan(pars)):
@@ -1111,6 +1496,24 @@ def optimize_solution(
     likelihood_func=pletsch_clarke_likelihood,
     weights=None,
 ):
+    """Optimize and sample pulsar timing parameters for multiple event files.
+
+    Workflow:
+    1. Build a posterior from priors + profile likelihood.
+    2. Optionally run deterministic minimization for a starting point.
+    3. Run MCMC with :func:`safe_run_sampler`.
+    4. Produce diagnostic phaseogram comparisons and return summary fields.
+
+    Parameters are handled in local coordinates: for each fitted parameter,
+    ``physical = local * factor + initial``.
+
+    Returns
+    -------
+    dict
+        Aggregated result dictionary containing posterior summaries, initial
+        values, scaling factors, and copied model metadata.
+    """
+
     def logprior(pars):
         if np.any(np.isnan(pars)):
             return -np.inf
@@ -1218,6 +1621,13 @@ def optimize_solution(
 
 
 def _flat_logprior(bound0, bound1):
+    """Create a uniform log-prior function between two bounds.
+
+    Returns
+    -------
+    callable
+        Function returning ``0`` inside bounds and ``-inf`` outside.
+    """
     val = 1 / (bound1 - bound0)
     if np.isinf(val) or np.isnan(val):
         val = 0
@@ -1234,6 +1644,12 @@ def _flat_logprior(bound0, bound1):
 def assign_logpriors(
     parnames, parvalunc, obs_length=1
 ):  # parvalunc is a dictionary with mean values ([0]) and uncertainties ([1])of the parameters.
+    """Assign per-parameter log-prior functions from values and uncertainties.
+
+    Priors are rule-based: bounded uniforms for orbital-shape/phase parameters,
+    broad uniforms when uncertainties are unavailable, and Gaussian priors when
+    uncertainties are provided.
+    """
     logps = []
     logging.info("Setting up priors")
 
@@ -1280,10 +1696,22 @@ def assign_logpriors(
 
 
 def order_of_magnitude(value):
+    """Return a scale factor one decade below ``abs(value)``.
+
+    Returns
+    -------
+    float
+        Approximate order-of-magnitude scale used for parameter normalization.
+    """
     return 10 ** int(np.log10(np.abs(value)) - 1)
 
 
 def get_factors(parnames, model, observation_length):
+    """Compute parameter scaling factors for numerically stable local fitting.
+
+    The factors set the size of local parameter variations sampled by the
+    optimizer/MCMC, based on spin/orbital sensitivity heuristics.
+    """
     n_files = len(observation_length)
     zoom = []
     P = model[0].PB.value * 86400
@@ -1315,6 +1743,14 @@ def get_factors(parnames, model, observation_length):
 
 
 def _format_energy_string(energy_range):
+    """Format an energy-range suffix used in output filenames.
+
+    Returns
+    -------
+    str
+        Empty string if no range is provided, otherwise
+        ``_<emin>-<emax>keV`` with open bounds represented by ``**``.
+    """
     if energy_range is None:
         return ""
     if energy_range[0] is None and energy_range[1] is None:
@@ -1326,6 +1762,13 @@ def _format_energy_string(energy_range):
 
 
 def look_for_string_in_list_of_strings(input_list, string):
+    """Return all strings in ``input_list`` containing ``string``.
+
+    Returns
+    -------
+    list of str
+        Matching entries in input order.
+    """
     output_list = []
     for value in input_list:
         if string in value:
@@ -1334,6 +1777,13 @@ def look_for_string_in_list_of_strings(input_list, string):
 
 
 def look_for_list_of_strings_in_string(input_list, string):
+    """Return the first candidate from ``input_list`` found inside ``string``.
+
+    Returns
+    -------
+    str or None
+        First matching candidate or ``None`` if no match is found.
+    """
     for value in input_list:
         if value in string:
             return value
@@ -1427,6 +1877,48 @@ def ell1fit(
     use_weight=False,
     ignore_uncertainties=False,
 ):
+    """Fit spin and ELL1 orbital parameters from one or more event files.
+
+    This is the high-level pipeline used by the CLI:
+
+    1. Load timing models and event files.
+    2. Fold events and build pulse templates (optionally energy-weighted).
+    3. Build priors and parameter scaling.
+    4. Perform posterior optimization and MCMC sampling.
+    5. Save ECSV summaries, diagnostic plots, and updated ``.par`` files.
+
+    Parameters
+    ----------
+    files : list of str
+        Event files to analyze.
+    parfiles : list of str
+        PINT-compatible ELL1 parameter files, one per event file.
+    nsteps : int, optional
+        Maximum MCMC steps.
+    nharm : int, optional
+        Number of harmonics used to model pulse profiles.
+    tolerance : float, optional
+        Deorbiting tolerance in seconds.
+    energy_range : tuple or None, optional
+        Energy selection ``(emin, emax)`` applied to events.
+    fit_parameters : list of str, optional
+        Parameters to fit (e.g. ``["F0", "F1", "PB"]``).
+    minimize_first : bool, optional
+        If True, run a local minimization before MCMC.
+    general_outroot : str or None, optional
+        Base output root; otherwise inferred from input filename.
+    likelihood_func : callable, optional
+        Likelihood/statistic function evaluated on phases.
+    use_weight : bool, optional
+        If True, apply energy-dependent event weighting.
+    ignore_uncertainties : bool, optional
+        If True, ignore uncertainties from input parfiles when building priors.
+
+    Returns
+    -------
+    str
+        Path to the combined output ECSV file.
+    """
     n_files = len(files)
     assert len(parfiles) == len(
         files
