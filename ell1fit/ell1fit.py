@@ -2046,19 +2046,27 @@ def get_factors(parnames, model, observation_length, parvalunc=None, apply_dampi
         zoom_factor = None
         source = None
 
-        if parvalunc is not None and par in parvalunc:
-            unc = np.abs(parvalunc[par][1])
-            zoom_factor = _scaled_zoom_from_uncertainty(unc)
-            if zoom_factor is not None:
-                source = "uncertainty"
+        possible_uncertainties = []
+        sources = []
 
-        if zoom_factor is None and par in approximate_uncertainties:
-            approx_unc = approximate_uncertainties[par]
-            zoom_factor = _scaled_zoom_from_uncertainty(approx_unc)
-            if zoom_factor is not None:
-                source = "model"
+        # For zoom purposes, we prefer the most optimistic uncertainty (to avoid high
+        # rejection ratios). For prior purposes, we prefer the most conservative
+        # uncertainty (to avoid overconfidence).
+        if parvalunc is not None and par in parvalunc:
+            possible_uncertainties.append(parvalunc[par][1])
+            sources.append("uncertainty")
+        if par in approximate_uncertainties:
+            possible_uncertainties.append(approximate_uncertainties[par])
+            sources.append("model")
+
+        unc_idx = np.argmin(possible_uncertainties) if possible_uncertainties else None
+        if unc_idx is not None:
+            unc = possible_uncertainties[unc_idx]
+            zoom_factor = _scaled_zoom_from_uncertainty(unc)
+            source = sources[unc_idx]
 
         if zoom_factor is None:
+            print("Default zoom factors")
             if par.startswith("EPS"):
                 zoom_factor = 0.001
             elif par == "PBDOT" and np.isfinite(Pd) and Pd != 0:
@@ -2096,9 +2104,7 @@ def get_factors(parnames, model, observation_length, parvalunc=None, apply_dampi
                 f"(unc={unc}, local_jitter=1e-6)"
             )
         elif source.startswith("model"):
-            logging.info(
-                f"Zoom factor for {par} from model: {zoom_factor} " f"(approx_unc={approx_unc})"
-            )
+            logging.info(f"Zoom factor for {par} from model: {zoom_factor} " f"(approx_unc={unc})")
         else:
             logging.info(f"Zoom factor for {par}: {zoom_factor} (default)")
 
