@@ -1038,7 +1038,9 @@ def safe_run_sampler(
             )
         if sampler.iteration % 1000 == 0:
             result_dict, flat_samples = calculate_result_array_from_samples(sampler, labels)
-            logging.info(f"Checkpointing intermediate results to {outroot + '_corner_incomplete.jpg'}"))
+            logging.info(
+                f"Checkpointing intermediate results to {outroot + '_corner_incomplete.jpg'}"
+            )
             plot_mcmc_results(
                 flat_samples=flat_samples,
                 labels=labels,
