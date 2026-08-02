@@ -2393,7 +2393,6 @@ def ell1fit(
         model,
         observation_length,
         parvalunc=parameters_with_unc,
-        apply_damping=use_weight,
     )
 
     profile = folded_profile(times_from_pepoch, parameters, nbin=nbin, tolerance=tolerance)
