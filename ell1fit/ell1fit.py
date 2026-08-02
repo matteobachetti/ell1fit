@@ -1940,7 +1940,7 @@ def order_of_magnitude(value):
     return 10 ** int(np.log10(np.abs(value)) - 1)
 
 
-def estimate_uncertainties_from_model(model, parameter_names, observation_length):
+def estimate_uncertainties_from_model(model, parameter_names, observation_length, optimistic=False):
     r"""Estimate heuristic 1-sigma scales for selected fit parameters.
 
     This helper derives approximate uncertainty magnitudes from the binary and
@@ -2002,9 +2002,12 @@ def estimate_uncertainties_from_model(model, parameter_names, observation_length
             parameter_uncertainties["TASC"] = common_factor * P / 86400 / TWOPI / X
         elif simple_freq_re.match(name):
             order = int(simple_freq_re.match(name).group(1))
-            parameter_uncertainties[name] = max(
-                X * Omega ** (order + 1) * F, 10 / obs_length ** (order + 1)
-            )
+            if optimistic:
+                parameter_uncertainties[name] = 1 / obs_length ** (order + 1)
+            else:
+                parameter_uncertainties[name] = max(
+                    X * Omega ** (order + 1) * F, 10 / obs_length ** (order + 1)
+                )
 
     return parameter_uncertainties
 
@@ -2029,7 +2032,7 @@ def get_factors(parnames, model, observation_length, parvalunc=None, apply_dampi
     unc_to_factor_scale = 1e6
 
     approximate_uncertainties = estimate_uncertainties_from_model(
-        model, parnames, observation_length
+        model, parnames, observation_length, optimistic=True
     )
 
     def _scaled_zoom_from_uncertainty(uncertainty):
