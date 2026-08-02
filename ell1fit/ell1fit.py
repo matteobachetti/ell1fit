@@ -882,6 +882,11 @@ def safe_run_sampler(
 
     index = 0
     autocorr = np.empty(max_n)
+    recent_tau_means = []
+    acceptance_history = []
+    last_tau_relative_change = np.inf
+    last_plateau_relative_spread = np.inf
+    converged = False
 
     # This will be useful to testing convergence
     old_tau = np.inf
@@ -896,19 +901,68 @@ def safe_run_sampler(
         # Using tol=0 means that we'll always get an estimate even
         # if it isn't trustworthy
         tau = sampler.get_autocorr_time(tol=0)
-        autocorr[index] = np.mean(tau)
+        mean_tau = np.mean(tau)
+        max_tau = np.max(tau)
+        autocorr[index] = mean_tau
+        recent_tau_means.append(mean_tau)
+        if len(recent_tau_means) > 5:
+            recent_tau_means.pop(0)
         index += 1
+
+        acceptance_frac = float(np.mean(sampler.acceptance_fraction))
+        acceptance_history.append(acceptance_frac)
+
+        tau_relative_change = np.inf
+        if np.all(np.isfinite(old_tau)):
+            tau_relative_change = np.max(np.abs(old_tau - tau) / tau)
+
+        plateau_relative_spread = np.inf
+        if len(recent_tau_means) >= 3 and np.min(recent_tau_means) > 0:
+            plateau_relative_spread = (
+                np.max(recent_tau_means) - np.min(recent_tau_means)
+            ) / np.mean(recent_tau_means)
+
+        last_tau_relative_change = tau_relative_change
+        last_plateau_relative_spread = plateau_relative_spread
 
         # Check convergence
         converged = np.all(tau * n_autocorr < sampler.iteration)
-        converged &= np.all(np.abs(old_tau - tau) / tau < 0.01)
+        converged &= tau_relative_change < 0.01
 
         logging.info(
-            f"Iteration {sampler.iteration}: mean tau = {np.mean(tau):.3f}, max tau = {np.max(tau):.3f}, converged = {converged}"
+            f"Iteration {sampler.iteration}: mean tau = {mean_tau:.3f}, "
+            f"max tau = {max_tau:.3f}, tau_rel_change = {tau_relative_change:.3e}, "
+            f"tau_plateau_spread5 = {plateau_relative_spread:.3e}, "
+            f"acceptance = {acceptance_frac:.3f}, converged = {converged}"
         )
         if converged:
             break
         old_tau = tau
+
+    if len(acceptance_history) > 0:
+        acceptance_min = float(np.min(acceptance_history))
+        acceptance_max = float(np.max(acceptance_history))
+    else:
+        acceptance_min = np.nan
+        acceptance_max = np.nan
+
+    if np.isfinite(last_tau_relative_change) and np.isfinite(last_plateau_relative_spread):
+        if last_tau_relative_change < 0.01 and last_plateau_relative_spread < 0.05:
+            tau_trend = "stable"
+        elif last_tau_relative_change < 0.05 and last_plateau_relative_spread < 0.20:
+            tau_trend = "approaching-plateau"
+        else:
+            tau_trend = "still-evolving"
+    else:
+        tau_trend = "insufficient-checks"
+
+    logging.info(
+        f"Final convergence summary: iterations = {sampler.iteration}, "
+        f"checks = {index}, converged = {converged}, tau_trend = {tau_trend}, "
+        f"last_tau_rel_change = {last_tau_relative_change:.3e}, "
+        f"last_tau_plateau_spread5 = {last_plateau_relative_spread:.3e}, "
+        f"acceptance_range = [{acceptance_min:.3f}, {acceptance_max:.3f}]"
+    )
 
     result_dict, flat_samples = calculate_result_array_from_samples(sampler, labels)
     plot_mcmc_results(
