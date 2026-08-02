@@ -902,6 +902,10 @@ def safe_run_sampler(
         # Check convergence
         converged = np.all(tau * n_autocorr < sampler.iteration)
         converged &= np.all(np.abs(old_tau - tau) / tau < 0.01)
+
+        logging.info(
+            f"Iteration {sampler.iteration}: mean tau = {np.mean(tau):.3f}, max tau = {np.max(tau):.3f}, converged = {converged}"
+        )
         if converged:
             break
         old_tau = tau
