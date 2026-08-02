@@ -837,6 +837,76 @@ def safe_run_sampler(
     # We'll track how the average autocorrelation time estimate changes
     starting_pars = np.asarray(starting_pars)
     ndim = len(starting_pars)
+    initial_jitter = 1e-6
+    stretch_a = 1.3
+
+    def _parameter_damage_report(coords, log_probs, param_labels, top_n=3):
+        """Heuristic report of parameters most associated with poor walkers."""
+        coords = np.asarray(coords)
+        log_probs = np.asarray(log_probs)
+
+        finite_lp = np.isfinite(log_probs)
+        finite_coords = np.all(np.isfinite(coords), axis=1)
+        valid = finite_lp & finite_coords
+
+        n_total = coords.shape[0]
+        n_valid = int(np.sum(valid))
+        if n_valid < max(10, ndim + 2):
+            return (
+                f"valid_walkers={n_valid}/{n_total}; "
+                "insufficient finite walkers for parameter damage diagnostics"
+            )
+
+        local_coords = coords[valid]
+        local_lp = log_probs[valid]
+
+        q25 = np.percentile(local_lp, 25)
+        q75 = np.percentile(local_lp, 75)
+        worst = local_lp <= q25
+        best = local_lp >= q75
+
+        if np.sum(worst) < 3 or np.sum(best) < 3:
+            return (
+                f"valid_walkers={n_valid}/{n_total}; "
+                "insufficient best/worst walker split for diagnostics"
+            )
+
+        lp_std = np.std(local_lp)
+        diagnostics = []
+        for j, lbl in enumerate(param_labels):
+            col = local_coords[:, j]
+            spread = np.std(col)
+            if not np.isfinite(spread) or spread <= 0:
+                continue
+
+            dmed = np.abs(np.median(col[worst]) - np.median(col[best]))
+            score = dmed / (spread + 1e-12)
+
+            if lp_std > 0:
+                corr = np.corrcoef(col, local_lp)[0, 1]
+                if not np.isfinite(corr):
+                    corr = 0.0
+            else:
+                corr = 0.0
+
+            diagnostics.append((score, np.abs(corr), lbl, dmed, spread, corr))
+
+        diagnostics.sort(key=lambda x: (x[0], x[1]), reverse=True)
+
+        if len(diagnostics) == 0:
+            return f"valid_walkers={n_valid}/{n_total}; no finite parameter diagnostics"
+
+        worst_labels = []
+        for score, _, lbl, dmed, spread, corr in diagnostics[:top_n]:
+            worst_labels.append(
+                f"{lbl}(score={score:.2f},corr={corr:+.2f},dmed={dmed:.2e},std={spread:.2e})"
+            )
+
+        nonfinite_frac = 1.0 - n_valid / n_total
+        return (
+            f"valid_walkers={n_valid}/{n_total}, nonfinite_frac={nonfinite_frac:.2%}; "
+            f"top_damage={'; '.join(worst_labels)}"
+        )
 
     if labels is None:
         labels = list(map(r"$\theta_{{{0}}}$".format, range(1, ndim + 1)))
@@ -856,7 +926,7 @@ def safe_run_sampler(
         logging.info("Starting from zero")
 
         pos = np.array(starting_pars) + np.random.normal(
-            np.zeros((nwalkers, starting_pars.size)), 1e-5
+            np.zeros((nwalkers, starting_pars.size)), initial_jitter
         )
         _, ndim = pos.shape
         backend.reset(nwalkers, ndim)
@@ -877,13 +947,21 @@ def safe_run_sampler(
         logging.info("Nothing to be done here")
         return result_dict
 
-    # Initialize the sampler
-    sampler = emcee.EnsembleSampler(nwalkers, ndim, func_to_maximize, backend=backend)
+    # Initialize the sampler with a conservative stretch parameter to avoid
+    # overly aggressive proposals when acceptance is low.
+    sampler = emcee.EnsembleSampler(
+        nwalkers,
+        ndim,
+        func_to_maximize,
+        backend=backend,
+        moves=emcee.moves.StretchMove(a=stretch_a),
+    )
 
     index = 0
     autocorr = np.empty(max_n)
     recent_tau_means = []
     acceptance_history = []
+    low_acceptance_streak = 0
     last_tau_relative_change = np.inf
     last_plateau_relative_spread = np.inf
     converged = False
@@ -911,6 +989,10 @@ def safe_run_sampler(
 
         acceptance_frac = float(np.mean(sampler.acceptance_fraction))
         acceptance_history.append(acceptance_frac)
+        if acceptance_frac < 0.05:
+            low_acceptance_streak += 1
+        else:
+            low_acceptance_streak = 0
 
         tau_relative_change = np.inf
         if np.all(np.isfinite(old_tau)):
@@ -935,6 +1017,21 @@ def safe_run_sampler(
             f"tau_plateau_spread5 = {plateau_relative_spread:.3e}, "
             f"acceptance = {acceptance_frac:.3f}, converged = {converged}"
         )
+
+        param_damage_info = _parameter_damage_report(
+            sample.coords, sample.log_prob, labels, top_n=3
+        )
+        if acceptance_frac < 0.1:
+            logging.warning(f"Parameter damage report: {param_damage_info}")
+        else:
+            logging.info(f"Parameter damage report: {param_damage_info}")
+
+        if low_acceptance_streak >= 3:
+            logging.warning(
+                "Acceptance has been <0.05 for 3 consecutive checks. "
+                "Consider tightening parameter scales (get_factors), "
+                "running a minimization warm start, or resetting the backend."
+            )
         if converged:
             break
         old_tau = tau
@@ -1911,7 +2008,7 @@ def get_factors(parnames, model, observation_length, parvalunc=None):
     F = np.max([model[i].F0.value for i in range(n_files)])
     obs_length = np.max(observation_length)
 
-    # Fixed local walker jitter in safe_run_sampler is 1e-5. Multiplying
+    # Fixed local walker jitter in safe_run_sampler is 1e-6. Multiplying
     # uncertainties by this value should give physically meaningful initial
     # perturbations while remaining conservative.
     unc_to_factor_scale = 1e6
@@ -1957,7 +2054,7 @@ def get_factors(parnames, model, observation_length, parvalunc=None):
         if source == "uncertainty":
             logging.info(
                 f"Zoom factor for {par} from uncertainty: {zoom_factor} "
-                f"(unc={unc}, local_jitter=1e-5)"
+                f"(unc={unc}, local_jitter=1e-6)"
             )
         elif source == "model":
             logging.info(
