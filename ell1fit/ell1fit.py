@@ -927,7 +927,7 @@ def safe_run_sampler(
 
         # Check convergence
         converged = np.all(tau * n_autocorr < sampler.iteration)
-        converged &= tau_relative_change < 0.01
+        converged &= tau_relative_change < 0.05
 
         logging.info(
             f"Iteration {sampler.iteration}: mean tau = {mean_tau:.3f}, "
