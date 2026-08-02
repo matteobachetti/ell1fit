@@ -1011,20 +1011,24 @@ def safe_run_sampler(
         converged = np.all(tau * n_autocorr < sampler.iteration)
         converged &= tau_relative_change < 0.05
 
+        required_steps_estimate = float(n_autocorr * max_tau)
+        remaining_steps_estimate = max(0.0, required_steps_estimate - sampler.iteration)
+        convergence_progress = min(1.0, sampler.iteration / required_steps_estimate)
+
         logging.info(
             f"Iteration {sampler.iteration}: mean tau = {mean_tau:.3f}, "
             f"max tau = {max_tau:.3f}, tau_rel_change = {tau_relative_change:.3e}, "
             f"tau_plateau_spread5 = {plateau_relative_spread:.3e}, "
-            f"acceptance = {acceptance_frac:.3f}, converged = {converged}"
+            f"acceptance = {acceptance_frac:.3f}, "
+            f"target_iter~{required_steps_estimate:.0f}, remaining~{remaining_steps_estimate:.0f}, "
+            f"progress={convergence_progress:.1%}, converged = {converged}"
         )
 
-        param_damage_info = _parameter_damage_report(
-            sample.coords, sample.log_prob, labels, top_n=3
-        )
         if acceptance_frac < 0.1:
-            logging.warning(f"Parameter damage report: {param_damage_info}")
-        else:
-            logging.info(f"Parameter damage report: {param_damage_info}")
+            param_damage_info = _parameter_damage_report(
+                sample.coords, sample.log_prob, labels, top_n=3
+            )
+            logging.warning(f"Low acceptance detected: {param_damage_info}")
 
         if low_acceptance_streak >= 3:
             logging.warning(
@@ -1994,7 +1998,7 @@ def estimate_uncertainties_from_model(model, parameter_names, observation_length
     return parameter_uncertainties
 
 
-def get_factors(parnames, model, observation_length, parvalunc=None):
+def get_factors(parnames, model, observation_length, parvalunc=None, apply_damping=False):
     """Compute parameter scaling factors for numerically stable local fitting.
 
     The factors set the size of local parameter variations sampled by the
@@ -2049,14 +2053,35 @@ def get_factors(parnames, model, observation_length, parvalunc=None):
                 zoom_factor = 1.0
             source = "default"
 
+        # Optional conservative damping for parameters that often dominate
+        # proposal rejection in weighted runs.
+        if apply_damping:
+            damping = 1.0
+            damping_reason = None
+            if par.startswith("Phase"):
+                damping = 0.2
+                damping_reason = "phase-sensitive"
+            elif par == "TASC":
+                damping = 0.3
+                damping_reason = "orbital-epoch-sensitive"
+            elif simple_freq_re.match(par):
+                order = int(simple_freq_re.match(par).group(1))
+                if order >= 1:
+                    damping = 0.3
+                    damping_reason = "higher-frequency-derivative-sensitive"
+
+            if damping < 1.0:
+                zoom_factor = max(zoom_factor * damping, 1e-12)
+                source = f"{source}+damped:{damping_reason}"
+
         zoom.append(zoom_factor)
 
-        if source == "uncertainty":
+        if source.startswith("uncertainty"):
             logging.info(
                 f"Zoom factor for {par} from uncertainty: {zoom_factor} "
                 f"(unc={unc}, local_jitter=1e-6)"
             )
-        elif source == "model":
+        elif source.startswith("model"):
             logging.info(
                 f"Zoom factor for {par} from model: {zoom_factor} " f"(approx_unc={approx_unc})"
             )
@@ -2369,6 +2394,7 @@ def ell1fit(
         model,
         observation_length,
         parvalunc=parameters_with_unc,
+        apply_damping=use_weight,
     )
 
     profile = folded_profile(times_from_pepoch, parameters, nbin=nbin, tolerance=tolerance)
