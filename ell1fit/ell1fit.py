@@ -1329,7 +1329,7 @@ def _get_par_dict(
     # Then, give sensible defaults for the uncertainties of some critical
     # parameters that are not set
     def check_uncertainty(par, default_uncertainty):
-        if np.isnan(parameters[par][1]) or ignore_uncertainties:
+        if np.isnan(parameters[par][1]) or np.isinf(parameters[par][1]) or ignore_uncertainties:
             parameters[par][1] = default_uncertainty
 
     check_uncertainty("PB", parameters["PB"][0] / 2)
@@ -1337,8 +1337,6 @@ def _get_par_dict(
     Omega = 2 * np.pi / parameters["PB"][0]
     X = parameters["A1"][0]
     f = parameters["F0"][0]
-
-    parameters["F0"][1] = parameters["F0"][0]
 
     count = 0
 
@@ -1864,46 +1862,55 @@ def get_factors(parnames, model, observation_length, parvalunc=None):
     # perturbations while remaining conservative.
     unc_to_factor_scale = 1e6
 
-    common_parnames = [p for p in parnames if "_" not in p]
-    model_parnames = [p for p in parnames if p not in common_parnames]
-
     approximate_uncertainties = estimate_uncertainties_from_model(
         model, parnames, observation_length
     )
-    print(parnames)
-    print(approximate_uncertainties)
+
+    def _scaled_zoom_from_uncertainty(uncertainty):
+        """Convert an uncertainty estimate into a positive local scale."""
+        if not np.isfinite(uncertainty) or uncertainty <= 0:
+            return None
+        zoom_from_unc = order_of_magnitude(uncertainty * unc_to_factor_scale)
+        return max(zoom_from_unc, 1e-12)
+
     for par in parnames:
-        if (
-            parvalunc is not None
-            and par in parvalunc
-            and not np.isnan(unc := np.abs(parvalunc[par][1]))
-        ):
-            if np.isfinite(unc) and unc > 0:
-                zoom_from_unc = order_of_magnitude(unc * unc_to_factor_scale)
-                zoom_from_unc = max(zoom_from_unc, 1e-12)
-                zoom.append(zoom_from_unc)
-                logging.info(
-                    f"Zoom factor for {par} from uncertainty: {zoom_from_unc} "
-                    f"(unc={unc}, local_jitter=1e-5)"
-                )
-        elif par in approximate_uncertainties:
-            zoom_from_model = order_of_magnitude(
-                approximate_uncertainties[par] * unc_to_factor_scale
-            )
-            zoom_from_model = max(zoom_from_model, 1e-12)
-            zoom.append(zoom_from_model)
+        zoom_factor = None
+        source = None
+
+        if parvalunc is not None and par in parvalunc:
+            unc = np.abs(parvalunc[par][1])
+            zoom_factor = _scaled_zoom_from_uncertainty(unc)
+            if zoom_factor is not None:
+                source = "uncertainty"
+
+        if zoom_factor is None and par in approximate_uncertainties:
+            approx_unc = approximate_uncertainties[par]
+            zoom_factor = _scaled_zoom_from_uncertainty(approx_unc)
+            if zoom_factor is not None:
+                source = "model"
+
+        if zoom_factor is None:
+            if par.startswith("EPS"):
+                zoom_factor = 0.001
+            elif par == "PBDOT" and np.isfinite(Pd) and Pd != 0:
+                zoom_factor = order_of_magnitude(Pd)
+            else:
+                zoom_factor = 1.0
+            source = "default"
+
+        zoom.append(zoom_factor)
+
+        if source == "uncertainty":
             logging.info(
-                f"Zoom factor for {par} from model: {zoom_from_model} "
-                f"(approx_unc={approximate_uncertainties[par]})"
+                f"Zoom factor for {par} from uncertainty: {zoom_factor} "
+                f"(unc={unc}, local_jitter=1e-5)"
+            )
+        elif source == "model":
+            logging.info(
+                f"Zoom factor for {par} from model: {zoom_factor} " f"(approx_unc={approx_unc})"
             )
         else:
-            if par.startswith("EPS"):
-                zoom.append(0.001)
-            elif par == "PBDOT":
-                zoom.append(order_of_magnitude(Pd))
-            else:
-                zoom.append(1.0)
-            logging.info(f"Zoom factor for {par}: {zoom[-1]} (default)")
+            logging.info(f"Zoom factor for {par}: {zoom_factor} (default)")
 
     return zoom
 
