@@ -2012,7 +2012,7 @@ def estimate_uncertainties_from_model(model, parameter_names, observation_length
     return parameter_uncertainties
 
 
-def get_factors(parnames, model, observation_length, parvalunc=None, apply_damping=False):
+def get_factors(parnames, model, observation_length, parvalunc=None):
     """Compute parameter scaling factors for numerically stable local fitting.
 
     The factors set the size of local parameter variations sampled by the
@@ -2074,27 +2074,6 @@ def get_factors(parnames, model, observation_length, parvalunc=None, apply_dampi
             else:
                 zoom_factor = 1.0
             source = "default"
-
-        # Optional conservative damping for parameters that often dominate
-        # proposal rejection in weighted runs.
-        if apply_damping:
-            damping = 1.0
-            damping_reason = None
-            if par.startswith("Phase"):
-                damping = 0.2
-                damping_reason = "phase-sensitive"
-            elif par == "TASC":
-                damping = 0.3
-                damping_reason = "orbital-epoch-sensitive"
-            elif simple_freq_re.match(par):
-                order = int(simple_freq_re.match(par).group(1))
-                if order >= 1:
-                    damping = 0.3
-                    damping_reason = "higher-frequency-derivative-sensitive"
-
-            if damping < 1.0:
-                zoom_factor = max(zoom_factor * damping, 1e-12)
-                source = f"{source}+damped:{damping_reason}"
 
         zoom.append(zoom_factor)
 
