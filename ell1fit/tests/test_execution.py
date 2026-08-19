@@ -1,15 +1,11 @@
 import os
-import sys
 import glob
 import pytest
 from ell1fit.ell1fit import main as main_ell1fit
 from ell1fit.create_parfile import main as main_ell1par
 
-
 curdir = os.path.abspath(os.path.dirname(__file__))
 datadir = os.path.join(curdir, "data")
-if sys.platform.startswith("win"):
-    pytest.skip("skipping tests that are known to fail on windows", allow_module_level=True)
 
 
 class TestExecution:

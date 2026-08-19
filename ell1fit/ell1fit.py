@@ -30,7 +30,6 @@ from stingray.stats import (
     a_from_ssig,
     z2_n_detection_level,
     power_confidence_limits,
-    amplitude_upper_limit,
 )
 from pint.models import get_model
 
@@ -223,8 +222,8 @@ def pf_weight_versus_energy(
                 fmt="o",
             )
             plt.semilogx(fine_energy_range, fine_amps, color="black", label="Estimated weight")
-            plt.plot(fine_energy_range, fine_amps_50, color="red", label=f"50% detection limit")
-            plt.plot(fine_energy_range, fine_amps_90, color="grey", label=f"90% detection limit")
+            plt.plot(fine_energy_range, fine_amps_50, color="red", label="50% detection limit")
+            plt.plot(fine_energy_range, fine_amps_90, color="grey", label="90% detection limit")
             plt.legend()
             plt.savefig(f"{plot_root_file_name[i]}.jpg")
             plt.close()
@@ -1502,7 +1501,8 @@ def _get_par_dict(
         obs_length_change = 10 / obs_length ** (count + 1)
         max_orbital_change = X * Omega ** (count + 1) * f
         logging.debug(
-            f"F{count}: max_orbital_change={max_orbital_change}, obs_length_change={obs_length_change}"
+            f"F{count}: max_orbital_change={max_orbital_change}, "
+            f"obs_length_change={obs_length_change}"
         )
         default_unc = 10 * max_orbital_change * f + obs_length_change
         check_uncertainty(f"F{count}", default_unc)
@@ -1964,7 +1964,8 @@ def estimate_uncertainties_from_model(model, parameter_names, observation_length
     -----
     The implemented heuristics are:
 
-    - ``PB``: :math:`\sigma_{PB} \approx \frac{\sqrt{3}}{\pi}\frac{1}{2\pi F0}\frac{PB^2}{A1\,T_{obs}}`
+        - ``PB``: :math:`\sigma_{PB} \approx \frac{\sqrt{3}}{\pi}`
+            :math:`\frac{1}{2\pi F0}\frac{PB^2}{A1\,T_{obs}}`
     - ``A1``: :math:`\sigma_{A1} \approx \frac{1}{2\pi F0}`
     - ``TASC``: :math:`\sigma_{TASC} \approx \frac{1}{2\pi F0}\frac{PB}{2\pi A1}`
     - ``F_k``: :math:`\sigma_{F_k} \approx \max(A1\,\Omega^{k+1}F0,\;10/T_{obs}^{k+1})`,
@@ -2010,13 +2011,8 @@ def get_factors(parnames, model, observation_length, parvalunc=None):
     The factors set the size of local parameter variations sampled by the
     optimizer/MCMC, based on spin/orbital sensitivity heuristics.
     """
-    n_files = len(observation_length)
     zoom = []
-    P = model[0].PB.value * 86400
     Pd = model[0].PBDOT.value
-    X = model[0].A1.value
-    F = np.max([model[i].F0.value for i in range(n_files)])
-    obs_length = np.max(observation_length)
 
     # Fixed local walker jitter in safe_run_sampler is 1e-6. Multiplying
     # uncertainties by this value should give physically meaningful initial
@@ -2439,12 +2435,14 @@ def ell1fit(
 
         z2 = z_n_binned_events(profile[i], nharm)
         logging.info(f"  + Z^2_{nharm} = {z2:.1f}")
-        logging.info(
-            f"  + pulsed fraction = {(template_raw.max() - template_raw.min()) / (template_raw.max() + template_raw.min()) * 100:.1f}%"
+        pulsed_fraction = (
+            (template_raw.max() - template_raw.min())
+            / (template_raw.max() + template_raw.min())
+            * 100
         )
-        logging.info(
-            f"  + pulsed fraction from Z^2_{nharm} = {np.sqrt(2 * z2 / np.sum(profile[i])) * 100:.1f}%"
-        )
+        logging.info(f"  + pulsed fraction = {pulsed_fraction:.1f}%")
+        pulsed_fraction_z2 = np.sqrt(2 * z2 / np.sum(profile[i])) * 100
+        logging.info(f"  + pulsed fraction from Z^2_{nharm} = {pulsed_fraction_z2:.1f}%")
 
         if use_weight:
             logging.info("  Weighted profile:")
@@ -2454,9 +2452,12 @@ def ell1fit(
 
             weighted_z2 = z_n_gauss(profile_weight[i], err=err, n=nharm)
             logging.info(f"  + Z^2_{nharm} = {weighted_z2:.1f}")
-            logging.info(
-                f"  + pulsed fraction (weighted) = {(template.max() - template.min()) / (template.max() + template.min()) * 100:.1f}%"
+            weighted_pulsed_fraction = (
+                (template.max() - template.min())
+                / (template.max() + template.min())
+                * 100
             )
+            logging.info(f"  + pulsed fraction (weighted) = {weighted_pulsed_fraction:.1f}%")
 
         template_func.append(get_template_func(template))
         mint = template.min()
