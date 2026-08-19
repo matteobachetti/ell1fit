@@ -33,8 +33,6 @@ from stingray.stats import (
 )
 from pint.models import get_model
 
-import matplotlib as mpl
-
 from scipy.interpolate import interp1d
 
 import emcee
@@ -50,46 +48,7 @@ from numpy.fft import ifft, fft, fftfreq
 from . import version
 from .create_parfile import update_model
 from .logging import configure_logging
-
-params = {
-    "font.size": 7,
-    "xtick.major.size": 0,
-    "xtick.minor.size": 0,
-    "xtick.major.width": 0,
-    "xtick.minor.width": 0,
-    "ytick.major.size": 0,
-    "ytick.minor.size": 0,
-    "ytick.major.width": 0,
-    "ytick.minor.width": 0,
-    "figure.figsize": (3.5, 3.5),
-    "axes.grid": True,
-    "grid.color": "grey",
-    "grid.linewidth": 0.3,
-    "grid.linestyle": ":",
-    "axes.grid.axis": "both",
-    "axes.grid.which": "both",
-    "axes.axisbelow": False,
-    "axes.labelsize": 8,
-    "xtick.labelsize": 8,
-    "ytick.labelsize": 8,
-    "legend.fontsize": 8,
-    "legend.title_fontsize": 8,
-    "figure.dpi": 300,  # the left side of the subplots of the figure
-    "figure.subplot.left": 0.195,  # the left side of the subplots of the figure
-    "figure.subplot.right": 0.97,  # the right side of the subplots of the figure
-    "figure.subplot.bottom": 0.145,  # the bottom of the subplots of the figure
-    "figure.subplot.top": 0.97,  # the top of the subplots of the figure
-    "figure.subplot.wspace": 0.2,  # the amount of width reserved for space between subplots,
-    # expressed as a fraction of the average axis width
-    "figure.subplot.hspace": 0.2,  # the amount of height reserved for space between subplots,
-    # expressed as a fraction of the average axis height
-}
-
-
-def _plot_style_context():
-    """Return a matplotlib rc_context using the project plotting style."""
-    return mpl.rc_context(params)
-
+from .plotting import plot_style_context as _plot_style_context
 
 simple_freq_re = re.compile(r"^d?F([0-9]+)")
 freq_re = re.compile(r"^d?F([0-9]+)_([0-9]+)$")
@@ -2555,7 +2514,7 @@ def ell1fit(
         results[f"PEPOCH_{i}"] = pepoch[i]
 
     for i in range(n_files):
-        results[f"fname_{i}"] = fname[i]
+        results[f"fname_{i}"] = files[i]
 
     results["nharm"] = nharm
     results["emin"] = 0 if energy_range is None else energy_range[0]
