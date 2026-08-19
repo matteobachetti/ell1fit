@@ -292,6 +292,90 @@ def _list_zoom_factors(input_fit_par_labels, zoom):
     return factors
 
 
+def _get_likelihood_suffix(likelihood_func):
+    """Return output-name suffix for selected likelihood implementation."""
+    if likelihood_func == rayleigh_as_likelihood:
+        return "_rayleigh"
+    return ""
+
+
+def _get_weight_suffix(use_weight):
+    """Return output-name suffix when energy weights are enabled."""
+    if use_weight:
+        return "_pf_weight"
+    return ""
+
+
+def _get_nharm_suffix(nharm):
+    """Return output-name suffix for harmonic count when > 1."""
+    if nharm > 1:
+        return f"_N{nharm}"
+    return ""
+
+
+def _make_outroot_getter(
+    files,
+    list_parameter_names,
+    energy_range,
+    nharm,
+    likelihood_func,
+    use_weight,
+    general_outroot=None,
+):
+    """Build a closure that returns the configured output root name."""
+    energy_str = _format_energy_string(energy_range)
+    nharm_str = _get_nharm_suffix(nharm)
+    likelihood_str = _get_likelihood_suffix(likelihood_func)
+    weight_str = _get_weight_suffix(use_weight)
+
+    def get_outroot(file_n=None):
+        if file_n is not None:
+            initial_outroot = splitext_improved(files[file_n])[0]
+        elif general_outroot is not None:
+            initial_outroot = general_outroot
+        else:
+            initial_outroot = "out"
+
+        outroot = (
+            initial_outroot
+            + "_"
+            + "_".join(list_parameter_names)
+            + energy_str
+            + nharm_str
+            + likelihood_str
+            + weight_str
+        )
+        return outroot
+
+    return get_outroot
+
+
+def _collect_parameter_names(parameters, list_parameter_names, likelihood_func):
+    """Collect fit parameter names matching selected tokens and phase rules."""
+    parameter_names = []
+    for f in parameters:
+        if f.startswith("Phase") and likelihood_func == pletsch_clarke_likelihood:
+            parameter_names.append(f)
+            continue
+
+        for g in list_parameter_names:
+            # Startswith alone was confusing PBDOT for PB
+            if f == g or (f.startswith(g) and freq_re.match(f)):
+                parameter_names.append(f)
+
+    return parameter_names
+
+
+def _get_outroots(get_outroot, n_files):
+    """Return per-file roots plus a final aggregate root."""
+    outroots = [get_outroot(i) for i in range(n_files)]
+    if n_files == 1:
+        outroots += [get_outroot(0)]
+    else:
+        outroots += [get_outroot(None)]
+    return outroots
+
+
 def _get_par_dict(
     model,
     ignore_uncertainties=False,
@@ -449,6 +533,47 @@ def trace_likelihood_over_parameter(
         Mapping from scanned local parameter value to posterior value.
     """
 
+    _, _, func_to_maximize = _build_posterior_functions(
+        times_from_pepoch=times_from_pepoch,
+        model_parameters=model_parameters,
+        fit_parameters=fit_parameters,
+        values=values,
+        logprior_funcs=logprior_funcs,
+        factors=factors,
+        template_func=template_func,
+        likelihood_func=likelihood_func,
+        tolerance=1e-8,
+        weights=None,
+        debug_local_phases=False,
+        debug_func=False,
+    )
+
+    results = {}
+    for val in parameter_values:
+        idx = fit_parameters.index(parameter_name)
+        pars = [0] * len(values)
+        pars[idx] = val
+        results[val] = func_to_maximize(pars)
+
+    return results
+
+
+def _build_posterior_functions(
+    times_from_pepoch,
+    model_parameters,
+    fit_parameters,
+    values,
+    logprior_funcs,
+    factors,
+    template_func,
+    likelihood_func,
+    tolerance=1e-8,
+    weights=None,
+    debug_local_phases=False,
+    debug_func=False,
+):
+    """Build shared posterior components used by trace and optimization flows."""
+
     def logprior(pars):
         if np.any(np.isnan(pars)):
             return -np.inf
@@ -468,29 +593,30 @@ def trace_likelihood_over_parameter(
 
         for par, initial, value, f in zip(fit_parameters, values, pars, factors):
             allpars[par] = value * f + initial
+        if debug_local_phases:
+            logging.debug(f"Local phases for parameters: {allpars}")
 
-        return _calculate_phases(times_from_pepoch, allpars)
+        return _calculate_phases(times_from_pepoch, allpars, tolerance=tolerance)
 
     def func_to_maximize(pars):
         lp = logprior(pars)
         if np.isinf(lp):
             return lp
+
         phases = local_phases(pars)
 
         ll = 0
         for i in range(len(phases)):
-            ll += likelihood_func(phases[i], template_func[i])
+            ll += likelihood_func(
+                phases[i], template_func[i], weights=weights[i] if weights is not None else None
+            )
+
+        if debug_func:
+            logging.debug(f"pars: {pars}, func: {ll + lp}")
 
         return ll + lp
 
-    results = {}
-    for val in parameter_values:
-        idx = fit_parameters.index(parameter_name)
-        pars = [0] * len(values)
-        pars[idx] = val
-        results[val] = func_to_maximize(pars)
-
-    return results
+    return logprior, local_phases, func_to_maximize
 
 
 def optimize_solution(
@@ -526,43 +652,20 @@ def optimize_solution(
         Aggregated result dictionary containing posterior summaries, initial
         values, scaling factors, and copied model metadata.
     """
-
-    def logprior(pars):
-        if np.any(np.isnan(pars)):
-            return -np.inf
-        if np.any(np.isinf(pars)):
-            return -np.inf
-        logp = 0
-        for parname, logp_func, initial, local_value, f in zip(
-            fit_parameters, logprior_funcs, values, pars, factors
-        ):
-            value = local_value * f + initial
-            logp += logp_func(value)
-        return logp
-
-    def local_phases(pars):
-        allpars = copy.deepcopy(model_parameters)
-
-        for par, initial, value, f in zip(fit_parameters, values, pars, factors):
-            allpars[par] = value * f + initial
-        logging.debug(f"Local phases for parameters: {allpars}")
-        return _calculate_phases(times_from_pepoch, allpars, tolerance=tolerance)
-
-    def func_to_maximize(pars):
-        lp = logprior(pars)
-        if np.isinf(lp):
-            return lp
-
-        phases = local_phases(pars)
-
-        ll = 0
-        for i in range(len(phases)):
-            ll += likelihood_func(
-                phases[i], template_func[i], weights=weights[i] if weights is not None else None
-            )
-
-        logging.debug(f"pars: {pars}, func: {ll + lp}")
-        return ll + lp
+    _, local_phases, func_to_maximize = _build_posterior_functions(
+        times_from_pepoch=times_from_pepoch,
+        model_parameters=model_parameters,
+        fit_parameters=fit_parameters,
+        values=values,
+        logprior_funcs=logprior_funcs,
+        factors=factors,
+        template_func=template_func,
+        likelihood_func=likelihood_func,
+        tolerance=tolerance,
+        weights=weights,
+        debug_local_phases=True,
+        debug_func=True,
+    )
 
     def func_to_minimize(pars):
         return -func_to_maximize(pars)
@@ -706,41 +809,19 @@ def ell1fit(
 
     nbin = max(32, nharm * 8)
 
-    energy_str = _format_energy_string(energy_range)
-    likelihood_str = ""
-    if likelihood_func == rayleigh_as_likelihood:
-        likelihood_str = "_rayleigh"
-    weight_str = ""
-    if use_weight:
-        weight_str = "_pf_weight"
-
-    nharm_str = ""
-    if nharm > 1:
-        nharm_str = f"_N{nharm}"
-
     ref_model = copy.deepcopy(model[0])
     ref_model.change_binary_epoch(np.mean(pepoch))
 
     list_parameter_names = sorted(fit_parameters)
-
-    def get_outroot(file_n=None):
-        if file_n is not None:
-            initial_outroot = splitext_improved(files[file_n])[0]
-        elif general_outroot is not None:
-            initial_outroot = general_outroot
-        else:
-            initial_outroot = "out"
-
-        outroot = (
-            initial_outroot
-            + "_"
-            + "_".join(list_parameter_names)
-            + energy_str
-            + nharm_str
-            + likelihood_str
-            + weight_str
-        )
-        return outroot
+    get_outroot = _make_outroot_getter(
+        files,
+        list_parameter_names,
+        energy_range,
+        nharm,
+        likelihood_func,
+        use_weight,
+        general_outroot=general_outroot,
+    )
 
     times_from_pepoch = [[] for _ in range(n_files)]
     observation_length = [[] for _ in range(n_files)]
@@ -795,16 +876,9 @@ def ell1fit(
     for f in parameters_with_unc:
         parameters[f] = parameters_with_unc[f][0]
 
-    parameter_names = []
-
-    for f in parameters:
-        if f.startswith("Phase") and likelihood_func == pletsch_clarke_likelihood:
-            parameter_names.append(f)
-            continue
-        for g in list_parameter_names:
-            # Startswith alone was confusing PBDOT for PB
-            if f == g or (f.startswith(g) and freq_re.match(f)):
-                parameter_names.append(f)
+    parameter_names = _collect_parameter_names(
+        parameters, list_parameter_names, likelihood_func=likelihood_func
+    )
 
     logprior_funcs = assign_logpriors(
         parameter_names, parameters_with_unc, obs_length=observation_length
@@ -909,11 +983,7 @@ def ell1fit(
     except KeyError:
         raise ValueError("One or more parameters are missing from the parameter file")
 
-    outroots = [get_outroot(i) for i in range(n_files)]
-    if n_files == 1:
-        outroots += [get_outroot(i)]
-    else:
-        outroots += [get_outroot(None)]
+    outroots = _get_outroots(get_outroot, n_files)
 
     for parameter in ["Phase_0"]:
         if parameter not in parameter_names:
