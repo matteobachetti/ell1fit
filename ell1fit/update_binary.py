@@ -1,7 +1,9 @@
 import copy
+import logging
 
 from pint.models import get_model
 from pint.models.parameter import funcParameter
+from .logging import configure_logging
 
 
 def update_binary_model(input_model, reference_model):
@@ -10,7 +12,7 @@ def update_binary_model(input_model, reference_model):
     new_model = copy.deepcopy(input_model)
     for par in input_model.components["BinaryELL1"].params:
         if isinstance(getattr(input_model, par), funcParameter):
-            print("funcparameter")
+            logging.debug("Skipping funcParameter %s", par)
             continue
         if getattr(new_model, par).frozen and not getattr(reference_model, par).frozen:
             getattr(new_model, par).frozen = getattr(reference_model, par).frozen
@@ -32,6 +34,8 @@ def update_binary_model(input_model, reference_model):
 def main(args=None):
     """Main function called by the `ell1updatebinary` script"""
     import argparse
+
+    configure_logging()
 
     description = "Copy the ELL1 model from one parameter file into one or more others."
     parser = argparse.ArgumentParser(description=description)
@@ -55,7 +59,9 @@ def main(args=None):
 
         local_model = get_model(fname)
         new_model = update_binary_model(local_model, reference_model)
+        new_model_text = new_model.as_parfile()
         with open(out_fname, "w") as fobj:
-            print(new_model.as_parfile(), file=fobj)
+            print(new_model_text, file=fobj)
 
-        print(new_model.as_parfile())
+        logging.info("Wrote updated model to %s", out_fname)
+        logging.info("Updated model contents for %s:\n%s", fname, new_model_text)
