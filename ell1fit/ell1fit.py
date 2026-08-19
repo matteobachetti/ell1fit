@@ -442,6 +442,134 @@ def _write_results_products(results, n_files, get_outroot, list_parameter_names,
     return output_file
 
 
+def _prepare_templates_and_phase_priors(
+    profile,
+    profile_weight,
+    use_weight,
+    nharm,
+    get_outroot,
+    files,
+    weights,
+    nbin,
+    parameter_names,
+    logprior_funcs,
+    parameters,
+):
+    """Create templates, log diagnostics, and update phase priors."""
+    n_files = len(profile)
+    template_func = []
+    pulsed_frac = []
+
+    for i in range(n_files):
+        template_raw, additional_phase_raw = create_template_from_profile_harm(
+            profile[i],
+            nharm=nharm,
+            final_nbin=200,
+            imagefile=get_outroot(i) + "_template_raw.jpg",
+        )
+
+        if use_weight:
+            template, additional_phase = create_template_from_profile_harm(
+                profile_weight[i],
+                nharm=nharm,
+                final_nbin=200,
+                imagefile=get_outroot(i) + "_template.jpg",
+            )
+        else:
+            template = template_raw
+            additional_phase = additional_phase_raw
+
+        logging.info(f"File {files[i]}: ")
+        logging.info("  Profile:")
+        logging.info(f"  + phase = {additional_phase_raw:.4f}")
+
+        z2 = z_n_binned_events(profile[i], nharm)
+        logging.info(f"  + Z^2_{nharm} = {z2:.1f}")
+        pulsed_fraction = (
+            (template_raw.max() - template_raw.min())
+            / (template_raw.max() + template_raw.min())
+            * 100
+        )
+        logging.info(f"  + pulsed fraction = {pulsed_fraction:.1f}%")
+        pulsed_fraction_z2 = np.sqrt(2 * z2 / np.sum(profile[i])) * 100
+        logging.info(f"  + pulsed fraction from Z^2_{nharm} = {pulsed_fraction_z2:.1f}%")
+
+        if use_weight:
+            logging.info("  Weighted profile:")
+            logging.info(f"  + phase = {additional_phase:.4f}")
+
+            err = estimate_weighted_profile_std(weights[i], nbin=nbin, ntrials=400)
+            weighted_z2 = z_n_gauss(profile_weight[i], err=err, n=nharm)
+            logging.info(f"  + Z^2_{nharm} = {weighted_z2:.1f}")
+            weighted_pulsed_fraction = (
+                (template.max() - template.min()) / (template.max() + template.min()) * 100
+            )
+            logging.info(f"  + pulsed fraction (weighted) = {weighted_pulsed_fraction:.1f}%")
+
+        template_func.append(get_template_func(template))
+        mint = template.min()
+        maxt = template.max()
+        pulsed_frac.append((maxt - mint) / (maxt + mint))
+
+        ph0 = -phases_around_zero(additional_phase)
+        parameters[f"Phase_{i}"] = ph0
+
+        for j, par in enumerate(parameter_names):
+            if par == f"Phase_{i}":
+                logprior_funcs[j] = _flat_logprior(ph0 - 0.5, ph0 + 0.5)
+                break
+
+    return template_func, pulsed_frac, parameters, logprior_funcs
+
+
+def _trace_phase_0_likelihood(
+    parameter_names,
+    times_from_pepoch,
+    parameters,
+    input_mean_fit_pars,
+    logprior_funcs,
+    factors,
+    template_func,
+    likelihood_func,
+):
+    """Optionally trace the likelihood around Phase_0 for diagnostics."""
+    parameter = "Phase_0"
+    if parameter not in parameter_names:
+        return
+
+    idx = parameter_names.index(parameter)
+    results_trace = trace_likelihood_over_parameter(
+        times_from_pepoch,
+        parameters,
+        parameter_names,
+        input_mean_fit_pars,
+        logprior_funcs,
+        factors,
+        template_func,
+        parameter_name=parameter,
+        parameter_values=np.linspace(
+            parameters[parameter] - 2 * factors[idx],
+            parameters[parameter] + 2 * factors[idx],
+            100,
+        ),
+        likelihood_func=likelihood_func,
+    )
+
+    with _plot_style_context():
+        plt.figure("trace_" + parameter)
+        plt.plot(list(results_trace.keys()), list(results_trace.values()))
+        plt.axvline(parameters[parameter], color="k", ls="--")
+        plt.xlabel(parameter)
+        plt.ylabel("log likelihood")
+
+    ll_values = np.array(
+        [ll for ll in list(results_trace.values()) if not np.isnan(ll) and not np.isinf(ll)]
+    )
+    min_ll = np.nanmin(ll_values)
+    max_ll = np.nanmax(ll_values)
+    logging.info(f"Delta log likelihood for {parameter}: {max_ll - min_ll:.2f}")
+
+
 def _get_par_dict(
     model,
     ignore_uncertainties=False,
@@ -958,6 +1086,7 @@ def ell1fit(
 
     profile = folded_profile(times_from_pepoch, parameters, nbin=nbin, tolerance=tolerance)
 
+    weights = None
     if use_weight:
         weights = pf_weight_versus_energy(
             times_from_pepoch,
@@ -981,68 +1110,19 @@ def ell1fit(
     else:
         profile_weight = profile
 
-    # raise ValueError
-    template_func = []
-    pulsed_frac = []
-
-    for i in range(n_files):
-        template_raw, additional_phase_raw = create_template_from_profile_harm(
-            profile[i],
-            nharm=nharm,
-            final_nbin=200,
-            imagefile=get_outroot(i) + "_template_raw.jpg",
-        )
-        if use_weight:
-            template, additional_phase = create_template_from_profile_harm(
-                profile_weight[i],
-                nharm=nharm,
-                final_nbin=200,
-                imagefile=get_outroot(i) + "_template.jpg",
-            )
-        else:
-            template = template_raw
-            additional_phase = additional_phase_raw
-
-        logging.info(f"File {files[i]}: ")
-        logging.info("  Profile:")
-        logging.info(f"  + phase = {additional_phase_raw:.4f}")
-
-        z2 = z_n_binned_events(profile[i], nharm)
-        logging.info(f"  + Z^2_{nharm} = {z2:.1f}")
-        pulsed_fraction = (
-            (template_raw.max() - template_raw.min())
-            / (template_raw.max() + template_raw.min())
-            * 100
-        )
-        logging.info(f"  + pulsed fraction = {pulsed_fraction:.1f}%")
-        pulsed_fraction_z2 = np.sqrt(2 * z2 / np.sum(profile[i])) * 100
-        logging.info(f"  + pulsed fraction from Z^2_{nharm} = {pulsed_fraction_z2:.1f}%")
-
-        if use_weight:
-            logging.info("  Weighted profile:")
-            logging.info(f"  + phase = {additional_phase:.4f}")
-
-            err = estimate_weighted_profile_std(weights[i], nbin=nbin, ntrials=400)
-
-            weighted_z2 = z_n_gauss(profile_weight[i], err=err, n=nharm)
-            logging.info(f"  + Z^2_{nharm} = {weighted_z2:.1f}")
-            weighted_pulsed_fraction = (
-                (template.max() - template.min()) / (template.max() + template.min()) * 100
-            )
-            logging.info(f"  + pulsed fraction (weighted) = {weighted_pulsed_fraction:.1f}%")
-
-        template_func.append(get_template_func(template))
-        mint = template.min()
-        maxt = template.max()
-        pulsed_frac.append((maxt - mint) / (maxt + mint))
-
-        ph0 = -phases_around_zero(additional_phase)
-        parameters[f"Phase_{i}"] = ph0
-
-        for j, par in enumerate(parameter_names):
-            if par == f"Phase_{i}":
-                logprior_funcs[j] = _flat_logprior(ph0 - 0.5, ph0 + 0.5)
-                break
+    template_func, pulsed_frac, parameters, logprior_funcs = _prepare_templates_and_phase_priors(
+        profile,
+        profile_weight,
+        use_weight,
+        nharm,
+        get_outroot,
+        files,
+        weights,
+        nbin,
+        parameter_names,
+        logprior_funcs,
+        parameters,
+    )
 
     try:
         input_mean_fit_pars = [parameters[par] for par in parameter_names]
@@ -1051,37 +1131,16 @@ def ell1fit(
 
     outroots = _get_outroots(get_outroot, n_files)
 
-    for parameter in ["Phase_0"]:
-        if parameter not in parameter_names:
-            continue
-        results_trace = trace_likelihood_over_parameter(
-            times_from_pepoch,
-            parameters,
-            parameter_names,
-            input_mean_fit_pars,
-            logprior_funcs,
-            factors,
-            template_func,
-            parameter_name=parameter,
-            parameter_values=np.linspace(
-                parameters[parameter] - 2 * factors[parameter_names.index(parameter)],
-                parameters[parameter] + 2 * factors[parameter_names.index(parameter)],
-                100,
-            ),
-            likelihood_func=likelihood_func,
-        )
-        with _plot_style_context():
-            plt.figure("trace_" + parameter)
-            plt.plot(list(results_trace.keys()), list(results_trace.values()))
-            plt.axvline(parameters[parameter], color="k", ls="--")
-            plt.xlabel(parameter)
-            plt.ylabel("log likelihood")
-        ll_values = np.array(
-            [ll for ll in list(results_trace.values()) if not np.isnan(ll) and not np.isinf(ll)]
-        )
-        min_ll = np.nanmin(ll_values)
-        max_ll = np.nanmax(ll_values)
-        logging.info(f"Delta log likelihood for {parameter}: {max_ll - min_ll:.2f}")
+    _trace_phase_0_likelihood(
+        parameter_names,
+        times_from_pepoch,
+        parameters,
+        input_mean_fit_pars,
+        logprior_funcs,
+        factors,
+        template_func,
+        likelihood_func,
+    )
 
     results = optimize_solution(
         times_from_pepoch,
