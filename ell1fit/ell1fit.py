@@ -838,7 +838,6 @@ def safe_run_sampler(
     starting_pars = np.asarray(starting_pars)
     ndim = len(starting_pars)
     initial_jitter = 1e-6
-    stretch_a = 1.3
 
     def _parameter_damage_report(coords, log_probs, param_labels, top_n=3):
         """Heuristic report of parameters most associated with poor walkers."""
@@ -947,15 +946,8 @@ def safe_run_sampler(
         logging.info("Nothing to be done here")
         return result_dict
 
-    # Initialize the sampler with a conservative stretch parameter to avoid
-    # overly aggressive proposals when acceptance is low.
-    sampler = emcee.EnsembleSampler(
-        nwalkers,
-        ndim,
-        func_to_maximize,
-        backend=backend,
-        moves=emcee.moves.StretchMove(a=stretch_a),
-    )
+    # Use emcee's default move configuration to avoid ad-hoc tuning constants.
+    sampler = emcee.EnsembleSampler(nwalkers, ndim, func_to_maximize, backend=backend)
 
     index = 0
     autocorr = np.empty(max_n)
@@ -2066,7 +2058,7 @@ def get_factors(parnames, model, observation_length, parvalunc=None):
             source = sources[unc_idx]
 
         if zoom_factor is None:
-            print("Default zoom factors")
+            logging.debug("Using default zoom factors")
             if par.startswith("EPS"):
                 zoom_factor = 0.001
             elif par == "PBDOT" and np.isfinite(Pd) and Pd != 0:
