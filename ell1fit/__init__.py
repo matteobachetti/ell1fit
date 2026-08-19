@@ -1,13 +1,9 @@
-# Licensed under a 3-clause BSD style license - see LICENSE.rst
+try:
+    from .version import version as __version__
+except ImportError:
+    __version__ = ""
 
-# Packages may add whatever they like to this file, but
-# should keep this content at the top.
-# ----------------------------------------------------------------------------
-from ._astropy_init import *  # noqa
-
-# ----------------------------------------------------------------------------
-
-__all__ = []
+__all__ = ["__version__"]
 from .logging import logging, logger
 
 logger.setLevel(logging.INFO)
