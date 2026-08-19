@@ -1,7 +1,82 @@
 [build-system]
+requires = ["setuptools>=61.0", "setuptools_scm>=8.0"]
+build-backend = "setuptools.build_meta"
 
-requires = ["setuptools",
-            "setuptools_scm",
-            "wheel"]
+[project]
+name = "ell1fit"
+dynamic = ["version"]
+description = "Fit an ELL1 orbital model to pulsar data, accounting for spin derivatives"
+readme = "README.rst"
+license = {text = "BSD-3-Clause"}
+authors = [
+    {name = "Matteo Bachetti", email = "matteo@matteobachetti.it"}
+]
+requires-python = ">=3.11"
+dependencies = [
+    "astropy",
+    "emcee",
+    "matplotlib",
+    "pint-pulsar",
+    "numba",
+    "scipy",
+    "corner",
+    "stingray",
+    "hendrics",
+    "colorama",
+    "netcdf4",
+    "h5py",
+    "pyyaml",
+    "scinum",
+]
 
-build-backend = 'setuptools.build_meta'
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "pytest-astropy",
+    "pytest-cov",
+]
+docs = [
+    "sphinx",
+    "sphinx-astropy",
+]
+
+[project.scripts]
+ell1fit = "ell1fit.ell1fit:main"
+ell1par = "ell1fit.create_parfile:main"
+ell1updatebinary = "ell1fit.update_binary:main"
+
+[project.urls]
+Homepage = "http://github.com/matteobachetti/ell1fit"
+Repository = "http://github.com/matteobachetti/ell1fit"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ell1fit*"]
+
+[tool.setuptools.package-data]
+"ell1fit" = ["data/*"]
+"ell1fit.tests" = ["data/*"]
+
+[tool.setuptools_scm]
+write_to = "ell1fit/version.py"
+
+[tool.pytest.ini_options]
+testpaths = ["ell1fit", "docs"]
+addopts = "--doctest-rst"
+text_file_format = "rst"
+
+[tool.coverage.run]
+omit = [
+    "ell1fit/conftest.py",
+    "ell1fit/tests/*",
+    "ell1fit/version*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "except ImportError",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "def main\\(.*\\):",
+]
