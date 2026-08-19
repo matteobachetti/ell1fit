@@ -1,6 +1,7 @@
 import os
 import glob
 import pytest
+from astropy.table import Table
 from ell1fit.ell1fit import main as main_ell1fit
 from ell1fit.create_parfile import main as main_ell1par
 
@@ -38,6 +39,9 @@ class TestExecution:
             ecsv_res = f"{root}{label}_results.ecsv"
             ecsv_par = f"{root}{label}_results.par"
             assert os.path.exists(ecsv_res)
+            table = Table.read(ecsv_res)
+            assert "fname" in table.colnames
+            assert table["fname"][-1] == ev
             assert os.path.exists(ecsv_par)
             os.rename(ecsv_par, ecsv_par.replace(".par", "_e1fit.par"))
 
