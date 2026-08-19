@@ -1460,7 +1460,7 @@ def _get_par_dict(
     parameters = {
         "Phase": [0, 0],
         "PB": [model.PB.value.astype(float) * 86400, return_unc(model.PB) * 86400],
-        "TASC": [model.TASC.value, return_unc(model.TASC)],
+        "TASC": [model.TASC.value.astype(float), return_unc(model.TASC)],
         "A1": [model.A1.value.astype(float), return_unc(model.A1)],
         "EPS1": [model.EPS1.value.astype(float), return_unc(model.EPS1)],
         "EPS2": [model.EPS2.value.astype(float), return_unc(model.EPS2)],
@@ -2483,6 +2483,8 @@ def ell1fit(
         outroots += [get_outroot(None)]
 
     for parameter in ["Phase_0"]:
+        if parameter not in parameter_names:
+            continue
         results_trace = trace_likelihood_over_parameter(
             times_from_pepoch,
             parameters,
@@ -2529,11 +2531,11 @@ def ell1fit(
     )
 
     for i in range(n_files):
-        if hasattr(model[i], "START"):
+        if getattr(model[i], "START", None) is not None and model[i].START.value is not None:
             results[f"Start_{i}"] = model[i].START.value
         else:
             results[f"Start_{i}"] = times_from_pepoch[i][0] / 86400 + pepoch[i]
-        if hasattr(model[i], "STOP"):
+        if getattr(model[i], "STOP", None) is not None and model[i].STOP.value is not None:
             results[f"Stop_{i}"] = model[i].STOP.value
         else:
             results[f"Stop_{i}"] = times_from_pepoch[i][-1] / 86400 + pepoch[i]
