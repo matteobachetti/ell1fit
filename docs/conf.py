@@ -25,10 +25,12 @@
 # Thus, any C-extensions that are needed to build the documentation will *not*
 # be accessible, and the documentation will not build correctly.
 
+import datetime
 import os
 import sys
-import datetime
 from importlib import import_module
+
+import tomllib
 
 try:
     from sphinx_astropy.conf.v1 import *  # noqa
@@ -36,12 +38,16 @@ except ImportError:
     print('ERROR: the documentation requires the sphinx-astropy package to be installed')
     sys.exit(1)
 
-# Get configuration information from setup.cfg
-from configparser import ConfigParser
-conf = ConfigParser()
+with open(os.path.join(os.path.dirname(__file__), "..", "pyproject.toml"), "rb") as f:
+    pyproject = tomllib.load(f)
 
-conf.read([os.path.join(os.path.dirname(__file__), '..', 'setup.cfg')])
-setup_cfg = dict(conf.items('metadata'))
+project_cfg = pyproject["project"]
+setup_cfg = {
+    "name": project_cfg["name"],
+    "author": project_cfg["authors"][0]["name"],
+    "github_project": project_cfg["urls"]["Repository"].removeprefix("https://github.com/").removeprefix("http://github.com/"),
+    "edit_on_github": "false",
+}
 
 # -- General configuration ----------------------------------------------------
 
