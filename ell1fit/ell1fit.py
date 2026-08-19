@@ -442,6 +442,92 @@ def _write_results_products(results, n_files, get_outroot, list_parameter_names,
     return output_file
 
 
+def _load_and_validate_models(parfiles):
+    """Load PINT models, validate ELL1 constraints, and align binary epochs."""
+    model = []
+    pepoch = []
+
+    for i in range(len(parfiles)):
+        model.append(get_model(parfiles[i]))
+        pepoch.append(model[i].PEPOCH.value)
+
+        if hasattr(model[i], "T0") or model[i].BINARY.value != "ELL1":
+            raise ValueError("This script wants an ELL1 model, with TASC, not T0, defined")
+
+        model[i].change_binary_epoch(pepoch[i])
+
+    ref_model = copy.deepcopy(model[0])
+    ref_model.change_binary_epoch(np.mean(pepoch))
+
+    return model, pepoch, ref_model
+
+
+def _load_events_for_all_files(files, energy_range, pepoch, get_outroot):
+    """Load all event files and compute per-file exposure and duration."""
+    n_files = len(files)
+    times_from_pepoch = [[] for _ in range(n_files)]
+    observation_length = np.zeros(n_files, dtype=float)
+    energies = [[] for _ in range(n_files)]
+    expo = np.zeros(n_files)
+
+    for i in range(n_files):
+        fname = files[i]
+        times_from_pepoch[i], gtis, energies[i] = _load_and_format_events(
+            fname,
+            energy_range,
+            pepoch[i],
+            plotfile=get_outroot(i) + f"_lightcurve_{i}.jpg",
+            return_energy=True,
+            use_pi=False,
+        )
+        expo[i] += np.sum(np.diff(gtis, axis=1))
+        observation_length[i] = times_from_pepoch[i][-1] - times_from_pepoch[i][0]
+
+    return times_from_pepoch, observation_length, energies, expo
+
+
+def _build_parameters_from_models(model, ref_model, observation_length, ignore_uncertainties=False):
+    """Assemble global and per-file parameter dictionaries from timing models."""
+    n_files = len(model)
+    parameters_with_unc = _get_par_dict(
+        ref_model,
+        ignore_uncertainties=ignore_uncertainties,
+        obs_length=np.min(observation_length),
+    )
+    del parameters_with_unc["PEPOCH"]
+
+    for i in range(n_files):
+        count = 0
+        local_pars_uncs = _get_par_dict(
+            model[i],
+            ignore_uncertainties=ignore_uncertainties,
+            obs_length=observation_length[i],
+        )
+
+        while f"F{count}" in local_pars_uncs:
+            parameters_with_unc[f"F{count}_{i}"] = [
+                local_pars_uncs[f"F{count}"][0],
+                local_pars_uncs[f"F{count}"][1],
+            ]
+            if f"F{count}" in parameters_with_unc:
+                del parameters_with_unc[f"F{count}"]
+            count += 1
+
+        parameters_with_unc[f"PEPOCH_{i}"] = [
+            local_pars_uncs["PEPOCH"][0],
+            local_pars_uncs["PEPOCH"][1],
+        ]
+        parameters_with_unc[f"Phase_{i}"] = [
+            parameters_with_unc["Phase"][0],
+            parameters_with_unc["Phase"][1],
+        ]
+
+    # _calculate_phases expects file-specific phase keys.
+    del parameters_with_unc["Phase"]
+    parameters = {f: parameters_with_unc[f][0] for f in parameters_with_unc}
+    return parameters_with_unc, parameters
+
+
 def _prepare_templates_and_phase_priors(
     profile,
     profile_weight,
@@ -989,22 +1075,9 @@ def ell1fit(
     assert len(parfiles) == len(
         files
     ), "The number of parameter files must match that of event files."
-    model = []
-    pepoch = []
-
-    for i in range(n_files):
-        model.append(get_model(parfiles[i]))
-        pepoch.append(model[i].PEPOCH.value)
-
-        if hasattr(model[i], "T0") or model[i].BINARY.value != "ELL1":
-            raise ValueError("This script wants an ELL1 model, with TASC, not T0, defined")
-
-        model[i].change_binary_epoch(pepoch[i])
+    model, pepoch, ref_model = _load_and_validate_models(parfiles)
 
     nbin = max(32, nharm * 8)
-
-    ref_model = copy.deepcopy(model[0])
-    ref_model.change_binary_epoch(np.mean(pepoch))
 
     list_parameter_names = sorted(fit_parameters)
     get_outroot = _make_outroot_getter(
@@ -1017,58 +1090,19 @@ def ell1fit(
         general_outroot=general_outroot,
     )
 
-    times_from_pepoch = [[] for _ in range(n_files)]
-    observation_length = [[] for _ in range(n_files)]
-    energies = [[] for _ in range(n_files)]
-    expo = np.zeros(n_files)
-    for i in range(n_files):
-        fname = files[i]
-        times_from_pepoch[i], gtis, energies[i] = _load_and_format_events(
-            fname,
-            energy_range,
-            pepoch[i],
-            plotfile=get_outroot(i) + f"_lightcurve_{i}.jpg",
-            return_energy=True,
-            use_pi=False,
-        )
-        expo[i] += np.sum(np.diff(gtis, axis=1))
-
-        observation_length[i] = times_from_pepoch[i][-1] - times_from_pepoch[i][0]
-
-    parameters_with_unc = _get_par_dict(
-        ref_model, ignore_uncertainties=ignore_uncertainties, obs_length=np.min(observation_length)
+    times_from_pepoch, observation_length, energies, expo = _load_events_for_all_files(
+        files,
+        energy_range,
+        pepoch,
+        get_outroot,
     )
 
-    del parameters_with_unc["PEPOCH"]
-
-    for i in range(n_files):
-        count = 0
-        local_pars_uncs = _get_par_dict(
-            model[i], ignore_uncertainties=ignore_uncertainties, obs_length=observation_length[i]
-        )
-        while f"F{count}" in local_pars_uncs:
-            parameters_with_unc[f"F{count}_{i}"] = [
-                local_pars_uncs[f"F{count}"][0],
-                local_pars_uncs[f"F{count}"][1],
-            ]
-            if f"F{count}" in parameters_with_unc:
-                del parameters_with_unc[f"F{count}"]
-            count += 1
-
-        parameters_with_unc[f"PEPOCH_{i}"] = [
-            local_pars_uncs["PEPOCH"][0],
-            local_pars_uncs["PEPOCH"][1],
-        ]
-        parameters_with_unc[f"Phase_{i}"] = [
-            parameters_with_unc["Phase"][0],
-            parameters_with_unc["Phase"][1],
-        ]
-        #  I initialized the phases because _calculate_phases calls parameters[f"Phase_{i}"]
-    del parameters_with_unc["Phase"]
-
-    parameters = {}
-    for f in parameters_with_unc:
-        parameters[f] = parameters_with_unc[f][0]
+    parameters_with_unc, parameters = _build_parameters_from_models(
+        model,
+        ref_model,
+        observation_length,
+        ignore_uncertainties=ignore_uncertainties,
+    )
 
     parameter_names = _collect_parameter_names(
         parameters, list_parameter_names, likelihood_func=likelihood_func
