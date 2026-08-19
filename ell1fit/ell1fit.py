@@ -2453,9 +2453,7 @@ def ell1fit(
             weighted_z2 = z_n_gauss(profile_weight[i], err=err, n=nharm)
             logging.info(f"  + Z^2_{nharm} = {weighted_z2:.1f}")
             weighted_pulsed_fraction = (
-                (template.max() - template.min())
-                / (template.max() + template.min())
-                * 100
+                (template.max() - template.min()) / (template.max() + template.min()) * 100
             )
             logging.info(f"  + pulsed fraction (weighted) = {weighted_pulsed_fraction:.1f}%")
 
