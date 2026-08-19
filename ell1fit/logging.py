@@ -38,6 +38,22 @@ formatter = ColoredFormatter(
 handler = logging.StreamHandler(sys.stdout)
 handler.setFormatter(formatter)
 
-logger = logging.getLogger()
-logger.handlers[:] = []
-logger.addHandler(handler)
+logger = logging.getLogger("ell1fit")
+logger.addHandler(logging.NullHandler())
+
+
+def configure_logging(level: int = logging.INFO) -> None:
+    """Configure root logging for CLI execution.
+
+    This leaves library imports side-effect free and only attaches a console
+    handler when explicitly requested by command-line entry points.
+    """
+    root_logger = logging.getLogger()
+
+    if not any(getattr(h, "_ell1fit_handler", False) for h in root_logger.handlers):
+        cli_handler = logging.StreamHandler(sys.stdout)
+        cli_handler.setFormatter(formatter)
+        cli_handler._ell1fit_handler = True  # type: ignore[attr-defined]
+        root_logger.addHandler(cli_handler)
+
+    root_logger.setLevel(level)

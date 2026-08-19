@@ -4,9 +4,6 @@ except ImportError:
     __version__ = ""
 
 __all__ = ["__version__"]
-from .logging import logging, logger
-
-logger.setLevel(logging.INFO)
 
 
 def splitext_improved(path):

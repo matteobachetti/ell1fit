@@ -49,6 +49,7 @@ from scipy.stats import norm
 from numpy.fft import ifft, fft, fftfreq
 from . import version
 from .create_parfile import update_model
+from .logging import configure_logging
 
 params = {
     "font.size": 7,
@@ -2600,6 +2601,8 @@ def ell1fit(
 def main(args=None):
     """Main function called by the `ell1fit` script"""
     import argparse
+
+    configure_logging()
 
     description = "Fit an ELL1 model and frequency derivatives to an X-ray " "pulsar observation."
     parser = argparse.ArgumentParser(description=description)

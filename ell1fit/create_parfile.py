@@ -3,6 +3,7 @@ import os
 from astropy.table import Table
 from pint.models import get_model
 from . import splitext_improved
+from .logging import configure_logging
 import logging
 
 
@@ -98,6 +99,8 @@ def create_new_parfile(fname, parfile, newfile=None, include_info=True):
 def main(args=None):
     """Main function called by the `ell1par` script"""
     import argparse
+
+    configure_logging()
 
     description = "Fit an ELL1 model and frequency derivatives to an X-ray " "pulsar observation."
     parser = argparse.ArgumentParser(description=description)
