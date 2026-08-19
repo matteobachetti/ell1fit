@@ -49,8 +49,11 @@ ell1updatebinary = "ell1fit.update_binary:main"
 Homepage = "http://github.com/matteobachetti/ell1fit"
 Repository = "http://github.com/matteobachetti/ell1fit"
 
+[tool.setuptools]
+package-dir = {"" = "src"}
+
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["src"]
 include = ["ell1fit*"]
 
 [tool.setuptools.package-data]
@@ -58,18 +61,18 @@ include = ["ell1fit*"]
 "ell1fit.tests" = ["data/*"]
 
 [tool.setuptools_scm]
-write_to = "ell1fit/version.py"
+write_to = "src/ell1fit/version.py"
 
 [tool.pytest.ini_options]
-testpaths = ["ell1fit", "docs"]
+testpaths = ["src/ell1fit", "docs"]
 addopts = "--doctest-rst"
 text_file_format = "rst"
 
 [tool.coverage.run]
 omit = [
-    "ell1fit/conftest.py",
-    "ell1fit/tests/*",
-    "ell1fit/version*",
+    "src/ell1fit/conftest.py",
+    "src/ell1fit/tests/*",
+    "src/ell1fit/version*",
 ]
 
 [tool.coverage.report]
