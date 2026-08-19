@@ -83,7 +83,11 @@ params = {
     "figure.subplot.hspace": 0.2,  # the amount of height reserved for space between subplots,
     # expressed as a fraction of the average axis height
 }
-mpl.rcParams.update(params)
+
+
+def _plot_style_context():
+    """Return a matplotlib rc_context using the project plotting style."""
+    return mpl.rc_context(params)
 
 
 simple_freq_re = re.compile(r"^d?F([0-9]+)")
@@ -213,20 +217,21 @@ def pf_weight_versus_energy(
         )
 
         if plot_root_file_name is not None:
-            plt.figure(f"{plot_root_file_name[i]}")
-            plt.errorbar(
-                mid_energies,
-                amp,
-                yerr=amp_errs,
-                xerr=[mid_energies - energy_edges[:, 0], energy_edges[:, 1] - mid_energies],
-                fmt="o",
-            )
-            plt.semilogx(fine_energy_range, fine_amps, color="black", label="Estimated weight")
-            plt.plot(fine_energy_range, fine_amps_50, color="red", label="50% detection limit")
-            plt.plot(fine_energy_range, fine_amps_90, color="grey", label="90% detection limit")
-            plt.legend()
-            plt.savefig(f"{plot_root_file_name[i]}.jpg")
-            plt.close()
+            with _plot_style_context():
+                plt.figure(f"{plot_root_file_name[i]}")
+                plt.errorbar(
+                    mid_energies,
+                    amp,
+                    yerr=amp_errs,
+                    xerr=[mid_energies - energy_edges[:, 0], energy_edges[:, 1] - mid_energies],
+                    fmt="o",
+                )
+                plt.semilogx(fine_energy_range, fine_amps, color="black", label="Estimated weight")
+                plt.plot(fine_energy_range, fine_amps_50, color="red", label="50% detection limit")
+                plt.plot(fine_energy_range, fine_amps_90, color="grey", label="90% detection limit")
+                plt.legend()
+                plt.savefig(f"{plot_root_file_name[i]}.jpg")
+                plt.close()
 
         # Normalize weights so that the maximum expected pulsed amplitude maps
         # to weight=1. This keeps the weighted likelihood well behaved.
@@ -487,26 +492,27 @@ def create_template_from_profile_harm(
     additional_phase = phases_around_zero(additional_phase)
     template = template[:final_nbin].real
 
-    fig = plt.figure(figsize=(3.5, 2.65))
-    plt.plot(np.arange(0.5 / nbin, 1, 1 / nbin), profile, drawstyle="steps-mid", label="data")
-    plt.plot(phas[:final_nbin], template, label="template values", ls="--", lw=2)
-    plt.plot(
-        phas[:final_nbin],
-        template_func(phas[:final_nbin]),
-        label="template func",
-        ls=":",
-        lw=2,
-    )
-    plt.plot(
-        phas[:final_nbin],
-        template_func(phas[:final_nbin] - additional_phase),
-        label="template aligned",
-        lw=3,
-    )
-    plt.axvline(phases_from_zero_to_one(additional_phase))
-    plt.legend
-    plt.savefig(imagefile)
-    plt.close(fig)
+    with _plot_style_context():
+        fig = plt.figure(figsize=(3.5, 2.65))
+        plt.plot(np.arange(0.5 / nbin, 1, 1 / nbin), profile, drawstyle="steps-mid", label="data")
+        plt.plot(phas[:final_nbin], template, label="template values", ls="--", lw=2)
+        plt.plot(
+            phas[:final_nbin],
+            template_func(phas[:final_nbin]),
+            label="template func",
+            ls=":",
+            lw=2,
+        )
+        plt.plot(
+            phas[:final_nbin],
+            template_func(phas[:final_nbin] - additional_phase),
+            label="template aligned",
+            lw=3,
+        )
+        plt.axvline(phases_from_zero_to_one(additional_phase))
+        plt.legend
+        plt.savefig(imagefile)
+        plt.close(fig)
     return template * final_nbin / nbin, additional_phase
 
 
@@ -807,8 +813,9 @@ def plot_mcmc_results(
 
         flat_samples, _ = get_flat_samples(sampler)
 
-    fig = corner.corner(flat_samples, labels=labels, quantiles=[0.16, 0.5, 0.84], **plot_kwargs)
-    fig.savefig(fname, dpi=300)
+    with _plot_style_context():
+        fig = corner.corner(flat_samples, labels=labels, quantiles=[0.16, 0.5, 0.84], **plot_kwargs)
+        fig.savefig(fname, dpi=300)
 
 
 def safe_run_sampler(
@@ -1152,18 +1159,19 @@ def _compare_phaseograms(phase1, phase2, times, fname):
     fname : str
         Output figure filename.
     """
-    fig = plt.figure(figsize=(7, 7))
-    gs = plt.GridSpec(2, 2, height_ratios=(1, 3))
-    ax00 = plt.subplot(gs[0, 0])
-    ax10 = plt.subplot(gs[1, 0], sharex=ax00)
-    ax01 = plt.subplot(gs[0, 1], sharey=ax00)
-    ax11 = plt.subplot(gs[1, 1], sharex=ax01, sharey=ax10)
+    with _plot_style_context():
+        fig = plt.figure(figsize=(7, 7))
+        gs = plt.GridSpec(2, 2, height_ratios=(1, 3))
+        ax00 = plt.subplot(gs[0, 0])
+        ax10 = plt.subplot(gs[1, 0], sharex=ax00)
+        ax01 = plt.subplot(gs[0, 1], sharey=ax00)
+        ax11 = plt.subplot(gs[1, 1], sharex=ax01, sharey=ax10)
 
-    _plot_phaseogram(phases_from_zero_to_one(phase1), times, ax00, ax10)
-    _plot_phaseogram(phases_from_zero_to_one(phase2), times, ax01, ax11)
+        _plot_phaseogram(phases_from_zero_to_one(phase1), times, ax00, ax10)
+        _plot_phaseogram(phases_from_zero_to_one(phase2), times, ax01, ax11)
 
-    plt.savefig(fname)
-    plt.close(fig)
+        plt.savefig(fname)
+        plt.close(fig)
 
 
 def _list_zoom_factors(input_fit_par_labels, zoom):
@@ -1551,10 +1559,11 @@ def _load_and_format_events(
     if plotlc:
         lc = events.to_lc(100)
 
-        fig = plt.figure("LC", figsize=(3.5, 2.65))
-        lc.plot(ax=plt.gca())
-        plt.savefig(plotfile)
-        plt.close(fig)
+        with _plot_style_context():
+            fig = plt.figure("LC", figsize=(3.5, 2.65))
+            lc.plot(ax=plt.gca())
+            plt.savefig(plotfile)
+            plt.close(fig)
 
     if energy_range is not None:
         events.filter_energy_range(energy_range, inplace=True)
@@ -2399,10 +2408,11 @@ def ell1fit(
         profile_weight = folded_profile(
             times_from_pepoch, parameters, weights, nbin=nbin, tolerance=tolerance
         )
-        for p, pw in zip(profile, profile_weight):
-            plt.figure()
-            plt.plot(np.concatenate((p, p)) / p.max())
-            plt.plot(np.concatenate((pw, pw)) / pw.max())
+        with _plot_style_context():
+            for p, pw in zip(profile, profile_weight):
+                plt.figure()
+                plt.plot(np.concatenate((p, p)) / p.max())
+                plt.plot(np.concatenate((pw, pw)) / pw.max())
 
     else:
         profile_weight = profile
@@ -2500,11 +2510,12 @@ def ell1fit(
             ),
             likelihood_func=likelihood_func,
         )
-        plt.figure("trace_" + parameter)
-        plt.plot(list(results_trace.keys()), list(results_trace.values()))
-        plt.axvline(parameters[parameter], color="k", ls="--")
-        plt.xlabel(parameter)
-        plt.ylabel("log likelihood")
+        with _plot_style_context():
+            plt.figure("trace_" + parameter)
+            plt.plot(list(results_trace.keys()), list(results_trace.values()))
+            plt.axvline(parameters[parameter], color="k", ls="--")
+            plt.xlabel(parameter)
+            plt.ylabel("log likelihood")
         ll_values = np.array(
             [ll for ll in list(results_trace.values()) if not np.isnan(ll) and not np.isinf(ll)]
         )
