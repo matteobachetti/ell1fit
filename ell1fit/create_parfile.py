@@ -1,11 +1,12 @@
 import copy
+import os
 from astropy.table import Table
 from pint.models import get_model
 from . import splitext_improved
 import logging
 
 
-def update_model(model, value_dict):
+def update_model(model, value_dict, include_info=True):
     if hasattr(value_dict, "colnames"):
         value_dict = dict((key, value_dict[key]) for key in value_dict.colnames)
     new_model = copy.deepcopy(model)
@@ -73,23 +74,24 @@ def update_model(model, value_dict):
         getattr(new_model, par).uncertainty_value = err
         getattr(new_model, par).frozen = False
 
+    include_info = include_info and os.name != "nt"
     try:
-        # This fails on windows
-        logging.info(new_model.as_parfile())
+        logging.info(new_model.as_parfile(include_info=include_info))
     except Exception as e:
         print(e)
         pass
     return new_model
 
 
-def create_new_parfile(fname, parfile, newfile=None):
+def create_new_parfile(fname, parfile, newfile=None, include_info=True):
     model = get_model(parfile)
     row = Table.read(fname)[-1]
-    new_model = update_model(model, row)
+    new_model = update_model(model, row, include_info=include_info)
+    include_info = include_info and os.name != "nt"
     if newfile is None:
         newfile = splitext_improved(fname)[0] + ".par"
     with open(newfile, "w") as fobj:
-        print(new_model.as_parfile(), file=fobj)
+        print(new_model.as_parfile(include_info=include_info), file=fobj)
     return newfile
 
 
@@ -113,9 +115,14 @@ def main(args=None):
         ),
         required=True,
     )
+    parser.add_argument(
+        "--no-include-info",
+        action="store_true",
+        help="Disable metadata header in output par files.",
+    )
 
     args = parser.parse_args(args)
 
     for fname in args.files:
         # Read latest measurement
-        create_new_parfile(fname, args.parfile)
+        create_new_parfile(fname, args.parfile, include_info=not args.no_include_info)
