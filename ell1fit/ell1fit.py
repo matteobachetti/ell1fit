@@ -608,6 +608,79 @@ def _prepare_templates_and_phase_priors(
     return template_func, pulsed_frac, parameters, logprior_funcs
 
 
+def _build_profiles_and_weights(
+    times_from_pepoch,
+    parameters,
+    energies,
+    n_files,
+    get_outroot,
+    use_weight,
+    nbin,
+    tolerance,
+):
+    """Fold profiles and optionally compute energy-based event weights."""
+    profile = folded_profile(times_from_pepoch, parameters, nbin=nbin, tolerance=tolerance)
+
+    weights = None
+    if use_weight:
+        weights = pf_weight_versus_energy(
+            times_from_pepoch,
+            energies,
+            parameters,
+            nbin=32,
+            nharm=1,
+            tolerance=1e-8,
+            plot_root_file_name=[get_outroot(i) + "_pf_weight_spectrum" for i in range(n_files)],
+        )
+
+        profile_weight = folded_profile(
+            times_from_pepoch, parameters, weights, nbin=nbin, tolerance=tolerance
+        )
+        with _plot_style_context():
+            for p, pw in zip(profile, profile_weight):
+                plt.figure()
+                plt.plot(np.concatenate((p, p)) / p.max())
+                plt.plot(np.concatenate((pw, pw)) / pw.max())
+    else:
+        profile_weight = profile
+
+    return profile, profile_weight, weights
+
+
+def _prepare_fit_setup(
+    parameters,
+    list_parameter_names,
+    likelihood_func,
+    parameters_with_unc,
+    observation_length,
+    model,
+):
+    """Collect fit parameters, priors, factors, and initial fit values."""
+    parameter_names = _collect_parameter_names(
+        parameters,
+        list_parameter_names,
+        likelihood_func=likelihood_func,
+    )
+    logprior_funcs = assign_logpriors(
+        parameter_names,
+        parameters_with_unc,
+        obs_length=observation_length,
+    )
+    factors = get_factors(
+        parameter_names,
+        model,
+        observation_length,
+        parvalunc=parameters_with_unc,
+    )
+
+    try:
+        input_mean_fit_pars = [parameters[par] for par in parameter_names]
+    except KeyError as exc:
+        raise ValueError("One or more parameters are missing from the parameter file") from exc
+
+    return parameter_names, logprior_funcs, factors, input_mean_fit_pars
+
+
 def _trace_phase_0_likelihood(
     parameter_names,
     times_from_pepoch,
@@ -899,6 +972,45 @@ def _build_posterior_functions(
     return logprior, local_phases, func_to_maximize
 
 
+def _plot_phaseogram_set(reference_phases, fitted_phases, times_from_pepoch, outroot, suffix=""):
+    """Plot reference vs fitted phaseograms for each input file."""
+    for i in range(len(times_from_pepoch)):
+        _compare_phaseograms(
+            reference_phases[i],
+            phases_from_zero_to_one(fitted_phases[i]),
+            times_from_pepoch[i],
+            fname=outroot[i] + suffix + ".jpg",
+        )
+
+
+def _augment_results_with_fit_metadata(
+    results,
+    fit_parameters,
+    fit_pars,
+    values,
+    factors,
+    phase_source,
+):
+    """Store local-fit summaries and scaling metadata in sampler output."""
+    rough_results = {}
+    for par, value in zip(fit_parameters, fit_pars):
+        rough_results["rough_d" + par] = value
+
+    count = 0
+    while f"Phase_{count}" in phase_source:
+        results[f"additional_phase_{count}"] = phase_source[f"Phase_{count}"]
+        count += 1
+
+    results.update(rough_results)
+
+    for par, initial, f in zip(fit_parameters, values, factors):
+        results["d" + par + "_mean"] = results["d" + par + "_50"]
+        results["d" + par + "_initial"] = initial
+        results["d" + par + "_factor"] = f
+
+    return results
+
+
 def optimize_solution(
     times_from_pepoch,
     model_parameters,
@@ -965,17 +1077,9 @@ def optimize_solution(
         pars_dict[par] = value * f + initial
 
     phases = local_phases(fit_pars)
+    phases_zero = local_phases(all_zeros)
 
-    rough_results = {}
-    for par, value, f in zip(fit_parameters, fit_pars, factors):
-        rough_results["rough_d" + par] = value
-    for i in range(len(times_from_pepoch)):
-        _compare_phaseograms(
-            local_phases(all_zeros)[i],
-            phases_from_zero_to_one(phases[i]),
-            times_from_pepoch[i],
-            fname=outroot[i] + ".jpg",
-        )
+    _plot_phaseogram_set(phases_zero, phases, times_from_pepoch, outroot, suffix="")
 
     corner_labels = [
         "d" + par + f"{np.log10(fac):+g}" for (par, fac) in zip(fit_parameters, factors)
@@ -989,28 +1093,20 @@ def optimize_solution(
         corner_labels=corner_labels,
     )
 
-    count = 0
-    while f"Phase_{count}" in pars_dict:
-        results[f"additional_phase_{count}"] = pars_dict[f"Phase_{count}"]
-        count += 1
-
     results.update(model_parameters)
-    results.update(rough_results)
-    for par, initial, f in zip(fit_parameters, values, factors):
-        results["d" + par + "_mean"] = results["d" + par + "_50"]
-        results["d" + par + "_initial"] = initial
-        results["d" + par + "_factor"] = f
+    results = _augment_results_with_fit_metadata(
+        results,
+        fit_parameters,
+        fit_pars,
+        values,
+        factors,
+        phase_source=pars_dict,
+    )
 
     fit_pars = [results["d" + par + "_50"] for par in fit_parameters]
     phases = local_phases(fit_pars)
 
-    for i in range(len(times_from_pepoch)):
-        _compare_phaseograms(
-            local_phases(all_zeros)[i],
-            phases_from_zero_to_one(phases[i]),
-            times_from_pepoch[i],
-            fname=outroot[i] + "_final.jpg",
-        )
+    _plot_phaseogram_set(phases_zero, phases, times_from_pepoch, outroot, suffix="_final")
 
     return results
 
@@ -1104,45 +1200,25 @@ def ell1fit(
         ignore_uncertainties=ignore_uncertainties,
     )
 
-    parameter_names = _collect_parameter_names(
-        parameters, list_parameter_names, likelihood_func=likelihood_func
-    )
-
-    logprior_funcs = assign_logpriors(
-        parameter_names, parameters_with_unc, obs_length=observation_length
-    )
-    factors = get_factors(
-        parameter_names,
-        model,
+    parameter_names, logprior_funcs, factors, input_mean_fit_pars = _prepare_fit_setup(
+        parameters,
+        list_parameter_names,
+        likelihood_func,
+        parameters_with_unc,
         observation_length,
-        parvalunc=parameters_with_unc,
+        model,
     )
 
-    profile = folded_profile(times_from_pepoch, parameters, nbin=nbin, tolerance=tolerance)
-
-    weights = None
-    if use_weight:
-        weights = pf_weight_versus_energy(
-            times_from_pepoch,
-            energies,
-            parameters,
-            nbin=32,
-            nharm=1,
-            tolerance=1e-8,
-            plot_root_file_name=[get_outroot(i) + "_pf_weight_spectrum" for i in range(n_files)],
-        )
-
-        profile_weight = folded_profile(
-            times_from_pepoch, parameters, weights, nbin=nbin, tolerance=tolerance
-        )
-        with _plot_style_context():
-            for p, pw in zip(profile, profile_weight):
-                plt.figure()
-                plt.plot(np.concatenate((p, p)) / p.max())
-                plt.plot(np.concatenate((pw, pw)) / pw.max())
-
-    else:
-        profile_weight = profile
+    profile, profile_weight, weights = _build_profiles_and_weights(
+        times_from_pepoch,
+        parameters,
+        energies,
+        n_files,
+        get_outroot,
+        use_weight,
+        nbin,
+        tolerance,
+    )
 
     template_func, pulsed_frac, parameters, logprior_funcs = _prepare_templates_and_phase_priors(
         profile,
@@ -1157,11 +1233,6 @@ def ell1fit(
         logprior_funcs,
         parameters,
     )
-
-    try:
-        input_mean_fit_pars = [parameters[par] for par in parameter_names]
-    except KeyError:
-        raise ValueError("One or more parameters are missing from the parameter file")
 
     outroots = _get_outroots(get_outroot, n_files)
 
