@@ -376,6 +376,72 @@ def _get_outroots(get_outroot, n_files):
     return outroots
 
 
+def _enrich_results_with_observation_metadata(
+    results,
+    model,
+    times_from_pepoch,
+    pepoch,
+    files,
+    expo,
+    pulsed_frac,
+    profile,
+    nharm,
+    energy_range,
+    nsteps,
+):
+    """Attach observation-level metadata fields to fit results."""
+    n_files = len(files)
+
+    for i in range(n_files):
+        if getattr(model[i], "START", None) is not None and model[i].START.value is not None:
+            results[f"Start_{i}"] = model[i].START.value
+        else:
+            results[f"Start_{i}"] = times_from_pepoch[i][0] / 86400 + pepoch[i]
+
+        if getattr(model[i], "STOP", None) is not None and model[i].STOP.value is not None:
+            results[f"Stop_{i}"] = model[i].STOP.value
+        else:
+            results[f"Stop_{i}"] = times_from_pepoch[i][-1] / 86400 + pepoch[i]
+
+        results[f"PEPOCH_{i}"] = pepoch[i]
+        results[f"fname_{i}"] = files[i]
+
+    results["nharm"] = nharm
+    results["emin"] = 0 if energy_range is None else energy_range[0]
+    results["emax"] = np.inf if energy_range is None else energy_range[1]
+    results["nsteps"] = nsteps
+
+    for i in range(n_files):
+        results[f"pf_{i}"] = pulsed_frac[i]
+        results[f"Z11_{i}"] = z_n_binned_events(profile[i], nharm)
+        results[f"ctrate_{i}"] = times_from_pepoch[i].size / expo[i]
+
+    results["ell1fit_version"] = version.version
+    return results
+
+
+def _write_results_products(results, n_files, get_outroot, list_parameter_names, model):
+    """Write combined and per-file result tables plus updated parfiles."""
+    table_results = Table(rows=[results])
+    output_file = get_outroot(None) + "_results.ecsv"
+    safe_save(table_results, output_file)
+
+    split_tables = split_output_results(table_results, n_files, list_parameter_names)
+    for i, table in enumerate(split_tables):
+        outfile = get_outroot(i) + "_results.ecsv"
+        table.write(outfile, overwrite=True)
+        logging.info(f"Writing {outfile}")
+        logging.info(table)
+
+        outpar = get_outroot(i) + "_results.par"
+        new_model = update_model(model[i], table[-1])
+        logging.info(f"Writing model to {outpar}")
+        with open(outpar, "w") as fobj:
+            print(new_model.as_parfile(include_info=os.name != "nt"), file=fobj)
+
+    return output_file
+
+
 def _get_par_dict(
     model,
     ignore_uncertainties=False,
@@ -1033,62 +1099,21 @@ def ell1fit(
         likelihood_func=likelihood_func,
         weights=weights if use_weight else None,
     )
+    results = _enrich_results_with_observation_metadata(
+        results,
+        model,
+        times_from_pepoch,
+        pepoch,
+        files,
+        expo,
+        pulsed_frac,
+        profile,
+        nharm,
+        energy_range,
+        nsteps,
+    )
 
-    for i in range(n_files):
-        if getattr(model[i], "START", None) is not None and model[i].START.value is not None:
-            results[f"Start_{i}"] = model[i].START.value
-        else:
-            results[f"Start_{i}"] = times_from_pepoch[i][0] / 86400 + pepoch[i]
-        if getattr(model[i], "STOP", None) is not None and model[i].STOP.value is not None:
-            results[f"Stop_{i}"] = model[i].STOP.value
-        else:
-            results[f"Stop_{i}"] = times_from_pepoch[i][-1] / 86400 + pepoch[i]
-
-    for i in range(n_files):
-        results[f"PEPOCH_{i}"] = pepoch[i]
-
-    for i in range(n_files):
-        results[f"fname_{i}"] = files[i]
-
-    results["nharm"] = nharm
-    results["emin"] = 0 if energy_range is None else energy_range[0]
-    results["emax"] = np.inf if energy_range is None else energy_range[1]
-    results["nsteps"] = nsteps
-
-    for i in range(n_files):
-        results[f"pf_{i}"] = pulsed_frac[i]
-        results[f"Z11_{i}"] = z_n_binned_events(profile[i], nharm)
-
-    for i in range(n_files):
-        results[f"ctrate_{i}"] = times_from_pepoch[i].size / expo[i]
-
-    results["ell1fit_version"] = version.version
-
-    list_result = []
-    for i in range(n_files):
-        list_result.append(copy.deepcopy(results))
-
-    results = Table(rows=[results])
-
-    output_file = get_outroot(None) + "_results.ecsv"
-
-    safe_save(results, output_file)
-
-    list_result = split_output_results(results, n_files, list_parameter_names)
-
-    for i, table in enumerate(list_result):
-        outfile = get_outroot(i) + "_results.ecsv"
-        table.write(outfile, overwrite=True)
-        logging.info(f"Writing {outfile}")
-        logging.info(table)
-
-        outpar = get_outroot(i) + "_results.par"
-        new_model = update_model(model[i], table[-1])
-        logging.info(f"Writing model to {outpar}")
-        with open(outpar, "w") as fobj:
-            print(new_model.as_parfile(include_info=os.name != "nt"), file=fobj)
-
-    return output_file
+    return _write_results_products(results, n_files, get_outroot, list_parameter_names, model)
 
 
 def main(args=None):
