@@ -35,7 +35,6 @@ from pint.models import get_model
 
 from scipy.interpolate import interp1d
 
-from numba import njit, vectorize, int64, float32, float64, prange
 from astropy.table import Table
 from scipy.ndimage import gaussian_filter
 from scipy.optimize import minimize
@@ -50,6 +49,18 @@ from .mcmc_utils import calculate_result_array_from_samples  # noqa: F401
 from .mcmc_utils import get_flat_samples  # noqa: F401
 from .mcmc_utils import plot_mcmc_results  # noqa: F401
 from .mcmc_utils import safe_run_sampler
+from .phase_utils import _calculate_phases
+from .phase_utils import _mjd_to_sec
+from .phase_utils import _sec_to_mjd  # noqa: F401
+from .phase_utils import add_circular_orbit_numba  # noqa: F401
+from .phase_utils import add_ell1_orbit_numba  # noqa: F401
+from .phase_utils import fast_phase  # noqa: F401
+from .phase_utils import folded_profile
+from .phase_utils import interp_nb  # noqa: F401
+from .phase_utils import phases_around_zero
+from .phase_utils import phases_from_zero_to_one
+from .phase_utils import simple_circular_deorbit_numba  # noqa: F401
+from .phase_utils import simple_ell1_deorbit_numba  # noqa: F401
 from .plotting import plot_style_context as _plot_style_context
 from .priors import _flat_logprior, assign_logpriors
 from .results_io import _format_energy_string
@@ -228,27 +239,6 @@ def pf_weight_versus_energy(
     return weights
 
 
-@njit
-def interp_nb(x_vals, x, y):
-    """Numba-friendly wrapper around :func:`numpy.interp`.
-
-    Parameters
-    ----------
-    x_vals : np.ndarray
-        Coordinates where interpolation is evaluated.
-    x : np.ndarray
-        Monotonic sample coordinates.
-    y : np.ndarray
-        Sample values at ``x``.
-
-    Returns
-    -------
-    np.ndarray
-        Interpolated values at ``x_vals``.
-    """
-    return np.interp(x_vals, x, y)
-
-
 def normalize_dyn_profile(dynprof, norm):
     """Normalize a dynamical profile (e.g. a phaseogram).
     Parameters
@@ -326,39 +316,6 @@ def normalize_dyn_profile(dynprof, norm):
     else:
         warnings.warn(f"Profile normalization {norm} not known. Using default")
     return dynprof
-
-
-@vectorize([(int64,), (float32,), (float64,)])
-def phases_from_zero_to_one(phase):
-    """Normalize pulse phases from 0 to 1
-    Examples
-    --------
-    >>> assert np.isclose(phases_from_zero_to_one(0.1), 0.1)
-    >>> assert np.isclose(phases_from_zero_to_one(-0.9), 0.1)
-    >>> assert np.isclose(phases_from_zero_to_one(0.9), 0.9)
-    >>> assert np.isclose(phases_from_zero_to_one(3.1), 0.1)
-    >>> assert np.allclose(phases_from_zero_to_one([0.1, 3.1, -0.9]), 0.1)
-    """
-
-    return phase - np.floor(phase)
-
-
-@vectorize([(int64,), (float32,), (float64,)])
-def phases_around_zero(phase):
-    """Normalize pulse phases from -0.5 to 0.5
-    Examples
-    --------
-    >>> assert np.isclose(phases_around_zero(0.6), -0.4)
-    >>> assert np.isclose(phases_around_zero(-0.9), 0.1)
-    >>> assert np.isclose(phases_around_zero(3.9), -0.1)
-    >>> assert np.allclose(phases_around_zero([0.6, -0.4]), -0.4)
-    """
-    ph = phase - np.floor(phase)
-    while ph >= 0.5:
-        ph -= 1.0
-    while ph < -0.5:
-        ph += 1.0
-    return ph
 
 
 def create_template_from_profile_harm(
@@ -514,96 +471,6 @@ def get_template_func(template):
     return template_fun
 
 
-@njit(fastmath=True, parallel=True)
-def simple_circular_deorbit_numba(times, PB, A1, TASC, tolerance=1e-8):
-    """Iteratively remove circular-orbit delays from event times.
-
-    Parameters are in ELL1-compatible units: ``times`` and ``TASC`` in seconds,
-    ``PB`` in seconds, and ``A1`` in light-seconds.
-
-    Returns
-    -------
-    np.ndarray
-        Deorbited event times.
-    """
-    twopi = 2 * np.pi
-    omega = twopi / PB
-    out_times = np.empty_like(times)
-    for i in prange(times.size):
-        old_out = 0
-        t = times[i] - TASC
-        out_times[i] = t - A1 * np.sin(omega * t)
-        while np.abs(out_times[i] - old_out) > tolerance:
-            old_out = out_times[i]
-            out_times[i] = t - A1 * np.sin(omega * out_times[i])
-        out_times[i] += TASC
-
-        # out_times[i] = times[i] - A1 * np.sin(omega * (out_times[i] - TASC))
-    return out_times
-
-
-def add_circular_orbit_numba(times, PB, A1, TASC):
-    """Apply circular-orbit delays to times using a sinusoidal model.
-
-    Returns
-    -------
-    np.ndarray
-        Arrival times including circular orbital delays.
-    """
-    twopi = 2 * np.pi
-    omega = twopi / PB
-    return times + A1 * np.sin(omega * (times - TASC))
-
-
-@njit(fastmath=True, parallel=True)
-def simple_ell1_deorbit_numba(times, PB, A1, TASC, EPS1, EPS2, tolerance=1e-8):
-    """Iteratively remove ELL1 orbital delays from event times.
-
-    This solves the implicit ELL1 delay equation by fixed-point iteration for
-    each event time.
-
-    Returns
-    -------
-    np.ndarray
-        Deorbited event times.
-    """
-    twopi = 2 * np.pi
-    omega = twopi / PB
-    out_times = np.empty_like(times)
-    k1 = EPS1 / 2
-    k2 = EPS2 / 2
-    for i in prange(times.size):
-        old_out = 0
-        t = times[i] - TASC
-        out_times[i] = t - A1 * np.sin(omega * t)
-        while np.abs(out_times[i] - old_out) > tolerance:
-            old_out = out_times[i]
-            phase = omega * out_times[i]
-            twophase = 2 * phase
-            out_times[i] = t - A1 * (np.sin(phase) + k1 * np.sin(twophase) + k2 * np.cos(twophase))
-        out_times[i] += TASC
-
-        # out_times[i] = times[i] - A1 * np.sin(omega * (out_times[i] - TASC))
-    return out_times
-
-
-def add_ell1_orbit_numba(times, PB, A1, TASC, EPS1, EPS2):
-    """Apply ELL1 orbital delays to times (forward model).
-
-    Returns
-    -------
-    np.ndarray
-        Arrival times including ELL1 delays.
-    """
-    twopi = 2 * np.pi
-    omega = twopi / PB
-    phase = omega * (times - TASC)
-    twophase = 2 * phase
-    k1 = EPS1 / 2
-    k2 = EPS2 / 2
-    return times + A1 * (np.sin(phase) + k1 * np.sin(twophase) + k2 * np.cos(twophase))
-
-
 def renormalize_results(results, name, result_name, mean, factor):
     """
     Examples
@@ -717,189 +584,6 @@ def _list_zoom_factors(input_fit_par_labels, zoom):
     return factors
 
 
-def _mjd_to_sec(mjd, mjdref):
-    """Convert MJD timestamps to seconds from ``mjdref``.
-
-    Returns
-    -------
-    np.ndarray or float
-        Seconds from ``mjdref``.
-    """
-    return ((mjd - mjdref) * 86400).astype(float)
-
-
-def _sec_to_mjd(met, mjdref):
-    """Convert seconds from ``mjdref`` back to MJD.
-
-    Returns
-    -------
-    np.ndarray or float
-        MJD values.
-    """
-    return met / 86400 + mjdref
-
-
-@njit(parallel=True)
-def _fast_phase_fdot(ts, mean_f, mean_fdot):
-    """Compute absolute phase for a spin model with ``F0`` and ``F1``."""
-    phases = ts * mean_f + 0.5 * ts * ts * mean_fdot
-    return phases
-
-
-ONE_SIXTH = 1 / 6
-
-
-@njit(parallel=True)
-def _fast_phase_fddot(ts, mean_f, mean_fdot, mean_fddot):
-    """Compute absolute phase for a spin model with ``F0``, ``F1``, and ``F2``."""
-    tssq = ts * ts
-    phases = ts * mean_f + 0.5 * tssq * mean_fdot + ONE_SIXTH * tssq * ts * mean_fddot
-    return phases
-
-
-@njit(parallel=True)
-def _fast_phase(ts, mean_f):
-    """Compute absolute phase for a constant-frequency model (``F0`` only)."""
-    phases = ts * mean_f
-    return phases
-
-
-@njit(parallel=True)
-def _fast_phase_generic(times, frequency_derivatives):
-    r"""Compute absolute phase for an arbitrary number of frequency derivatives.
-
-    The phase polynomial is evaluated as
-    :math:`\phi(t)=\sum_{k\ge0} F_k t^{k+1}/(k+1)!`.
-    """
-    if len(frequency_derivatives) == 1:
-        return times / frequency_derivatives[0]
-
-    fact = 1.0
-    n = 0.0
-    ph = np.zeros_like(times)
-
-    t_pow = np.ones_like(times)
-
-    for f in frequency_derivatives:
-        t_pow *= times
-        n += 1
-        fact *= n
-        ph += (1 / fact * f) * t_pow
-
-    return ph
-
-
-def fast_phase(times, frequency_derivatives):
-    """
-    Calculate pulse phase from the frequency and its derivatives.
-    Parameters
-    ----------
-    times : array of floats
-        The times at which the phase is calculated
-    *frequency_derivatives: floats
-        List of derivatives in increasing order, starting from zero.
-    Returns
-    -------
-    phases : array of floats
-        The absolute pulse phase
-    Examples
-    --------
-    >>> from stingray.pulse import pulse_phase
-    >>> times = np.random.uniform(0, 100000, 100)
-    >>> ph1 = fast_phase(times, [0.2123, 1e-5, 1e-9, 1e-15])
-    >>> ph2 = pulse_phase(times, 0.2123, 1e-5, 1e-9, 1e-15, ph0=0, to_1=False)
-    >>> np.allclose(ph1, ph2)
-    True
-    """
-    if len(frequency_derivatives) == 1:
-        return _fast_phase(times, frequency_derivatives[0])
-    elif len(frequency_derivatives) == 2:
-        return _fast_phase_fdot(times, frequency_derivatives[0], frequency_derivatives[1])
-    elif len(frequency_derivatives) == 3:
-        return _fast_phase_fddot(
-            times,
-            frequency_derivatives[0],
-            frequency_derivatives[1],
-            frequency_derivatives[2],
-        )
-
-    return _fast_phase_generic(times, np.array(frequency_derivatives))
-
-
-def _calculate_phases(times_from_pepoch, pars_dict, tolerance=1e-8):
-    """Compute pulse phases for each file given spin and ELL1 orbital parameters.
-
-    Steps per file are: convert ``TASC`` to seconds from that file PEPOCH,
-    deorbit event times with the ELL1 approximation, evaluate the spin phase
-    polynomial, and wrap phases to [0, 1).
-
-    Parameters
-    ----------
-    times_from_pepoch : list of np.ndarray
-        Event times in seconds from each file-specific PEPOCH.
-    pars_dict : dict
-        Parameter dictionary containing shared orbital terms (``PB``, ``A1``,
-        ``EPS1``, ``EPS2``, ``TASC``) and per-file spin/phase terms
-        (``F0_i``, ``F1_i``, ..., ``Phase_i``, ``PEPOCH_i``).
-    tolerance : float, optional
-        Deorbit iteration tolerance in seconds.
-
-    Returns
-    -------
-    list of np.ndarray
-        Wrapped phases per file.
-    """
-    n_files = len(times_from_pepoch)
-    list_phases_from_zero_to_one = []
-    pb = pars_dict["PB"]
-    # NB: No PBDOT correction needed, we changed the binary model epoch at the start
-    # of the processing!
-    for i in range(n_files):
-        tasc_raw = _mjd_to_sec(pars_dict["TASC"], pars_dict[f"PEPOCH_{i}"])
-        # TASC is periodic with PB. Wrap to the principal interval to keep the
-        # likelihood continuous and avoid sampler artifacts from equivalent
-        # orbital-cycle solutions.
-        tasc = ((tasc_raw + 0.5 * pb) % pb) - 0.5 * pb
-        if np.abs(tasc_raw - tasc) > 1e-9:
-            warnings.warn("Wrapping TASC to the principal interval modulo PB")
-
-        deorbit_times_from_pepoch = simple_ell1_deorbit_numba(
-            times_from_pepoch[i],
-            pb,
-            pars_dict["A1"],
-            tasc,
-            pars_dict["EPS1"],
-            pars_dict["EPS2"],
-            tolerance=tolerance,
-        )
-
-        deorbited_pepoch = simple_ell1_deorbit_numba(
-            np.array([0.0]),
-            pb,
-            pars_dict["A1"],
-            tasc,
-            pars_dict["EPS1"],
-            pars_dict["EPS2"],
-            tolerance=tolerance,
-        )
-
-        count = 0
-        freq_ders = []
-        while f"F{count}_{i}" in pars_dict:
-            freq_ders.append(float(pars_dict[f"F{count}_{i}"]))
-            count += 1
-
-        phase_pepoch = fast_phase(deorbited_pepoch.astype(float), freq_ders)
-
-        phases = (
-            pars_dict[f"Phase_{i}"]
-            - phase_pepoch
-            + fast_phase(deorbit_times_from_pepoch.astype(float), freq_ders)
-        )
-        list_phases_from_zero_to_one.append(phases_from_zero_to_one(phases.astype(float)))
-    return list_phases_from_zero_to_one
-
-
 def estimate_weighted_profile_std(weights, nbin=16, ntrials=100):
     """Estimate expected weighted-profile scatter under pure noise.
 
@@ -928,43 +612,6 @@ def estimate_weighted_profile_std(weights, nbin=16, ntrials=100):
     )
 
     return std
-
-
-def folded_profile(times, parameters, weights=None, nbin=16, tolerance=1e-8):
-    """Fold events into pulse profiles for one or multiple files.
-
-    Parameters
-    ----------
-    times : list of np.ndarray
-        Event times in seconds from PEPOCH, one array per file.
-    parameters : dict
-        Timing model parameters used to compute phases.
-    weights : list of np.ndarray or None, optional
-        Optional per-event weights for weighted folding.
-    nbin : int, optional
-        Number of phase bins.
-    tolerance : float, optional
-        Deorbiting tolerance in seconds.
-
-    Returns
-    -------
-    list of np.ndarray
-        Folded profile (counts or weighted counts) per file.
-    """
-    n_files = len(times)
-    phases = _calculate_phases(times, parameters, tolerance=tolerance)
-    profile = []
-    for i in range(n_files):
-        if weights is None:
-            profile.append(
-                np.histogram(phases[i], bins=np.linspace(0, 1, nbin + 1))[0],
-            )
-        else:
-            profile.append(
-                np.histogram(phases[i], bins=np.linspace(0, 1, nbin + 1), weights=weights[i])[0],
-            )
-
-    return profile
 
 
 def _get_par_dict(
