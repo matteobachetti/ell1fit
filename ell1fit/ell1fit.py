@@ -2581,7 +2581,7 @@ def ell1fit(
         new_model = update_model(model[i], table[-1])
         logging.info(f"Writing model to {outpar}")
         with open(outpar, "w") as fobj:
-            print(new_model.as_parfile(), file=fobj)
+            print(new_model.as_parfile(include_info=os.name != "nt"), file=fobj)
 
     return output_file
 
