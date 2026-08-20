@@ -14,6 +14,7 @@ Main stages are:
 The high-level entry point is :func:`ell1fit`; :func:`main` exposes the CLI.
 """
 
+import dataclasses
 import logging
 import os
 import re
@@ -39,6 +40,7 @@ from .phase_utils import _calculate_phases
 from .phase_utils import folded_profile
 from .phase_utils import phases_around_zero
 from .plotting import plot_style_context as _plot_style_context
+from .posterior import _build_posterior_functions
 from .posterior import _trace_phase_0_likelihood
 from .priors import assign_logpriors
 from .templates import create_template_from_profile_harm
@@ -48,6 +50,7 @@ from .refinement import refine_templates_and_solution
 from .results_io import safe_save
 from .results_io import split_output_results
 from .scaling import get_factors
+from .scaling import precondition_factors
 from .setup_types import FitSetup
 from .setup_types import ObservationSet
 from .weighting import pf_weight_versus_energy
@@ -508,6 +511,23 @@ def ell1fit(
     # _trace_phase_0_likelihood moves each Phase_i to its best-fit value, so
     # re-centre the local coordinate system before handing it to the optimizer.
     setup = setup.with_baseline_from(parameters)
+
+    # Put every fitted direction on a comparable local scale before anything
+    # tries to optimize or sample. Done after the Phase_i trace, which scans in
+    # units of the pre-existing factors, and before refinement, so that both the
+    # point estimates and the MCMC see a well-conditioned problem.
+    setup = dataclasses.replace(
+        setup,
+        factors=precondition_factors(
+            _build_posterior_functions(observations, setup)[2],
+            setup.factors,
+            setup.n_parameters,
+        ),
+    )
+    logging.info(
+        "Preconditioned parameter scales: "
+        + ", ".join(f"{n}={f:.4g}" for n, f in zip(setup.parameter_names, setup.factors))
+    )
 
     # Capture the "before" phases now, while the baseline still describes the
     # solution this run started from. Refinement re-centres the baseline on its

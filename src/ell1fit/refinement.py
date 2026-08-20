@@ -32,11 +32,13 @@ bias against an injected truth rather than assuming it is negligible.
 
 Two safeguards follow from that:
 
-* **Convergence is judged in parameter space**, as ``max_k |dtheta_k| /
-  factor_k``. The scaling factors already normalize every parameter to a
-  comparable scale, so this is the one criterion meaningful across ``F0``,
-  ``PB``, ``A1`` and ``TASC`` simultaneously -- a template-shape criterion would
-  not be.
+* **Convergence is judged in parameter space**, as the size of the point
+  estimate's step in local coordinates, where one standard deviation is
+  ``1e-6`` units for every parameter. That common scale is what makes a single
+  threshold meaningful across ``F0``, ``PB``, ``A1`` and ``TASC`` at once -- and
+  it holds only because :func:`ell1fit.scaling.precondition_factors` enforces
+  it; the raw factors from :func:`~ell1fit.scaling.get_factors` differ between
+  directions by a factor of a thousand.
 * **The best iterate is kept, not the last.** Refinement is not guaranteed to be
   monotonic: a point-estimate step can wander and produce a worse fold than the
   one before. Scoring each pass by the summed profile :math:`Z^2_n` and keeping
@@ -50,13 +52,22 @@ import numpy as np
 from stingray.pulse.pulsar import z_n_binned_events
 
 from .fitting import point_estimate_fit
+from .scaling import TARGET_LOCAL_SIGMA
 from .phase_utils import folded_profile
 from .templates import create_template_from_profile_harm, get_template_func
 
-#: Convergence threshold on ``max_k |dtheta_k| / factor_k``. A tenth of a
-#: scaling factor is far below the parameter uncertainties, so crossing it means
-#: further passes cannot move the answer meaningfully.
-CONVERGENCE_TOLERANCE = 0.1
+#: Convergence threshold on the point estimate's step, in local coordinates.
+#:
+#: The units matter and are easy to get wrong. Local coordinates follow the
+#: convention that one standard deviation is
+#: :data:`~ell1fit.scaling.TARGET_LOCAL_SIGMA` = 1e-6 local units, **not** 1. An
+#: earlier version of this used 0.1, believing the factors normalised each
+#: parameter to order unity; that is 1e5 sigma, so convergence was declared on
+#: essentially every first pass regardless of how far the solution had moved.
+#:
+#: A tenth of a sigma is small enough that a further pass cannot meaningfully
+#: change the answer, and large enough not to chase numerical noise.
+CONVERGENCE_TOLERANCE = 0.1 * TARGET_LOCAL_SIGMA
 
 
 def _profile_score(profiles, nharm):
