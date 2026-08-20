@@ -60,7 +60,7 @@ from .phase_utils import phases_from_zero_to_one
 from .phase_utils import simple_circular_deorbit_numba  # noqa: F401
 from .phase_utils import simple_ell1_deorbit_numba  # noqa: F401
 from .plotting import plot_style_context as _plot_style_context
-from .priors import _flat_logprior, assign_logpriors
+from .priors import assign_logpriors
 from .profile_plotting import _compare_phaseograms
 from .profile_plotting import create_template_from_profile_harm
 from .profile_plotting import estimate_weighted_profile_std
@@ -496,11 +496,15 @@ def _prepare_templates_and_phase_priors(
     files,
     weights,
     nbin,
-    parameter_names,
-    logprior_funcs,
     parameters,
+    parameters_with_unc,
 ):
-    """Create templates, log diagnostics, and update phase priors."""
+    """Create templates, log diagnostics, and record each file's phase-zero offset.
+
+    Must run before priors/scaling are assigned (:func:`_prepare_fit_setup`):
+    the per-file ``Phase_i`` offset computed here is the value
+    :func:`ell1fit.priors.assign_logpriors` centers that parameter's prior on.
+    """
     n_files = len(profile)
     template_func = []
     pulsed_frac = []
@@ -558,17 +562,9 @@ def _prepare_templates_and_phase_priors(
 
         ph0 = -phases_around_zero(additional_phase)
         parameters[f"Phase_{i}"] = ph0
+        parameters_with_unc[f"Phase_{i}"][0] = ph0
 
-        for j, par in enumerate(parameter_names):
-            if par == f"Phase_{i}":
-                assert logprior_funcs[j] is None, (
-                    f"Expected a placeholder prior for {par} from assign_logpriors; "
-                    "found a real one. The Phase prior should be set exactly once, here."
-                )
-                logprior_funcs[j] = _flat_logprior(ph0 - 0.5, ph0 + 0.5)
-                break
-
-    return template_func, pulsed_frac, parameters, logprior_funcs
+    return template_func, pulsed_frac, parameters, parameters_with_unc
 
 
 def _build_profiles_and_weights(
@@ -848,14 +844,18 @@ def trace_likelihood_over_parameter(
     """Trace the posterior (log-likelihood + log-prior) over one parameter.
 
     All fitted parameters are represented in a normalized local coordinate
-    system used by :func:`optimize_solution`. This helper fixes every local
-    parameter at zero except ``parameter_name``, which is scanned over
-    ``parameter_values``.
+    system used by :func:`optimize_solution`, where the physical value is
+    ``local * factor + initial``. This helper fixes every local parameter at
+    zero except ``parameter_name``, which is scanned over ``parameter_values``
+    -- given here as *physical* (absolute) values, not local ones; each is
+    converted to the local coordinate that reproduces it before evaluating the
+    posterior, so the scan lands where requested regardless of what baseline
+    ``values`` happens to hold for that parameter.
 
     Returns
     -------
     dict
-        Mapping from scanned local parameter value to posterior value.
+        Mapping from scanned physical parameter value to posterior value.
     """
 
     _, _, func_to_maximize = _build_posterior_functions(
@@ -873,11 +873,11 @@ def trace_likelihood_over_parameter(
         debug_func=False,
     )
 
+    idx = fit_parameters.index(parameter_name)
     results = {}
     for val in parameter_values:
-        idx = fit_parameters.index(parameter_name)
         pars = [0] * len(values)
-        pars[idx] = val
+        pars[idx] = (val - values[idx]) / factors[idx]
         results[val] = func_to_maximize(pars)
 
     return results
@@ -1190,15 +1190,6 @@ def ell1fit(
         ignore_uncertainties=ignore_uncertainties,
     )
 
-    parameter_names, logprior_funcs, factors, input_mean_fit_pars = _prepare_fit_setup(
-        parameters,
-        list_parameter_names,
-        likelihood_func,
-        parameters_with_unc,
-        observation_length,
-        model,
-    )
-
     profile, profile_weight, weights = _build_profiles_and_weights(
         times_from_pepoch,
         parameters,
@@ -1210,7 +1201,10 @@ def ell1fit(
         tolerance,
     )
 
-    template_func, pulsed_frac, parameters, logprior_funcs = _prepare_templates_and_phase_priors(
+    # Must run before _prepare_fit_setup: it writes each file's real Phase_i
+    # offset into parameters/parameters_with_unc, which assign_logpriors then
+    # centers that parameter's prior on.
+    template_func, pulsed_frac, parameters, parameters_with_unc = _prepare_templates_and_phase_priors(
         profile,
         profile_weight,
         use_weight,
@@ -1219,9 +1213,17 @@ def ell1fit(
         files,
         weights,
         nbin,
-        parameter_names,
-        logprior_funcs,
         parameters,
+        parameters_with_unc,
+    )
+
+    parameter_names, logprior_funcs, factors, input_mean_fit_pars = _prepare_fit_setup(
+        parameters,
+        list_parameter_names,
+        likelihood_func,
+        parameters_with_unc,
+        observation_length,
+        model,
     )
 
     outroots = _get_outroots(get_outroot, n_files)

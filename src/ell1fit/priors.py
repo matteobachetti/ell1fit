@@ -124,13 +124,14 @@ def assign_logpriors(
             log_line += "uniform between -1 and 1"
             logps.append(_flat_logprior(-1, 1))
         elif par.startswith("Phase"):
-            # The real phase-zero offset isn't known yet at this point in the
-            # pipeline (it comes from the pulse template, built later from the
-            # folded profile). This placeholder is always replaced by
-            # ell1fit._prepare_templates_and_phase_priors once that offset is
-            # available; it must never be evaluated as-is.
-            log_line += "placeholder (set once the template phase offset is known)"
-            logps.append(None)
+            # parvalunc[par][0] is the template-derived phase-zero offset
+            # (ell1fit._prepare_templates_and_phase_priors runs, and writes it
+            # here, before priors are assigned). One cycle wide, centered on
+            # that offset, so the raw local coordinate stays on a single
+            # branch instead of drifting across repeated cycles.
+            center = parvalunc[par][0]
+            log_line += f"uniform within one cycle of {center:.4f}"
+            logps.append(_flat_logprior(center - 0.5, center + 0.5))
         elif (
             np.isnan(parvalunc[par][1]) and par == "PBDOT"
         ):  # For now the uniform distribution is from/to +-np.inf.
