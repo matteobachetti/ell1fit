@@ -60,8 +60,8 @@ import numpy as np
 CORE_IMPORTS = {
     "calculate_phases": ("ell1fit.phase_utils", "_calculate_phases"),
     "folded_profile": ("ell1fit.phase_utils", "folded_profile"),
-    "create_template": ("ell1fit.profile_plotting", "create_template_from_profile_harm"),
-    "template_func": ("ell1fit.profile_plotting", "get_template_func"),
+    "create_template": ("ell1fit.templates", "create_template_from_profile_harm"),
+    "template_func": ("ell1fit.templates", "get_template_func"),
     "likelihood": ("ell1fit.likelihoods", "pletsch_clarke_likelihood"),
     "assign_logpriors": ("ell1fit.priors", "assign_logpriors"),
     "get_factors": ("ell1fit.scaling", "get_factors"),

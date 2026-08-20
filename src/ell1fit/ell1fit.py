@@ -14,7 +14,6 @@ Main stages are:
 The high-level entry point is :func:`ell1fit`; :func:`main` exposes the CLI.
 """
 
-import copy
 import logging
 import os
 import re
@@ -22,24 +21,24 @@ import re
 import matplotlib.pyplot as plt
 import numpy as np
 from astropy.table import Table
-from scipy.optimize import minimize
 from stingray.pulse.pulsar import z_n_binned_events, z_n_gauss
 
 from . import version
 from .create_parfile import update_model
 from .events import _load_events_for_all_files
+from .fitting import optimize_solution
 from .likelihoods import pletsch_clarke_likelihood
 from .likelihoods import rayleigh_as_likelihood
 from .logging import configure_logging
 from .mcmc_utils import calculate_result_array_from_samples  # noqa: F401
 from .mcmc_utils import get_flat_samples  # noqa: F401
 from .mcmc_utils import plot_mcmc_results  # noqa: F401
-from .mcmc_utils import safe_run_sampler
+from .mcmc_utils import safe_run_sampler  # noqa: F401
 from .models import _build_parameters_from_models
 from .models import _load_and_validate_models
 from .outputs import _get_outroots
 from .outputs import _make_outroot_getter
-from .phase_utils import _calculate_phases
+from .phase_utils import _calculate_phases  # noqa: F401
 from .phase_utils import _sec_to_mjd  # noqa: F401
 from .phase_utils import add_circular_orbit_numba  # noqa: F401
 from .phase_utils import add_ell1_orbit_numba  # noqa: F401
@@ -47,16 +46,19 @@ from .phase_utils import fast_phase  # noqa: F401
 from .phase_utils import folded_profile
 from .phase_utils import interp_nb  # noqa: F401
 from .phase_utils import phases_around_zero
-from .phase_utils import phases_from_zero_to_one
+from .phase_utils import phases_from_zero_to_one  # noqa: F401
 from .phase_utils import simple_circular_deorbit_numba  # noqa: F401
 from .phase_utils import simple_ell1_deorbit_numba  # noqa: F401
 from .plotting import plot_style_context as _plot_style_context
+from .posterior import _build_posterior_functions  # noqa: F401
+from .posterior import _trace_phase_0_likelihood
+from .posterior import trace_likelihood_over_parameter  # noqa: F401
 from .priors import assign_logpriors
-from .profile_plotting import _compare_phaseograms
-from .profile_plotting import create_template_from_profile_harm
-from .profile_plotting import estimate_weighted_profile_std
-from .profile_plotting import get_template_func
+from .profile_plotting import _compare_phaseograms  # noqa: F401
 from .profile_plotting import normalize_dyn_profile  # noqa: F401
+from .templates import create_template_from_profile_harm
+from .templates import estimate_weighted_profile_std
+from .templates import get_template_func
 from .results_io import safe_save
 from .results_io import split_output_results
 from .scaling import estimate_uncertainties_from_model  # noqa: F401
@@ -300,338 +302,6 @@ def _prepare_fit_setup(
         raise ValueError("One or more parameters are missing from the parameter file") from exc
 
     return fit_parameter_names, logprior_funcs, factors, input_mean_fit_pars
-
-
-def _trace_phase_0_likelihood(
-    fit_parameter_names,
-    times_from_pepoch,
-    parameters,
-    input_mean_fit_pars,
-    logprior_funcs,
-    factors,
-    template_func,
-    likelihood_func,
-    outroot,
-    tolerance=1e-8,
-):
-    """Optionally trace the likelihood around Phase_0 for diagnostics."""
-    for parameter in [p for p in fit_parameter_names if p.startswith("Phase_")]:
-        idx = fit_parameter_names.index(parameter)
-        results_trace = trace_likelihood_over_parameter(
-            times_from_pepoch,
-            parameters,
-            fit_parameter_names,
-            input_mean_fit_pars,
-            logprior_funcs,
-            factors,
-            template_func,
-            parameter_name=parameter,
-            parameter_values=np.linspace(
-                parameters[parameter] - 6 * factors[idx],
-                parameters[parameter] + 6 * factors[idx],
-                100,
-            ),
-            likelihood_func=likelihood_func,
-            tolerance=tolerance,
-        )
-
-        phase_values = list(results_trace.keys())
-        ll_values = list(results_trace.values())
-        best_phase = phase_values[np.nanargmax(ll_values)]
-
-        with _plot_style_context():
-            plt.figure("trace_" + parameter)
-            plt.plot(phase_values, ll_values, color="black")
-            plt.axvline(parameters[parameter], color="k", alpha=0.5, ls="--")
-            plt.axvline(best_phase, color="r", ls="--")
-            plt.xlabel(parameter)
-            plt.ylabel("log likelihood")
-            plt.savefig(outroot + f"_trace_{parameter}.jpg")
-
-        ll_values_clean = [
-            ll for ll in list(results_trace.values()) if not np.isnan(ll) and not np.isinf(ll)
-        ]
-        min_ll = np.nanmin(ll_values_clean)
-        max_ll = np.nanmax(ll_values_clean)
-        logging.info(f"Delta log likelihood for {parameter}: {max_ll - min_ll:.2f}")
-        parameters[parameter] = phase_values[np.nanargmax(ll_values)]
-    return parameters
-
-
-def trace_likelihood_over_parameter(
-    times_from_pepoch,
-    parameters,
-    fit_parameter_names,
-    values,
-    logprior_funcs,
-    factors,
-    template_func,
-    parameter_name,
-    parameter_values,
-    likelihood_func=pletsch_clarke_likelihood,
-    tolerance=1e-8,
-):
-    """Trace the posterior (log-likelihood + log-prior) over one parameter.
-
-    All fitted parameters are represented in a normalized local coordinate
-    system used by :func:`optimize_solution`, where the physical value is
-    ``local * factor + initial``. This helper fixes every local parameter at
-    zero except ``parameter_name``, which is scanned over ``parameter_values``
-    -- given here as *physical* (absolute) values, not local ones; each is
-    converted to the local coordinate that reproduces it before evaluating the
-    posterior, so the scan lands where requested regardless of what baseline
-    ``values`` happens to hold for that parameter.
-
-    Returns
-    -------
-    dict
-        Mapping from scanned physical parameter value to posterior value.
-    """
-
-    _, _, func_to_maximize = _build_posterior_functions(
-        times_from_pepoch=times_from_pepoch,
-        parameters=parameters,
-        fit_parameter_names=fit_parameter_names,
-        values=values,
-        logprior_funcs=logprior_funcs,
-        factors=factors,
-        template_func=template_func,
-        likelihood_func=likelihood_func,
-        tolerance=tolerance,
-        weights=None,
-        debug_local_phases=False,
-        debug_func=False,
-    )
-
-    idx = fit_parameter_names.index(parameter_name)
-    results = {}
-    for val in parameter_values:
-        pars = [0] * len(values)
-        pars[idx] = (val - values[idx]) / factors[idx]
-        results[val] = func_to_maximize(pars)
-
-    return results
-
-
-def _build_posterior_functions(
-    times_from_pepoch,
-    parameters,
-    fit_parameter_names,
-    values,
-    logprior_funcs,
-    factors,
-    template_func,
-    likelihood_func,
-    tolerance=1e-8,
-    weights=None,
-    debug_local_phases=False,
-    debug_func=False,
-):
-    """Build shared posterior components used by trace and optimization flows."""
-
-    def logprior(pars):
-        if np.any(np.isnan(pars)):
-            return -np.inf
-        if np.any(np.isinf(pars)):
-            return -np.inf
-
-        logp = 0
-        for parname, logp_func, initial, local_value, f in zip(
-            fit_parameter_names, logprior_funcs, values, pars, factors
-        ):
-            value = local_value * f + initial
-            logp += logp_func(value)
-        return logp
-
-    def local_phases(pars):
-        trial_parameters = copy.deepcopy(parameters)
-
-        for par, initial, value, f in zip(fit_parameter_names, values, pars, factors):
-            trial_parameters[par] = value * f + initial
-        if debug_local_phases:
-            logging.debug(f"Local phases for parameters: {trial_parameters}")
-
-        return _calculate_phases(times_from_pepoch, trial_parameters, tolerance=tolerance)
-
-    def func_to_maximize(pars):
-        lp = logprior(pars)
-        if np.isinf(lp):
-            return lp
-
-        phases = local_phases(pars)
-
-        ll = 0
-        for i in range(len(phases)):
-            ll += likelihood_func(
-                phases[i], template_func[i], weights=weights[i] if weights is not None else None
-            )
-
-        if debug_func:
-            logging.debug(f"pars: {pars}, func: {ll + lp}")
-
-        return ll + lp
-
-    return logprior, local_phases, func_to_maximize
-
-
-def _plot_phaseogram_set(reference_phases, fitted_phases, times_from_pepoch, outroots, suffix=""):
-    """Plot reference vs fitted phaseograms for each input file."""
-    for i in range(len(times_from_pepoch)):
-        _compare_phaseograms(
-            reference_phases[i],
-            phases_from_zero_to_one(fitted_phases[i]),
-            times_from_pepoch[i],
-            fname=outroots[i] + suffix + ".jpg",
-        )
-
-
-def _augment_results_with_fit_metadata(
-    results,
-    fit_parameter_names,
-    fit_pars,
-    values,
-    factors,
-    phase_source,
-):
-    """Store local-fit summaries and scaling metadata in sampler output."""
-    rough_results = {}
-    for par, value in zip(fit_parameter_names, fit_pars):
-        rough_results["rough_d" + par] = value
-
-    count = 0
-    while f"Phase_{count}" in phase_source:
-        results[f"additional_phase_{count}"] = phase_source[f"Phase_{count}"]
-        count += 1
-
-    results.update(rough_results)
-
-    for par, initial, f in zip(fit_parameter_names, values, factors):
-        results["d" + par + "_mean"] = results["d" + par + "_50"]
-        results["d" + par + "_initial"] = initial
-        results["d" + par + "_factor"] = f
-
-    return results
-
-
-def optimize_solution(
-    times_from_pepoch,
-    parameters,
-    fit_parameter_names,
-    values,
-    logprior_funcs,
-    factors,
-    template_func,
-    nsteps=1000,
-    minimize_first=False,
-    outroots=("out",),
-    tolerance=1e-8,
-    likelihood_func=pletsch_clarke_likelihood,
-    weights=None,
-):
-    """Optimize and sample pulsar timing parameters for multiple event files.
-
-    Workflow:
-    1. Build a posterior from priors + profile likelihood.
-    2. Optionally run deterministic minimization for a starting point.
-    3. Run MCMC with :func:`safe_run_sampler`.
-    4. Produce diagnostic phaseogram comparisons and return summary fields.
-
-    Parameters are handled in local coordinates: for each fitted parameter,
-    ``physical = local * factor + initial``.
-
-    Returns
-    -------
-    dict
-        Aggregated result dictionary containing posterior summaries, initial
-        values, scaling factors, and copied model metadata.
-    """
-    _, local_phases, func_to_maximize = _build_posterior_functions(
-        times_from_pepoch=times_from_pepoch,
-        parameters=parameters,
-        fit_parameter_names=fit_parameter_names,
-        values=values,
-        logprior_funcs=logprior_funcs,
-        factors=factors,
-        template_func=template_func,
-        likelihood_func=likelihood_func,
-        tolerance=tolerance,
-        weights=weights,
-        debug_local_phases=True,
-        debug_func=True,
-    )
-
-    def func_to_minimize(pars):
-        return -func_to_maximize(pars)
-
-    logging.info("Initial parameters: ")
-    for par in fit_parameter_names:
-        logging.info(f"  {par}: {parameters[par]}")
-
-    logging.info("Initial likelihood: " + str(func_to_maximize([0] * len(values))))
-    all_zeros = [0] * len(values)
-    if minimize_first:
-        # Hard-bounded priors (e.g. Phase, EPS) return -inf outside their
-        # window; an unconstrained optimizer has no way to know that and can
-        # step past it, which shows up as "invalid value encountered in
-        # subtract" when scipy's finite-difference gradient probes two
-        # -inf/+inf points. Bounding the search in local coordinates (derived
-        # from each prior's own phys_bounds, converted via
-        # local = (physical - initial) / factor) keeps it inside the support
-        # and switches scipy to L-BFGS-B automatically.
-        bounds = []
-        for initial, f, logp_func in zip(values, factors, logprior_funcs):
-            lo, hi = getattr(logp_func, "phys_bounds", (-np.inf, np.inf))
-            bounds.append(((lo - initial) / f, (hi - initial) / f))
-        res = minimize(func_to_minimize, all_zeros, bounds=bounds)
-        fit_pars = res.x
-    else:
-        fit_pars = all_zeros
-
-    logging.info("Fitted (rescaled) parameters: " + str(fit_pars))
-
-    fitted_parameters = copy.deepcopy(parameters)
-
-    for par, initial, value, f in zip(fit_parameter_names, values, fit_pars, factors):
-        fitted_parameters[par] = value * f + initial
-
-    for key in fit_parameter_names:
-        logging.info(
-            f"  {key}: {fitted_parameters[key]} (difference from initial: {fitted_parameters[key] - parameters[key]})"
-        )
-    logging.info("Fitted likelihood: " + str(func_to_maximize(fit_pars)))
-    phases = local_phases(fit_pars)
-    phases_zero = local_phases(all_zeros)
-
-    _plot_phaseogram_set(phases_zero, phases, times_from_pepoch, outroots, suffix="")
-
-    corner_labels = [
-        "d" + par + f"{np.log10(fac):+g}" for (par, fac) in zip(fit_parameter_names, factors)
-    ]
-    results = safe_run_sampler(
-        func_to_maximize,
-        fit_pars,
-        max_n=nsteps,
-        outroot=outroots[-1],
-        labels=["d" + par for par in fit_parameter_names],
-        corner_labels=corner_labels,
-    )
-
-    results.update(parameters)
-    results = _augment_results_with_fit_metadata(
-        results,
-        fit_parameter_names,
-        fit_pars,
-        values,
-        factors,
-        phase_source=fitted_parameters,
-    )
-
-    fit_pars = [results["d" + par + "_50"] for par in fit_parameter_names]
-    phases = local_phases(fit_pars)
-
-    _plot_phaseogram_set(phases_zero, phases, times_from_pepoch, outroots, suffix="_final")
-
-    return results
 
 
 def ell1fit(
