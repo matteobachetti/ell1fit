@@ -41,10 +41,13 @@ import pytest
 from astropy.table import Table
 
 from ell1fit.ell1fit import main as main_ell1fit
+from ell1fit.fitting import point_estimate_fit
 from ell1fit.phase_utils import folded_profile
+from ell1fit.posterior import _build_posterior_functions
 from stingray.pulse.pulsar import z_n_binned_events
 
 from .datagen import make_multi_epoch_dataset
+from .helpers import build_pipeline_state
 
 EPOCH_OFFSETS = (0.0, 37.0)
 
@@ -196,28 +199,43 @@ def test_pipeline_recovers_injected_solution(dataset, tmp_path):
     assert not failures, "parameters inconsistent with the injected truth:\n" + "\n".join(failures)
 
 
-def test_fit_moves_away_from_the_wrong_starting_value(dataset, tmp_path):
-    """A1 starts 4e-3 lt-s off; the fit must actually move, not sit still.
+def test_fit_improves_on_its_starting_point(dataset):
+    """The optimizer must improve the posterior, not sit at the parfile value.
 
-    Without this, ``test_pipeline_recovers_injected_solution`` could pass simply
-    because the parfile already held the answer.
+    The assertion is on the **posterior**, not on distance to the injected
+    truth, and that distinction is the whole point of this test.
+
+    An earlier version asserted that the fitted ``A1`` lands closer to the truth
+    than the parfile value did. That is not a property a single fit guarantees,
+    and it made the test intermittently red in CI. Measured directly: with the
+    parfile offset at 4e-3 -- smaller than the fit's own scatter of 7.7e-3 --
+    only 5 of 12 realizations land closer than they started. Even at an offset
+    of 0.02 it is 11 of 12. Recovering the truth is a statement about the
+    *distribution* of fits, which is what
+    :func:`test_pipeline_recovers_injected_solution` checks via a tolerance in
+    units of the quoted uncertainty.
+
+    What a working optimizer does guarantee is that it never returns a position
+    worse than where it began. That is deterministic, holds on every platform,
+    and still fails loudly if the fit silently stops doing anything.
     """
-    solution = dataset["solution"]
-    outroot = str(tmp_path / "moved")
+    observations, setup = build_pipeline_state(dataset, fit_parameters=("F0", "A1"))
 
-    main_ell1fit(
-        dataset["event_files"]
-        + ["-p"]
-        + dataset["par_files"]
-        + ["-P", "F0,A1", "-N", "2", "--minimize-first", "--nsteps", "300", "-o", outroot]
+    _, _, func_to_maximize = _build_posterior_functions(observations, setup)
+    at_start = func_to_maximize([0.0] * setup.n_parameters)
+
+    fit_pars, fitted_parameters, _ = point_estimate_fit(observations, setup)
+    at_fit = func_to_maximize(fit_pars)
+
+    assert np.isfinite(at_start), "the starting position should be evaluable"
+    assert at_fit >= at_start, (
+        f"the optimizer returned a worse position than it started from: "
+        f"{at_start!r} -> {at_fit!r}"
     )
 
-    table = Table.read(outroot + "_A1_F0_N2_results.ecsv")[-1]
-    median, sigma, _ = _fitted(table, "A1")
-
-    started_at = table["dA1_initial"]
-    assert abs(started_at - solution.A1) > 3e-3, "the test parfile was not actually offset"
-    assert abs(median - solution.A1) < abs(started_at - solution.A1), (
-        f"fit did not improve on its starting point: started {started_at!r}, "
-        f"ended {median!r}, truth {solution.A1!r}"
+    # And it must actually have moved: a fit that returns its input unchanged
+    # would satisfy the inequality above trivially.
+    assert np.any(np.abs(fit_pars) > 1e-6), (
+        f"the optimizer did not move at all: {fit_pars!r}"
     )
+    assert fitted_parameters["A1"] != setup.parameters["A1"]
