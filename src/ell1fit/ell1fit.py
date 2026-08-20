@@ -413,7 +413,7 @@ def _enrich_results_with_observation_metadata(
 
     for i in range(n_files):
         results[f"pf_{i}"] = pulsed_frac[i]
-        results[f"Z11_{i}"] = z_n_binned_events(profile[i], nharm)
+        results[f"Z2{nharm}_{i}"] = z_n_binned_events(profile[i], nharm)
         results[f"ctrate_{i}"] = times_from_pepoch[i].size / expo[i]
 
     results["ell1fit_version"] = version.version
@@ -690,43 +690,49 @@ def _trace_phase_0_likelihood(
     factors,
     template_func,
     likelihood_func,
+    outroot,
 ):
     """Optionally trace the likelihood around Phase_0 for diagnostics."""
-    parameter = "Phase_0"
-    if parameter not in parameter_names:
-        return
+    for parameter in [p for p in parameter_names if p.startswith("Phase_")]:
+        idx = parameter_names.index(parameter)
+        results_trace = trace_likelihood_over_parameter(
+            times_from_pepoch,
+            parameters,
+            parameter_names,
+            input_mean_fit_pars,
+            logprior_funcs,
+            factors,
+            template_func,
+            parameter_name=parameter,
+            parameter_values=np.linspace(
+                parameters[parameter] - 6 * factors[idx],
+                parameters[parameter] + 6 * factors[idx],
+                100,
+            ),
+            likelihood_func=likelihood_func,
+        )
 
-    idx = parameter_names.index(parameter)
-    results_trace = trace_likelihood_over_parameter(
-        times_from_pepoch,
-        parameters,
-        parameter_names,
-        input_mean_fit_pars,
-        logprior_funcs,
-        factors,
-        template_func,
-        parameter_name=parameter,
-        parameter_values=np.linspace(
-            parameters[parameter] - 2 * factors[idx],
-            parameters[parameter] + 2 * factors[idx],
-            100,
-        ),
-        likelihood_func=likelihood_func,
-    )
+        phase_values = list(results_trace.keys())
+        ll_values = list(results_trace.values())
+        best_phase = phase_values[np.nanargmax(ll_values)]
 
-    with _plot_style_context():
-        plt.figure("trace_" + parameter)
-        plt.plot(list(results_trace.keys()), list(results_trace.values()))
-        plt.axvline(parameters[parameter], color="k", ls="--")
-        plt.xlabel(parameter)
-        plt.ylabel("log likelihood")
+        with _plot_style_context():
+            plt.figure("trace_" + parameter)
+            plt.plot(phase_values, ll_values, color="black")
+            plt.axvline(parameters[parameter], color="k", alpha=0.5, ls="--")
+            plt.axvline(best_phase, color="r", ls="--")
+            plt.xlabel(parameter)
+            plt.ylabel("log likelihood")
+            plt.savefig(outroot + f"_trace_{parameter}.jpg")
 
-    ll_values = np.array(
-        [ll for ll in list(results_trace.values()) if not np.isnan(ll) and not np.isinf(ll)]
-    )
-    min_ll = np.nanmin(ll_values)
-    max_ll = np.nanmax(ll_values)
-    logging.info(f"Delta log likelihood for {parameter}: {max_ll - min_ll:.2f}")
+        ll_values_clean = [
+            ll for ll in list(results_trace.values()) if not np.isnan(ll) and not np.isinf(ll)
+        ]
+        min_ll = np.nanmin(ll_values_clean)
+        max_ll = np.nanmax(ll_values_clean)
+        logging.info(f"Delta log likelihood for {parameter}: {max_ll - min_ll:.2f}")
+        parameters[parameter] = phase_values[np.nanargmax(ll_values)]
+    return parameters
 
 
 def _get_par_dict(
@@ -1062,6 +1068,11 @@ def optimize_solution(
     def func_to_minimize(pars):
         return -func_to_maximize(pars)
 
+    logging.info("Initial parameters: ")
+    for par in fit_parameters:
+        logging.info(f"  {par}: {model_parameters[par]}")
+
+    logging.info("Initial likelihood: " + str(func_to_maximize([0] * len(values))))
     all_zeros = [0] * len(values)
     if minimize_first:
         res = minimize(func_to_minimize, all_zeros)
@@ -1069,13 +1080,18 @@ def optimize_solution(
     else:
         fit_pars = all_zeros
 
-    logging.info("Initial parameters: " + str(fit_pars))
+    logging.info("Fitted (rescaled) parameters: " + str(fit_pars))
 
     pars_dict = copy.deepcopy(model_parameters)
 
     for par, initial, value, f in zip(fit_parameters, values, fit_pars, factors):
         pars_dict[par] = value * f + initial
 
+    for key in fit_parameters:
+        logging.info(
+            f"  {key}: {pars_dict[key]} (difference from initial: {pars_dict[key] - model_parameters[key]})"
+        )
+    logging.info("Fitted likelihood: " + str(func_to_maximize(fit_pars)))
     phases = local_phases(fit_pars)
     phases_zero = local_phases(all_zeros)
 
@@ -1236,7 +1252,31 @@ def ell1fit(
 
     outroots = _get_outroots(get_outroot, n_files)
 
+    input_stuff = copy.deepcopy(
+        (
+            parameter_names,
+            times_from_pepoch,
+            parameters,
+            input_mean_fit_pars,
+            logprior_funcs,
+            factors,
+            template_func,
+            likelihood_func,
+        )
+    )
     _trace_phase_0_likelihood(
+        parameter_names,
+        times_from_pepoch,
+        parameters,
+        input_mean_fit_pars,
+        logprior_funcs,
+        factors,
+        template_func,
+        likelihood_func,
+        outroot=outroots[-1],
+    )
+    input_mean_fit_pars = [parameters[par] for par in parameter_names]
+    output_stuff = (
         parameter_names,
         times_from_pepoch,
         parameters,

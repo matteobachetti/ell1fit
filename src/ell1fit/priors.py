@@ -124,8 +124,10 @@ def assign_logpriors(
             log_line += "uniform between -1 and 1"
             logps.append(_flat_logprior(-1, 1))
         elif par.startswith("Phase"):
-            log_line += "uniform between 0 and 1"
-            logps.append(_flat_logprior(0, 1))
+            log_line += "periodic uniform over one cycle"
+            logps.append(
+                _periodic_uniform_logprior(parvalunc[par][0], 1.0, half_width=0.5)
+            )
         elif (
             np.isnan(parvalunc[par][1]) and par == "PBDOT"
         ):  # For now the uniform distribution is from/to +-np.inf.

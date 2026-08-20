@@ -1,6 +1,7 @@
 import os
 import glob
 import pytest
+import numpy as np
 from astropy.table import Table
 from ell1fit.ell1fit import main as main_ell1fit
 from ell1fit.create_parfile import main as main_ell1par
@@ -67,6 +68,30 @@ class TestExecution:
                 if "-----" in line:
                     continue
                 raise AssertionError(f"Comparison failed: {line}")
+
+    def test_ell1fit_minimize_first(self):
+        cmdline = (
+            self.event_files
+            + ["-p"]
+            + self.param_files
+            + ["-P", "F0,PB,A1,TASC", "--likelihood", "PC", "--minimize-first", "--nsteps", "100"]
+        )
+
+        main_ell1fit(cmdline)
+
+        label = "_A1_F0_PB_TASC"
+        for ev in self.event_files:
+            root = ev.replace(".nc", "")
+            ecsv_res = f"{root}{label}_results.ecsv"
+            initial_phaseogram = f"{root}{label}.jpg"
+            assert os.path.exists(ecsv_res)
+            assert os.path.exists(initial_phaseogram)
+
+            table = Table.read(ecsv_res)
+            assert np.isfinite(table["rough_dPB"][-1])
+            assert np.isfinite(table["rough_dA1"][-1])
+            assert np.isfinite(table["rough_dTASC"][-1])
+            assert np.isfinite(table["rough_dF0"][-1])
 
     @classmethod
     def teardown_class(cls):
