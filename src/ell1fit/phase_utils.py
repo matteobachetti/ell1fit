@@ -1,7 +1,7 @@
 """Phase and orbital timing utilities used by ell1fit."""
 
+import logging
 import re
-import warnings
 
 import numpy as np
 from numba import float32, float64, int64, njit, prange, vectorize
@@ -198,7 +198,11 @@ def _calculate_phases(times_from_pepoch, parameters, tolerance=1e-8):
         tasc_raw = _mjd_to_sec(parameters["TASC"], parameters[f"PEPOCH_{i}"])
         tasc = ((tasc_raw + 0.5 * pb) % pb) - 0.5 * pb
         if np.abs(tasc_raw - tasc) > 1e-9:
-            warnings.warn("Wrapping TASC to the principal interval modulo PB")
+            # Normal operation, not an anomaly: TASC is only defined modulo PB,
+            # and it lands more than half an orbit from PEPOCH whenever the two
+            # epochs were not deliberately aligned. Logged rather than warned
+            # because this fires on essentially every call.
+            logging.info("Wrapping TASC to the principal interval modulo PB")
 
         deorbit_times_from_pepoch = simple_ell1_deorbit_numba(
             times_from_pepoch[i],
