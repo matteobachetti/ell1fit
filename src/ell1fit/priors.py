@@ -55,6 +55,7 @@ def _periodic_uniform_logprior(center, period, half_width=None):
             return -np.inf
         return 0
 
+    func.phys_bounds = (center - 0.5 * period, center + 0.5 * period)
     return func
 
 
@@ -85,6 +86,8 @@ def _periodic_normal_logprior(center, sigma, period):
         dx = ((x - center + 0.5 * period) % period) - 0.5 * period
         return norm_const - 0.5 * (dx / sigma) ** 2
 
+    # Periodic, so one period around the centre covers every distinct value.
+    func.phys_bounds = (center - 0.5 * period, center + 0.5 * period)
     return func
 
 

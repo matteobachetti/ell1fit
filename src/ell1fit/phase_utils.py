@@ -11,6 +11,47 @@ from numba import float32, float64, int64, njit, prange, vectorize
 #: (``dF0``, ``dF1``, ...).
 simple_freq_re = re.compile(r"^d?F([0-9]+)")
 
+#: Safety cap on the deorbiting fixed-point iteration. Legitimate parameters
+#: converge in a handful of passes -- a projected velocity of 1e-3 c needs about
+#: five -- so this is never reached in normal use. It exists so that no input can
+#: make the loop run forever; see :func:`orbit_is_invertible`.
+MAX_DEORBIT_ITERATIONS = 1000
+
+
+class NonInvertibleOrbitError(ValueError):
+    """Raised when orbital parameters make arrival time non-invertible.
+
+    Deorbiting solves ``t_emit = t_obs - A1 * sin(omega * t_emit)`` by fixed-point
+    iteration, which converges only while the map is a contraction. See
+    :func:`orbit_is_invertible` for what that means physically.
+    """
+
+
+def orbit_is_invertible(PB, A1, EPS1=0.0, EPS2=0.0):
+    """Whether arrival time can be inverted for these orbital parameters.
+
+    The deorbiting iteration contracts only while
+    ``|A1| * omega * (1 + |EPS1| + |EPS2|) < 1``. That expression has a direct
+    physical reading: ``A1`` is in light-seconds and ``omega`` in radians per
+    second, so ``A1 * omega`` is the projected orbital velocity **in units of
+    c**. The condition is therefore simply that the pulsar's projected motion is
+    subluminal -- with the eccentricity terms adding their contribution.
+
+    Beyond it the arrival-time map is not monotonic in emission time, so no
+    inverse exists and no iteration scheme can find one. Real pulsars sit around
+    ``1e-3``, many orders of magnitude inside the limit; a fit only reaches this
+    region when an optimizer or sampler probes a wild trial position.
+
+    Returns
+    -------
+    bool
+        True when deorbiting is well posed.
+    """
+    if PB == 0 or not np.isfinite(PB) or not np.isfinite(A1):
+        return False
+    velocity_over_c = np.abs(A1) * 2 * np.pi / np.abs(PB)
+    return velocity_over_c * (1 + np.abs(EPS1) + np.abs(EPS2)) < 1.0
+
 
 @njit
 def interp_nb(x_vals, x, y):
@@ -68,8 +109,14 @@ def phases_around_zero(phase):
 
 
 @njit(fastmath=True, parallel=True)
-def simple_circular_deorbit_numba(times, PB, A1, TASC, tolerance=1e-8):
-    """Iteratively remove circular-orbit delays from event times."""
+def simple_circular_deorbit_numba(
+    times, PB, A1, TASC, tolerance=1e-8, max_iter=MAX_DEORBIT_ITERATIONS
+):
+    """Iteratively remove circular-orbit delays from event times.
+
+    The iteration count is capped so that no input can make this loop run
+    forever; see :data:`MAX_DEORBIT_ITERATIONS` and :func:`orbit_is_invertible`.
+    """
     twopi = 2 * np.pi
     omega = twopi / PB
     out_times = np.empty_like(times)
@@ -77,9 +124,11 @@ def simple_circular_deorbit_numba(times, PB, A1, TASC, tolerance=1e-8):
         old_out = 0
         t = times[i] - TASC
         out_times[i] = t - A1 * np.sin(omega * t)
-        while np.abs(out_times[i] - old_out) > tolerance:
+        n_iter = 0
+        while np.abs(out_times[i] - old_out) > tolerance and n_iter < max_iter:
             old_out = out_times[i]
             out_times[i] = t - A1 * np.sin(omega * out_times[i])
+            n_iter += 1
         out_times[i] += TASC
     return out_times
 
@@ -92,8 +141,16 @@ def add_circular_orbit_numba(times, PB, A1, TASC):
 
 
 @njit(fastmath=True, parallel=True)
-def simple_ell1_deorbit_numba(times, PB, A1, TASC, EPS1, EPS2, tolerance=1e-8):
-    """Iteratively remove ELL1 orbital delays from event times."""
+def simple_ell1_deorbit_numba(
+    times, PB, A1, TASC, EPS1, EPS2, tolerance=1e-8, max_iter=MAX_DEORBIT_ITERATIONS
+):
+    """Iteratively remove ELL1 orbital delays from event times.
+
+    The iteration count is capped so that no input can make this loop run
+    forever. Reaching the cap means the parameters are outside the invertible
+    region and the returned times are meaningless -- callers should screen with
+    :func:`orbit_is_invertible` first, which :func:`_calculate_phases` does.
+    """
     twopi = 2 * np.pi
     omega = twopi / PB
     out_times = np.empty_like(times)
@@ -103,11 +160,13 @@ def simple_ell1_deorbit_numba(times, PB, A1, TASC, EPS1, EPS2, tolerance=1e-8):
         old_out = 0
         t = times[i] - TASC
         out_times[i] = t - A1 * np.sin(omega * t)
-        while np.abs(out_times[i] - old_out) > tolerance:
+        n_iter = 0
+        while np.abs(out_times[i] - old_out) > tolerance and n_iter < max_iter:
             old_out = out_times[i]
             phase = omega * out_times[i]
             twophase = 2 * phase
             out_times[i] = t - A1 * (np.sin(phase) + k1 * np.sin(twophase) + k2 * np.cos(twophase))
+            n_iter += 1
         out_times[i] += TASC
     return out_times
 
@@ -194,6 +253,15 @@ def _calculate_phases(times_from_pepoch, parameters, tolerance=1e-8):
     n_files = len(times_from_pepoch)
     list_phases_from_zero_to_one = []
     pb = parameters["PB"]
+
+    if not orbit_is_invertible(pb, parameters["A1"], parameters["EPS1"], parameters["EPS2"]):
+        raise NonInvertibleOrbitError(
+            f"Orbital parameters imply a projected velocity of "
+            f"{np.abs(parameters['A1']) * 2 * np.pi / np.abs(pb):.4g} c "
+            f"(PB={pb!r} s, A1={parameters['A1']!r} lt-s): arrival time is not "
+            "invertible, so pulse phases are undefined here."
+        )
+
     for i in range(n_files):
         tasc_raw = _mjd_to_sec(parameters["TASC"], parameters[f"PEPOCH_{i}"])
         tasc = ((tasc_raw + 0.5 * pb) % pb) - 0.5 * pb
