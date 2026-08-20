@@ -17,6 +17,7 @@ The high-level entry point is :func:`ell1fit`; :func:`main` exposes the CLI.
 import logging
 import os
 import re
+import warnings
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -396,6 +397,25 @@ def ell1fit(
     assert len(parfiles) == len(
         files
     ), "The number of parameter files must match that of event files."
+
+    # The Rayleigh statistic depends only on the phases: it consults neither the
+    # pulse template nor per-event weights. Silently dropping options the user
+    # explicitly asked for is worse than not offering them, so say so.
+    if likelihood_func is rayleigh_as_likelihood:
+        if use_weight:
+            warnings.warn(
+                "--use-weight has no effect with --likelihood Rayleigh: the "
+                "Rayleigh statistic ignores per-event weights. Use --likelihood PC "
+                "to make use of energy weighting.",
+                stacklevel=2,
+            )
+        if nharm > 1:
+            warnings.warn(
+                f"-N/--nharm {nharm} has no effect on the fit with --likelihood "
+                "Rayleigh: the Rayleigh statistic uses only the fundamental "
+                "harmonic. It still sets the binning of the diagnostic profiles.",
+                stacklevel=2,
+            )
     model, pepoch, ref_model = _load_and_validate_models(parfiles)
 
     nbin = max(32, nharm * 8)

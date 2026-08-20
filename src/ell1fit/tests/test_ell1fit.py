@@ -186,3 +186,47 @@ def test_deorbit_tolerance_actually_tightens_the_solution():
     tight = simple_ell1_deorbit_numba(times, PB, A1, TASC, EPS1, EPS2, 1e-10)
 
     assert np.max(np.abs(tight - converged)) < np.max(np.abs(loose - converged))
+
+
+class TestRayleighLimitations:
+    """The Rayleigh statistic ignores most of what the pipeline can offer.
+
+    It depends on the event phases and nothing else. That is worth pinning
+    down, because the options it cannot honour used to be discarded in silence:
+    a user asking for energy weighting got an unweighted fit and no indication
+    that anything had been dropped.
+    """
+
+    @staticmethod
+    def _phases_and_templates():
+        from ell1fit.templates import get_template_func
+
+        rng = np.random.default_rng(0)
+        phases = np.concatenate([rng.uniform(0, 1, 5000), rng.normal(0.3, 0.05, 2000) % 1.0])
+        grid = 2 * np.pi * np.arange(200) / 200
+        one_harmonic = get_template_func(1 + 0.3 * np.cos(grid))
+        two_harmonics = get_template_func(1 + 0.3 * np.cos(grid) + 0.2 * np.cos(2 * grid))
+        return phases, one_harmonic, two_harmonics, rng.uniform(0, 1, phases.size)
+
+    def test_the_template_is_ignored(self):
+        from ell1fit.likelihoods import rayleigh_as_likelihood
+
+        phases, one, two, _ = self._phases_and_templates()
+        assert rayleigh_as_likelihood(phases, one) == rayleigh_as_likelihood(phases, two)
+
+    def test_weights_are_ignored(self):
+        from ell1fit.likelihoods import rayleigh_as_likelihood
+
+        phases, one, _, weights = self._phases_and_templates()
+        assert rayleigh_as_likelihood(phases, one) == rayleigh_as_likelihood(
+            phases, one, weights=weights
+        )
+
+    def test_pletsch_clarke_uses_both(self):
+        """The contrast that makes the two assertions above meaningful."""
+        from ell1fit.likelihoods import pletsch_clarke_likelihood
+
+        phases, one, two, weights = self._phases_and_templates()
+        base = pletsch_clarke_likelihood(phases, one)
+        assert pletsch_clarke_likelihood(phases, two) != base
+        assert pletsch_clarke_likelihood(phases, one, weights=weights) != base

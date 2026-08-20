@@ -23,7 +23,13 @@ from ..setup_types import ObservationSet
 from ..templates import create_template_from_profile_harm, get_template_func
 
 
-def build_pipeline_state(dataset, fit_parameters=("F0", "A1"), nharm=2, tolerance=1e-8):
+def build_pipeline_state(
+    dataset,
+    fit_parameters=("F0", "A1"),
+    nharm=2,
+    tolerance=1e-8,
+    likelihood_func=pletsch_clarke_likelihood,
+):
     """Build ``(observations, setup)`` from a generated dataset.
 
     Parameters
@@ -36,6 +42,12 @@ def build_pipeline_state(dataset, fit_parameters=("F0", "A1"), nharm=2, toleranc
         Harmonics retained in the pulse templates.
     tolerance : float, optional
         Deorbiting tolerance, in seconds.
+    likelihood_func : callable, optional
+        Statistic to fit with. This is not merely stored: it decides which
+        parameters are free. ``_collect_parameter_names`` only adds the per-file
+        ``Phase_i`` nuisance parameters for the Pletsch-Clarke likelihood,
+        because the Rayleigh statistic is invariant under a global phase shift
+        and would leave them as unconstrained flat directions.
 
     Returns
     -------
@@ -81,7 +93,7 @@ def build_pipeline_state(dataset, fit_parameters=("F0", "A1"), nharm=2, toleranc
     setup = _prepare_fit_setup(
         parameters,
         sorted(fit_parameters),
-        pletsch_clarke_likelihood,
+        likelihood_func,
         parameters_with_unc,
         obs_length,
         models,

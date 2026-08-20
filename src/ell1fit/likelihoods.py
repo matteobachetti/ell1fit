@@ -86,18 +86,49 @@ def pletsch_clarke_likelihood(phases, template_func, weights=None):
     return _pc_like_weight(probs, local_weights)
 
 
-def rayleigh_as_likelihood(phases, *args, **kwargs):
-    """Use the Rayleigh test statistic as a surrogate likelihood.
+def rayleigh_as_likelihood(phases, template_func=None, weights=None):
+    """Use the Rayleigh statistic :math:`Z_1^2` as a surrogate for a likelihood.
+
+    Selected by ``--likelihood Rayleigh``. It measures how concentrated the
+    event phases are at the fundamental frequency, and depends on **nothing but
+    the phases** -- which is both its appeal and its limitation.
+
+    Warnings
+    --------
+    This is a *statistic*, not a log-likelihood, and the difference has
+    consequences a user should know about before trusting the output:
+
+    - **Only the fundamental harmonic is used.** The pulse template is not
+      consulted at all, so ``-N``/``nharm`` has no effect here. A sharply peaked
+      pulse carries information in its higher harmonics that this discards.
+    - **Per-event weights are ignored**, so ``--use-weight`` does nothing.
+    - **It is not on a log-density scale.** The pipeline adds a log-prior to
+      whatever this returns, and since :math:`Z_1^2` is not a log-probability,
+      the relative weight of prior against data is not meaningful. On a typical
+      dataset :math:`Z_1^2` is of order +1700 where the Pletsch-Clarke
+      log-likelihood is around -970: different scale and different sign
+      convention.
+
+    Consequently the MCMC run on top of this does not sample a posterior in the
+    usual sense, and its credible intervals should not be read as such. Prefer
+    ``--likelihood PC`` unless there is a specific reason to want a
+    template-free statistic.
+
+    :func:`ell1fit.ell1fit.ell1fit` warns when this is combined with options it
+    cannot honour, rather than letting them be silently discarded.
 
     Parameters
     ----------
     phases : np.ndarray
         Event phases.
+    template_func : callable or None, optional
+        Accepted for interface compatibility and deliberately unused.
+    weights : np.ndarray or None, optional
+        Accepted for interface compatibility and deliberately unused.
 
     Returns
     -------
     float
-        Z1^2 value for the input phases.
+        :math:`Z_1^2` for the input phases.
     """
-    prob = z_n_events(phases, 1)
-    return prob
+    return z_n_events(phases, 1)
