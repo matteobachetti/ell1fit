@@ -1041,7 +1041,19 @@ def optimize_solution(
     logging.info("Initial likelihood: " + str(func_to_maximize([0] * len(values))))
     all_zeros = [0] * len(values)
     if minimize_first:
-        res = minimize(func_to_minimize, all_zeros)
+        # Hard-bounded priors (e.g. Phase, EPS) return -inf outside their
+        # window; an unconstrained optimizer has no way to know that and can
+        # step past it, which shows up as "invalid value encountered in
+        # subtract" when scipy's finite-difference gradient probes two
+        # -inf/+inf points. Bounding the search in local coordinates (derived
+        # from each prior's own phys_bounds, converted via
+        # local = (physical - initial) / factor) keeps it inside the support
+        # and switches scipy to L-BFGS-B automatically.
+        bounds = []
+        for initial, f, logp_func in zip(values, factors, logprior_funcs):
+            lo, hi = getattr(logp_func, "phys_bounds", (-np.inf, np.inf))
+            bounds.append(((lo - initial) / f, (hi - initial) / f))
+        res = minimize(func_to_minimize, all_zeros, bounds=bounds)
         fit_pars = res.x
     else:
         fit_pars = all_zeros

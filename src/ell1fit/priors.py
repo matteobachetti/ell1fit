@@ -9,6 +9,11 @@ from scipy.stats import norm
 def _flat_logprior(bound0, bound1):
     """Create a uniform log-prior function between two bounds.
 
+    The returned function carries its ``(bound0, bound1)`` as a
+    ``phys_bounds`` attribute, so callers that need a hard search-space
+    bound (e.g. a bounded local optimizer) can find it without having to
+    re-derive or duplicate the bound rules used to build each prior.
+
     Returns
     -------
     callable
@@ -24,6 +29,7 @@ def _flat_logprior(bound0, bound1):
             return -np.inf
         return 0
 
+    func.phys_bounds = (bound0, bound1)
     return func
 
 
