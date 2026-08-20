@@ -412,6 +412,7 @@ def make_multi_epoch_dataset(
     n_events=5000,
     duration=100_000.0,
     phase0=(0.35, 0.35, 0.35),
+    duty=0.12,
     seed=20260820,
     offsets=None,
     uncertainties=None,
@@ -435,6 +436,10 @@ def make_multi_epoch_dataset(
         Observation span per epoch, in seconds.
     phase0 : sequence of float, optional
         Per-epoch pulse phase offset.
+    duty : float, optional
+        Pulse sharpness, passed to :func:`pulse_shape`. The default is a narrow
+        peak with real harmonic content; a large value (~0.3) gives an almost
+        pure sinusoid, which is what a single-harmonic model is *correct* for.
     seed : int, optional
         Seed for the generator, so datasets are reproducible.
     offsets : dict or None, optional
@@ -471,6 +476,7 @@ def make_multi_epoch_dataset(
             duration=duration,
             n_events=n_events,
             phase0=phase0[i % len(phase0)],
+            duty=duty,
             rng=rng,
         )
         epochs.append(epoch)
