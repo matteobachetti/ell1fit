@@ -124,10 +124,13 @@ def assign_logpriors(
             log_line += "uniform between -1 and 1"
             logps.append(_flat_logprior(-1, 1))
         elif par.startswith("Phase"):
-            log_line += "periodic uniform over one cycle"
-            logps.append(
-                _periodic_uniform_logprior(parvalunc[par][0], 1.0, half_width=0.5)
-            )
+            # The real phase-zero offset isn't known yet at this point in the
+            # pipeline (it comes from the pulse template, built later from the
+            # folded profile). This placeholder is always replaced by
+            # ell1fit._prepare_templates_and_phase_priors once that offset is
+            # available; it must never be evaluated as-is.
+            log_line += "placeholder (set once the template phase offset is known)"
+            logps.append(None)
         elif (
             np.isnan(parvalunc[par][1]) and par == "PBDOT"
         ):  # For now the uniform distribution is from/to +-np.inf.

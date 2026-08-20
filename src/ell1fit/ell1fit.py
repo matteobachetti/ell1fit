@@ -602,6 +602,10 @@ def _prepare_templates_and_phase_priors(
 
         for j, par in enumerate(parameter_names):
             if par == f"Phase_{i}":
+                assert logprior_funcs[j] is None, (
+                    f"Expected a placeholder prior for {par} from assign_logpriors; "
+                    "found a real one. The Phase prior should be set exactly once, here."
+                )
                 logprior_funcs[j] = _flat_logprior(ph0 - 0.5, ph0 + 0.5)
                 break
 
