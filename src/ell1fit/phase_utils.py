@@ -151,9 +151,6 @@ def _fast_phase(ts, mean_f):
 
 @njit(parallel=True)
 def _fast_phase_generic(times, frequency_derivatives):
-    if len(frequency_derivatives) == 1:
-        return times / frequency_derivatives[0]
-
     fact = 1.0
     n = 0.0
     ph = np.zeros_like(times)
