@@ -256,6 +256,13 @@ def _get_weight_suffix(use_weight):
     return ""
 
 
+def _get_pi_suffix(use_pi):
+    """Return output-name suffix when weighting uses PI channels instead of energy."""
+    if use_pi:
+        return "_pi"
+    return ""
+
+
 def _get_nharm_suffix(nharm):
     """Return output-name suffix for harmonic count when > 1."""
     if nharm > 1:
@@ -270,6 +277,7 @@ def _make_outroot_getter(
     nharm,
     likelihood_func,
     use_weight,
+    use_pi=False,
     general_outroot=None,
 ):
     """Build a closure that returns the configured output root name."""
@@ -277,6 +285,7 @@ def _make_outroot_getter(
     nharm_str = _get_nharm_suffix(nharm)
     likelihood_str = _get_likelihood_suffix(likelihood_func)
     weight_str = _get_weight_suffix(use_weight)
+    pi_str = _get_pi_suffix(use_pi)
 
     def get_outroot(file_n=None):
         if file_n is not None:
@@ -294,6 +303,7 @@ def _make_outroot_getter(
             + nharm_str
             + likelihood_str
             + weight_str
+            + pi_str
         )
         return outroot
 
@@ -412,7 +422,7 @@ def _load_and_validate_models(parfiles):
     return model, pepoch, ref_model
 
 
-def _load_events_for_all_files(files, energy_range, pepoch, get_outroot):
+def _load_events_for_all_files(files, energy_range, pepoch, get_outroot, use_pi=False):
     """Load all event files and compute per-file exposure and duration."""
     n_files = len(files)
     times_from_pepoch = [[] for _ in range(n_files)]
@@ -428,7 +438,7 @@ def _load_events_for_all_files(files, energy_range, pepoch, get_outroot):
             pepoch[i],
             plotfile=get_outroot(i) + f"_lightcurve_{i}.jpg",
             return_energy=True,
-            use_pi=False,
+            use_pi=use_pi,
         )
         expo[i] += np.sum(np.diff(gtis, axis=1))
         observation_length[i] = times_from_pepoch[i][-1] - times_from_pepoch[i][0]
@@ -778,7 +788,8 @@ def _load_and_format_events(
     event_file : str
         Input event file readable by ``hendrics.io.load_events``.
     energy_range : tuple or None
-        ``(emin, emax)`` range applied through ``filter_energy_range``.
+        ``(emin, emax)`` range applied through ``filter_energy_range``. This is
+        always interpreted in calibrated energy (keV), regardless of ``use_pi``.
     pepoch : float
         Reference epoch (MJD) used to compute ``times_from_pepoch``.
     plotlc : bool, optional
@@ -788,7 +799,9 @@ def _load_and_format_events(
     return_energy : bool, optional
         If True, also return event energies (or PI if ``use_pi=True``).
     use_pi : bool, optional
-        Use PI channels instead of energy values.
+        Return PI channels instead of calibrated energy values (only affects
+        what is returned for weighting; the ``energy_range`` cut above is
+        still applied in calibrated energy).
 
     Returns
     -------
@@ -814,10 +827,7 @@ def _load_and_format_events(
     pepoch_met = _mjd_to_sec(pepoch, mjdref)
     times_from_pepoch = (events.time - pepoch_met).astype(float)
     gtis_from_pepoch = (events.gti - pepoch_met).astype(float)
-    if not use_pi:
-        energy = events.energy
-    else:
-        energy = events.pi
+    energy = events.pi if use_pi else events.energy
     if return_energy:
         return times_from_pepoch, gtis_from_pepoch, energy
     return times_from_pepoch, gtis_from_pepoch
@@ -1096,6 +1106,7 @@ def ell1fit(
     general_outroot=None,
     likelihood_func=pletsch_clarke_likelihood,
     use_weight=False,
+    use_pi=False,
     ignore_uncertainties=False,
 ):
     """Fit spin and ELL1 orbital parameters from one or more event files.
@@ -1132,6 +1143,11 @@ def ell1fit(
         Likelihood/statistic function evaluated on phases.
     use_weight : bool, optional
         If True, apply energy-dependent event weighting.
+    use_pi : bool, optional
+        If True, base that weighting on PI channels instead of calibrated
+        energy. Has no effect unless ``use_weight`` is also True; the
+        ``energy_range`` selection above is always applied in calibrated
+        energy regardless of this flag.
     ignore_uncertainties : bool, optional
         If True, ignore uncertainties from input parfiles when building priors.
 
@@ -1156,6 +1172,7 @@ def ell1fit(
         nharm,
         likelihood_func,
         use_weight,
+        use_pi=use_pi,
         general_outroot=general_outroot,
     )
 
@@ -1164,6 +1181,7 @@ def ell1fit(
         energy_range,
         pepoch,
         get_outroot,
+        use_pi=use_pi,
     )
 
     parameters_with_unc, parameters = _build_parameters_from_models(
@@ -1352,6 +1370,15 @@ def main(args=None):
         default=False,
         help="Use pulse energy dependence of profile as weight",
     )
+    parser.add_argument(
+        "--use-pi",
+        action="store_true",
+        default=False,
+        help=(
+            "Base pulsed-fraction weighting (--use-weight) on PI channels instead of "
+            "calibrated energy. No effect without --use-weight."
+        ),
+    )
     parser.add_argument("--ignore-uncertainties", action="store_true", default=False)
 
     args = parser.parse_args(args)
@@ -1374,5 +1401,6 @@ def main(args=None):
         general_outroot=args.outroot,
         likelihood_func=like,
         use_weight=args.use_weight,
+        use_pi=args.use_pi,
         ignore_uncertainties=args.ignore_uncertainties,
     )
