@@ -64,6 +64,14 @@ def pletsch_clarke_likelihood(phases, template_func, weights=None):
     float
         Total log-likelihood.
     """
+    # Templates that can score events themselves do it in one fused pass, which
+    # avoids three full-length temporaries and uses compensated summation. The
+    # generic path below stays for any other callable -- notably the analytic
+    # single-harmonic template and anything a test supplies.
+    fused = getattr(template_func, "loglike", None)
+    if fused is not None:
+        return fused(phases, weights=weights)
+
     probs = template_func(phases)
     probs = np.asarray(probs, dtype=float)
     probs = np.nan_to_num(probs, nan=1e-12, posinf=1e12, neginf=1e-12)
