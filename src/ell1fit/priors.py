@@ -88,8 +88,8 @@ def _periodic_normal_logprior(center, sigma, period):
 
 
 def assign_logpriors(
-    fit_parameter_names, parvalunc, obs_length=1
-):  # parvalunc is a dictionary with mean values ([0]) and uncertainties ([1])of the parameters.
+    fit_parameter_names, parameters_with_unc, obs_length=1
+):  # parameters_with_unc is a dictionary with mean values ([0]) and uncertainties ([1])of the parameters.
     """Assign per-parameter log-prior functions from values and uncertainties.
 
     Priors are rule-based: bounded uniforms for orbital-shape/phase parameters,
@@ -102,9 +102,9 @@ def assign_logpriors(
     for par in fit_parameter_names:
         log_line = f"{par}: "
         if par == "TASC":
-            period = parvalunc["PB"][0] / 86400.0
-            tasc_center = parvalunc["TASC"][0]
-            tasc_unc = parvalunc["TASC"][1]
+            period = parameters_with_unc["PB"][0] / 86400.0
+            tasc_center = parameters_with_unc["TASC"][0]
+            tasc_unc = parameters_with_unc["TASC"][1]
 
             if np.isnan(tasc_unc):
                 log_line += (
@@ -124,31 +124,31 @@ def assign_logpriors(
             log_line += "uniform between -1 and 1"
             logps.append(_flat_logprior(-1, 1))
         elif par.startswith("Phase"):
-            # parvalunc[par][0] is the template-derived phase-zero offset
+            # parameters_with_unc[par][0] is the template-derived phase-zero offset
             # (ell1fit._prepare_templates_and_phase_priors runs, and writes it
             # here, before priors are assigned). One cycle wide, centered on
             # that offset, so the raw local coordinate stays on a single
             # branch instead of drifting across repeated cycles.
-            center = parvalunc[par][0]
+            center = parameters_with_unc[par][0]
             log_line += f"uniform within one cycle of {center:.4f}"
             logps.append(_flat_logprior(center - 0.5, center + 0.5))
         elif (
-            np.isnan(parvalunc[par][1]) and par == "PBDOT"
+            np.isnan(parameters_with_unc[par][1]) and par == "PBDOT"
         ):  # For now the uniform distribution is from/to +-np.inf.
             log_line += "uniform between -1 and 1"
             logps.append(_flat_logprior(-1, 1))
-        elif np.isnan(parvalunc[par][1]) and par[:2] in ["F0", "PB"]:
+        elif np.isnan(parameters_with_unc[par][1]) and par[:2] in ["F0", "PB"]:
             log_line += "uniform between 1/2 and 2 times the mean value"
-            logps.append(_flat_logprior(parvalunc[par][0] / 2, parvalunc[par][0] * 2))
-        elif np.isnan(parvalunc[par][1]) and par == "A1":
+            logps.append(_flat_logprior(parameters_with_unc[par][0] / 2, parameters_with_unc[par][0] * 2))
+        elif np.isnan(parameters_with_unc[par][1]) and par == "A1":
             log_line += "uniform between 0 and 2 times the mean value"
-            logps.append(_flat_logprior(0, parvalunc[par][0] * 2))
-        elif np.isnan(parvalunc[par][1]):
+            logps.append(_flat_logprior(0, parameters_with_unc[par][0] * 2))
+        elif np.isnan(parameters_with_unc[par][1]):
             log_line += "uniform between -inf and inf"
             logps.append(_flat_logprior(-np.inf, np.inf))
         else:
-            log_line += f"normal with mean {parvalunc[par][0]} and std {abs(parvalunc[par][1]):.2e}"
-            logps.append(norm(loc=parvalunc[par][0], scale=abs(parvalunc[par][1])).logpdf)
+            log_line += f"normal with mean {parameters_with_unc[par][0]} and std {abs(parameters_with_unc[par][1]):.2e}"
+            logps.append(norm(loc=parameters_with_unc[par][0], scale=abs(parameters_with_unc[par][1])).logpdf)
         logging.info(log_line)
 
     return logps

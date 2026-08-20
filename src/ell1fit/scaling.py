@@ -91,7 +91,7 @@ def estimate_uncertainties_from_model(model, parameter_names, observation_length
     return parameter_uncertainties
 
 
-def get_factors(fit_parameter_names, model, observation_length, parvalunc=None):
+def get_factors(fit_parameter_names, model, observation_length, parameters_with_unc=None):
     """Compute parameter scaling factors for numerically stable local fitting.
 
     The factors set the size of local parameter variations sampled by the
@@ -126,8 +126,8 @@ def get_factors(fit_parameter_names, model, observation_length, parvalunc=None):
         # For zoom purposes, we prefer the most optimistic uncertainty (to avoid high
         # rejection ratios). For prior purposes, we prefer the most conservative
         # uncertainty (to avoid overconfidence).
-        if parvalunc is not None and par in parvalunc:
-            possible_uncertainties.append(parvalunc[par][1])
+        if parameters_with_unc is not None and par in parameters_with_unc:
+            possible_uncertainties.append(parameters_with_unc[par][1])
             sources.append("uncertainty")
         if par in approximate_uncertainties:
             possible_uncertainties.append(approximate_uncertainties[par])

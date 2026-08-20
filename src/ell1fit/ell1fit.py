@@ -457,24 +457,24 @@ def _build_parameters_from_models(model, ref_model, observation_length, ignore_u
 
     for i in range(n_files):
         count = 0
-        local_pars_uncs = _get_par_dict(
+        file_parameters_with_unc = _get_par_dict(
             model[i],
             ignore_uncertainties=ignore_uncertainties,
             obs_length=observation_length[i],
         )
 
-        while f"F{count}" in local_pars_uncs:
+        while f"F{count}" in file_parameters_with_unc:
             parameters_with_unc[f"F{count}_{i}"] = [
-                local_pars_uncs[f"F{count}"][0],
-                local_pars_uncs[f"F{count}"][1],
+                file_parameters_with_unc[f"F{count}"][0],
+                file_parameters_with_unc[f"F{count}"][1],
             ]
             if f"F{count}" in parameters_with_unc:
                 del parameters_with_unc[f"F{count}"]
             count += 1
 
         parameters_with_unc[f"PEPOCH_{i}"] = [
-            local_pars_uncs["PEPOCH"][0],
-            local_pars_uncs["PEPOCH"][1],
+            file_parameters_with_unc["PEPOCH"][0],
+            file_parameters_with_unc["PEPOCH"][1],
         ]
         parameters_with_unc[f"Phase_{i}"] = [
             parameters_with_unc["Phase"][0],
@@ -629,7 +629,7 @@ def _prepare_fit_setup(
         fit_parameter_names,
         model,
         observation_length,
-        parvalunc=parameters_with_unc,
+        parameters_with_unc=parameters_with_unc,
     )
 
     try:
@@ -830,7 +830,7 @@ def _load_and_format_events(
 
 def trace_likelihood_over_parameter(
     times_from_pepoch,
-    model_parameters,
+    parameters,
     fit_parameter_names,
     values,
     logprior_funcs,
@@ -860,7 +860,7 @@ def trace_likelihood_over_parameter(
 
     _, _, func_to_maximize = _build_posterior_functions(
         times_from_pepoch=times_from_pepoch,
-        model_parameters=model_parameters,
+        parameters=parameters,
         fit_parameter_names=fit_parameter_names,
         values=values,
         logprior_funcs=logprior_funcs,
@@ -885,7 +885,7 @@ def trace_likelihood_over_parameter(
 
 def _build_posterior_functions(
     times_from_pepoch,
-    model_parameters,
+    parameters,
     fit_parameter_names,
     values,
     logprior_funcs,
@@ -914,14 +914,14 @@ def _build_posterior_functions(
         return logp
 
     def local_phases(pars):
-        allpars = copy.deepcopy(model_parameters)
+        trial_parameters = copy.deepcopy(parameters)
 
         for par, initial, value, f in zip(fit_parameter_names, values, pars, factors):
-            allpars[par] = value * f + initial
+            trial_parameters[par] = value * f + initial
         if debug_local_phases:
-            logging.debug(f"Local phases for parameters: {allpars}")
+            logging.debug(f"Local phases for parameters: {trial_parameters}")
 
-        return _calculate_phases(times_from_pepoch, allpars, tolerance=tolerance)
+        return _calculate_phases(times_from_pepoch, trial_parameters, tolerance=tolerance)
 
     def func_to_maximize(pars):
         lp = logprior(pars)
@@ -985,7 +985,7 @@ def _augment_results_with_fit_metadata(
 
 def optimize_solution(
     times_from_pepoch,
-    model_parameters,
+    parameters,
     fit_parameter_names,
     values,
     logprior_funcs,
@@ -1018,7 +1018,7 @@ def optimize_solution(
     """
     _, local_phases, func_to_maximize = _build_posterior_functions(
         times_from_pepoch=times_from_pepoch,
-        model_parameters=model_parameters,
+        parameters=parameters,
         fit_parameter_names=fit_parameter_names,
         values=values,
         logprior_funcs=logprior_funcs,
@@ -1036,7 +1036,7 @@ def optimize_solution(
 
     logging.info("Initial parameters: ")
     for par in fit_parameter_names:
-        logging.info(f"  {par}: {model_parameters[par]}")
+        logging.info(f"  {par}: {parameters[par]}")
 
     logging.info("Initial likelihood: " + str(func_to_maximize([0] * len(values))))
     all_zeros = [0] * len(values)
@@ -1048,14 +1048,14 @@ def optimize_solution(
 
     logging.info("Fitted (rescaled) parameters: " + str(fit_pars))
 
-    pars_dict = copy.deepcopy(model_parameters)
+    fitted_parameters = copy.deepcopy(parameters)
 
     for par, initial, value, f in zip(fit_parameter_names, values, fit_pars, factors):
-        pars_dict[par] = value * f + initial
+        fitted_parameters[par] = value * f + initial
 
     for key in fit_parameter_names:
         logging.info(
-            f"  {key}: {pars_dict[key]} (difference from initial: {pars_dict[key] - model_parameters[key]})"
+            f"  {key}: {fitted_parameters[key]} (difference from initial: {fitted_parameters[key] - parameters[key]})"
         )
     logging.info("Fitted likelihood: " + str(func_to_maximize(fit_pars)))
     phases = local_phases(fit_pars)
@@ -1075,14 +1075,14 @@ def optimize_solution(
         corner_labels=corner_labels,
     )
 
-    results.update(model_parameters)
+    results.update(parameters)
     results = _augment_results_with_fit_metadata(
         results,
         fit_parameter_names,
         fit_pars,
         values,
         factors,
-        phase_source=pars_dict,
+        phase_source=fitted_parameters,
     )
 
     fit_pars = [results["d" + par + "_50"] for par in fit_parameter_names]

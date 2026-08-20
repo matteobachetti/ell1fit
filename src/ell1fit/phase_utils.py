@@ -189,13 +189,13 @@ def fast_phase(times, frequency_derivatives):
     return _fast_phase_generic(times, np.array(frequency_derivatives))
 
 
-def _calculate_phases(times_from_pepoch, pars_dict, tolerance=1e-8):
+def _calculate_phases(times_from_pepoch, parameters, tolerance=1e-8):
     """Compute pulse phases for each file given spin and ELL1 orbital parameters."""
     n_files = len(times_from_pepoch)
     list_phases_from_zero_to_one = []
-    pb = pars_dict["PB"]
+    pb = parameters["PB"]
     for i in range(n_files):
-        tasc_raw = _mjd_to_sec(pars_dict["TASC"], pars_dict[f"PEPOCH_{i}"])
+        tasc_raw = _mjd_to_sec(parameters["TASC"], parameters[f"PEPOCH_{i}"])
         tasc = ((tasc_raw + 0.5 * pb) % pb) - 0.5 * pb
         if np.abs(tasc_raw - tasc) > 1e-9:
             warnings.warn("Wrapping TASC to the principal interval modulo PB")
@@ -203,33 +203,33 @@ def _calculate_phases(times_from_pepoch, pars_dict, tolerance=1e-8):
         deorbit_times_from_pepoch = simple_ell1_deorbit_numba(
             times_from_pepoch[i],
             pb,
-            pars_dict["A1"],
+            parameters["A1"],
             tasc,
-            pars_dict["EPS1"],
-            pars_dict["EPS2"],
+            parameters["EPS1"],
+            parameters["EPS2"],
             tolerance=tolerance,
         )
 
         deorbited_pepoch = simple_ell1_deorbit_numba(
             np.array([0.0]),
             pb,
-            pars_dict["A1"],
+            parameters["A1"],
             tasc,
-            pars_dict["EPS1"],
-            pars_dict["EPS2"],
+            parameters["EPS1"],
+            parameters["EPS2"],
             tolerance=tolerance,
         )
 
         count = 0
         freq_ders = []
-        while f"F{count}_{i}" in pars_dict:
-            freq_ders.append(float(pars_dict[f"F{count}_{i}"]))
+        while f"F{count}_{i}" in parameters:
+            freq_ders.append(float(parameters[f"F{count}_{i}"]))
             count += 1
 
         phase_pepoch = fast_phase(deorbited_pepoch.astype(float), freq_ders)
 
         phases = (
-            pars_dict[f"Phase_{i}"]
+            parameters[f"Phase_{i}"]
             - phase_pepoch
             + fast_phase(deorbit_times_from_pepoch.astype(float), freq_ders)
         )
