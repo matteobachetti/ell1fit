@@ -46,6 +46,11 @@ class TestExecution:
             assert os.path.exists(ecsv_par)
             os.rename(ecsv_par, ecsv_par.replace(".par", "_e1fit.par"))
 
+        # No -o was given, so the combined multi-file output falls back to
+        # "out" and lands in the current directory rather than next to the
+        # input files -- confirm that, and see teardown_class for cleanup.
+        assert os.path.exists(f"out{label}_results.ecsv")
+
         # If we want to reproduce them with ell1par... we can do that
         from pint.models import get_model
 
@@ -93,8 +98,16 @@ class TestExecution:
             assert np.isfinite(table["rough_dTASC"][-1])
             assert np.isfinite(table["rough_dF0"][-1])
 
+        # See test_ell1fit_and_ell1par: no -o given, so the combined output
+        # lands in the current directory.
+        assert os.path.exists(f"out{label}_results.ecsv")
+
     @classmethod
     def teardown_class(cls):
         outs = glob.glob(os.path.join(datadir, "*A1_*TASC*"))
+        # Combined multi-file outputs (no -o given) fall back to "out" and
+        # land in the current directory instead of datadir -- clean those
+        # up too, wherever the test process actually ran from.
+        outs += glob.glob(os.path.join(os.getcwd(), "out_A1_*TASC*"))
         for out in outs:
             os.remove(out)
