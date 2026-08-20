@@ -799,7 +799,7 @@ def _get_par_dict(
             f"F{count}: max_orbital_change={max_orbital_change}, "
             f"obs_length_change={obs_length_change}"
         )
-        default_unc = 10 * max_orbital_change * f + obs_length_change
+        default_unc = 10 * max_orbital_change + obs_length_change
         check_uncertainty(f"F{count}", default_unc)
         count += 1
 
