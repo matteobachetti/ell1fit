@@ -138,3 +138,51 @@ def test_posterior_rejects_non_invertible_orbits_as_impossible():
     assert np.isfinite(func_to_maximize([0.0])), "the starting point should be valid"
     # A1 driven far past the subluminal limit.
     assert func_to_maximize([-8.7e4]) == -np.inf
+
+
+def test_deorbit_is_correct_for_an_event_exactly_at_tasc():
+    """An event sitting precisely at TASC must still get the EPS terms applied.
+
+    The iteration seeds its "previous value" and compares against it to decide
+    whether to keep going. With a plain sentinel of 0 that comparison was false
+    on entry for an event at exactly TASC -- where the first, circular-only
+    estimate is also exactly 0 -- so the loop was skipped and the returned time
+    was missing the whole EPS2 cos(2 phi) term. That term is at its maximum at
+    phi = 0, so the error was maximal precisely where it was silently ignored:
+    A1 * EPS2 / 2, here 2.3e-3 s, against a requested tolerance of 1e-8.
+    """
+    PB, A1, TASC = 218849.0, 22.215, 0.0
+    EPS1, EPS2 = 1.5e-4, -2.1e-4
+    omega = 2 * np.pi / PB
+
+    times = np.array([0.0, 1.0, 100.0])
+    out = simple_ell1_deorbit_numba(times, PB, A1, TASC, EPS1, EPS2, 1e-8)
+
+    # The returned emission time must satisfy the defining equation.
+    te = out - TASC
+    phase = omega * te
+    reconstructed = te + A1 * (
+        np.sin(phase) + EPS1 / 2 * np.sin(2 * phase) + EPS2 / 2 * np.cos(2 * phase)
+    )
+    residual = np.abs(reconstructed + TASC - times)
+    assert np.all(residual < 1e-8), f"deorbit did not solve its own equation: {residual}"
+
+    # Specifically at TASC the solution is not zero: it is -A1 * EPS2 / 2.
+    assert abs(out[0] - TASC) > 1e-6, "the EPS terms were never applied at TASC"
+
+
+def test_deorbit_tolerance_actually_tightens_the_solution():
+    """A smaller tolerance must produce a demonstrably better solution.
+
+    While the loop was being skipped, the tolerance argument had no effect
+    whatsoever -- every value returned an identical, unconverged answer.
+    """
+    PB, A1, TASC = 218849.0, 22.215, 0.0
+    EPS1, EPS2 = 1.5e-4, -2.1e-4
+    times = np.linspace(0, 1e5, 2000)
+
+    converged = simple_ell1_deorbit_numba(times, PB, A1, TASC, EPS1, EPS2, 1e-14)
+    loose = simple_ell1_deorbit_numba(times, PB, A1, TASC, EPS1, EPS2, 1e-6)
+    tight = simple_ell1_deorbit_numba(times, PB, A1, TASC, EPS1, EPS2, 1e-10)
+
+    assert np.max(np.abs(tight - converged)) < np.max(np.abs(loose - converged))

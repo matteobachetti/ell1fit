@@ -121,9 +121,13 @@ def simple_circular_deorbit_numba(
     omega = twopi / PB
     out_times = np.empty_like(times)
     for i in prange(times.size):
-        old_out = 0
         t = times[i] - TASC
         out_times[i] = t - A1 * np.sin(omega * t)
+        # Seed the previous value so the first comparison can never be a
+        # no-op. A plain sentinel of 0 collides with a legitimate solution of
+        # exactly 0 -- reached whenever an event sits precisely at TASC -- and
+        # silently skips the loop entirely.
+        old_out = out_times[i] + 2 * tolerance + 1.0
         n_iter = 0
         while np.abs(out_times[i] - old_out) > tolerance and n_iter < max_iter:
             old_out = out_times[i]
@@ -157,9 +161,16 @@ def simple_ell1_deorbit_numba(
     k1 = EPS1 / 2
     k2 = EPS2 / 2
     for i in prange(times.size):
-        old_out = 0
         t = times[i] - TASC
+        # Circular first guess; the EPS terms are applied inside the loop, so
+        # the loop must run at least once or they are never applied at all.
         out_times[i] = t - A1 * np.sin(omega * t)
+        # Seeding this to a plain 0 collided with a legitimate solution of
+        # exactly 0, reached whenever an event sits precisely at TASC. The
+        # comparison was then false on entry, the loop was skipped, and the
+        # returned value was missing the whole EPS2 cos(2 phi) term -- which is
+        # at its maximum right there. Offsetting guarantees one iteration.
+        old_out = out_times[i] + 2 * tolerance + 1.0
         n_iter = 0
         while np.abs(out_times[i] - old_out) > tolerance and n_iter < max_iter:
             old_out = out_times[i]
