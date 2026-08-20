@@ -22,11 +22,18 @@ from .helpers import build_pipeline_state
 @pytest.fixture(scope="module")
 def state(tmp_path_factory):
     outdir = str(tmp_path_factory.mktemp("scaling"))
+    # Deliberately a *hard* fit: enough events to have real structure, and a
+    # parfile offset so the optimizer has somewhere to travel. On an easy
+    # problem both scalings converge perfectly and there is no difference to
+    # measure -- an earlier version of this fixture used 4000 events and no
+    # offset, and the resulting comparison of two ~1e-5 nat spreads was
+    # arbitrary enough to pass locally and fail in CI.
     dataset = make_multi_epoch_dataset(
         outdir,
         epoch_offsets=(0.0, 37.0),
-        n_events=4000,
+        n_events=12000,
         duration=100_000.0,
+        offsets={"A1": 0.01},
         uncertainties={"A1": 1e-1, "F0": 1e-7},
         prefix="scal",
     )
@@ -85,13 +92,29 @@ def test_preconditioning_equalises_the_scales(state):
     assert np.all(after > 1e-3 * TARGET_LOCAL_SIGMA)
 
 
+#: Two optima closer than this in log-posterior count as the same one.
+SAME_OPTIMUM = 0.01
+
+
 def test_preconditioning_helps_the_optimizer_find_the_best_optimum(state):
-    """The point of the exercise: reliable convergence from varied starts."""
+    """The point of the exercise: every start should reach the same optimum.
+
+    The assertion is on the *preconditioned* run reaching one optimum from every
+    start, rather than on it beating the raw run by some margin. Those are
+    different claims, and only the first is robust: on an easy fit both scalings
+    converge and comparing their residual spreads compares two numbers that are
+    both essentially zero.
+
+    Measured on this fixture across six data seeds, the raw factors reach the
+    best optimum from 1-6 starts out of 8, with spreads of 0.6 to 8 nats; after
+    preconditioning it is 8 of 8 every time, with spreads around 1e-5 nats.
+    """
     from scipy.optimize import minimize
 
     from ell1fit.fitting import _bounds_in_local_coordinates
 
     observations, setup = state
+    n_starts = 8
     _, _, func = _build_posterior_functions(observations, setup)
     rescaled = dataclasses.replace(
         setup,
@@ -103,7 +126,7 @@ def test_preconditioning_helps_the_optimizer_find_the_best_optimum(state):
         bounds = _bounds_in_local_coordinates(st.baseline_values, st.factors, st.logprior_funcs)
         rng = np.random.default_rng(0)
         values = []
-        for k in range(8):
+        for k in range(n_starts):
             start = (
                 np.zeros(st.n_parameters)
                 if k == 0
@@ -111,13 +134,21 @@ def test_preconditioning_helps_the_optimizer_find_the_best_optimum(state):
             )
             values.append(-minimize(lambda p: -f(p), start, bounds=bounds).fun)
         values = np.array(values)
-        return int(np.sum(values > values.max() - 0.01)), values.max() - values.min()
+        return int(np.sum(values > values.max() - SAME_OPTIMUM)), values.max() - values.min()
 
     n_before, spread_before = reached_best(setup)
     n_after, spread_after = reached_best(rescaled)
 
+    assert n_after == n_starts, (
+        f"only {n_after}/{n_starts} starts converged to the same optimum after "
+        f"preconditioning (spread {spread_after:.3g} nats)"
+    )
+    assert spread_after < SAME_OPTIMUM
+
+    # And it must not be a step backwards. The max() lets both pass when the raw
+    # scaling already converged, where the comparison would be meaningless.
+    assert spread_after <= max(spread_before, SAME_OPTIMUM)
     assert n_after >= n_before
-    assert spread_after <= spread_before + 1e-9
 
 
 def test_a_flat_direction_keeps_its_factor(state):
