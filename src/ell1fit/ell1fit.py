@@ -431,7 +431,12 @@ def ell1fit(
     # Must run before _prepare_fit_setup: it writes each file's real Phase_i
     # offset into parameters/parameters_with_unc, which assign_logpriors then
     # centers that parameter's prior on.
-    template_func, pulsed_frac, parameters, parameters_with_unc = _prepare_templates_and_phase_priors(
+    (
+        template_func,
+        pulsed_frac,
+        parameters,
+        parameters_with_unc,
+    ) = _prepare_templates_and_phase_priors(
         profile,
         profile_weight,
         use_weight,

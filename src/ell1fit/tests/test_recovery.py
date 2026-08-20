@@ -23,7 +23,17 @@ point of the adaptive-template work these tests exist to validate.
 
 For verifying that a *refactor* changed nothing, bit-comparison is the right
 tool, but it belongs in a same-machine before/after dump, not in a checked-in
-test. See the developer notes.
+test. See ``tools/refactor_net.py``.
+
+A trap for anyone adding a ``TASC`` assertion here
+--------------------------------------------------
+``TASC`` is only defined modulo ``PB``, and
+:func:`ell1fit.models._load_and_validate_models` re-references the shared model
+to the mean ``PEPOCH``. With a multi-epoch dataset that shifts the reported
+value by a whole number of orbits -- 17 of them, about 43 days, for the epochs
+used here -- so comparing a fitted ``TASC`` directly against the injected one
+fails by an enormous margin while the fit is in fact correct. Reduce the
+difference modulo ``PB`` before asserting on it.
 """
 
 import numpy as np
@@ -34,7 +44,7 @@ from ell1fit.ell1fit import main as main_ell1fit
 from ell1fit.phase_utils import folded_profile
 from stingray.pulse.pulsar import z_n_binned_events
 
-from .datagen import InjectedSolution, make_multi_epoch_dataset
+from .datagen import make_multi_epoch_dataset
 
 EPOCH_OFFSETS = (0.0, 37.0)
 
@@ -115,18 +125,6 @@ def _fitted(table, parameter):
     return median, sigma, point_estimate
 
 
-def _tasc_offset_from_truth(fitted_tasc, solution):
-    """Difference between a fitted and injected ``TASC``, modulo one orbit.
-
-    ``TASC`` is only defined up to a whole number of orbits, and the pipeline
-    re-references it to ``mean(PEPOCH)`` via ``change_binary_epoch``. With the
-    epochs used here that shifts the reported value by 17 orbits -- about 43
-    days -- so a direct comparison against the injected value is meaningless.
-    """
-    n_orbits = np.round((fitted_tasc - solution.TASC) / solution.PB)
-    return fitted_tasc - (solution.TASC + n_orbits * solution.PB)
-
-
 def test_injected_signal_is_detectable_at_the_truth(rich_dataset):
     """The generator's forward model must invert under the package's deorbit.
 
@@ -168,7 +166,6 @@ def test_injected_signal_is_detectable_at_the_truth(rich_dataset):
 def test_pipeline_recovers_injected_solution(dataset, tmp_path):
     """The fit must pull back to the truth from a deliberately wrong parfile."""
     solution = dataset["solution"]
-    epochs = dataset["epochs"]
     outroot = str(tmp_path / "recovery")
 
     main_ell1fit(

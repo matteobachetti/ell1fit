@@ -184,7 +184,8 @@ def optimize_solution(
 
     for key in fit_parameter_names:
         logging.info(
-            f"  {key}: {fitted_parameters[key]} (difference from initial: {fitted_parameters[key] - parameters[key]})"
+            f"  {key}: {fitted_parameters[key]} "
+            f"(difference from initial: {fitted_parameters[key] - parameters[key]})"
         )
     logging.info("Fitted likelihood: " + str(func_to_maximize(fit_pars)))
     phases = local_phases(fit_pars)

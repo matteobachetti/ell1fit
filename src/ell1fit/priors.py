@@ -88,14 +88,29 @@ def _periodic_normal_logprior(center, sigma, period):
     return func
 
 
-def assign_logpriors(
-    fit_parameter_names, parameters_with_unc, obs_length=1
-):  # parameters_with_unc is a dictionary with mean values ([0]) and uncertainties ([1])of the parameters.
+def assign_logpriors(fit_parameter_names, parameters_with_unc, obs_length=1):
     """Assign per-parameter log-prior functions from values and uncertainties.
 
     Priors are rule-based: bounded uniforms for orbital-shape/phase parameters,
     broad uniforms when uncertainties are unavailable, and Gaussian priors when
     uncertainties are provided.
+
+    Parameters
+    ----------
+    fit_parameter_names : list of str
+        Free parameters needing a prior, in fit order.
+    parameters_with_unc : dict
+        ``{name: [value, uncertainty]}``. A NaN uncertainty means the parfile
+        did not provide one, which selects the broad-uniform branch below.
+    obs_length : array-like, optional
+        Per-file observation durations in seconds.
+
+    Returns
+    -------
+    list of callable
+        One log-prior per entry of ``fit_parameter_names``, evaluated in
+        physical units. Those with hard support also carry a ``phys_bounds``
+        attribute; see :func:`_flat_logprior`.
     """
     logps = []
     logging.info("Setting up priors")
@@ -140,7 +155,8 @@ def assign_logpriors(
             logps.append(_flat_logprior(-1, 1))
         elif np.isnan(parameters_with_unc[par][1]) and par[:2] in ["F0", "PB"]:
             log_line += "uniform between 1/2 and 2 times the mean value"
-            logps.append(_flat_logprior(parameters_with_unc[par][0] / 2, parameters_with_unc[par][0] * 2))
+            value = parameters_with_unc[par][0]
+            logps.append(_flat_logprior(value / 2, value * 2))
         elif np.isnan(parameters_with_unc[par][1]) and par == "A1":
             log_line += "uniform between 0 and 2 times the mean value"
             logps.append(_flat_logprior(0, parameters_with_unc[par][0] * 2))
@@ -148,8 +164,9 @@ def assign_logpriors(
             log_line += "uniform between -inf and inf"
             logps.append(_flat_logprior(-np.inf, np.inf))
         else:
-            log_line += f"normal with mean {parameters_with_unc[par][0]} and std {abs(parameters_with_unc[par][1]):.2e}"
-            logps.append(norm(loc=parameters_with_unc[par][0], scale=abs(parameters_with_unc[par][1])).logpdf)
+            value, uncertainty = parameters_with_unc[par][0], abs(parameters_with_unc[par][1])
+            log_line += f"normal with mean {value} and std {uncertainty:.2e}"
+            logps.append(norm(loc=value, scale=uncertainty).logpdf)
         logging.info(log_line)
 
     return logps
