@@ -91,7 +91,7 @@ def estimate_uncertainties_from_model(model, parameter_names, observation_length
     return parameter_uncertainties
 
 
-def get_factors(parnames, model, observation_length, parvalunc=None):
+def get_factors(fit_parameter_names, model, observation_length, parvalunc=None):
     """Compute parameter scaling factors for numerically stable local fitting.
 
     The factors set the size of local parameter variations sampled by the
@@ -106,7 +106,7 @@ def get_factors(parnames, model, observation_length, parvalunc=None):
     unc_to_factor_scale = 1e6
 
     approximate_uncertainties = estimate_uncertainties_from_model(
-        model, parnames, observation_length, optimistic=True
+        model, fit_parameter_names, observation_length, optimistic=True
     )
 
     def _scaled_zoom_from_uncertainty(uncertainty):
@@ -116,7 +116,7 @@ def get_factors(parnames, model, observation_length, parvalunc=None):
         zoom_from_unc = order_of_magnitude(uncertainty * unc_to_factor_scale)
         return max(zoom_from_unc, 1e-12)
 
-    for par in parnames:
+    for par in fit_parameter_names:
         zoom_factor = None
         source = None
 

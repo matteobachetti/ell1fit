@@ -57,7 +57,7 @@ def look_for_list_of_strings_in_string(input_list, string):
     return None
 
 
-def split_output_results(result_table, n_files, fit_parameters):
+def split_output_results(result_table, n_files, requested_parameter_names):
     """
     Examples
     --------
@@ -67,7 +67,7 @@ def split_output_results(result_table, n_files, fit_parameters):
     >>> assert sorted(output_tables[0].colnames) == ["PB", "TASC_0", "TASC_10"]
     >>> assert sorted(output_tables[1].colnames) == ["PB", "TASC_0", "TASC_10", "dF0", "dF0_16"]
     """
-    tier_2_parameters = [par for par in fit_parameters if simple_freq_re.match(par)]
+    tier_2_parameters = [par for par in requested_parameter_names if simple_freq_re.match(par)]
 
     tier_2_parameters = tier_2_parameters + [
         "Phase",

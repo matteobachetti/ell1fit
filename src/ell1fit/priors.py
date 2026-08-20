@@ -88,7 +88,7 @@ def _periodic_normal_logprior(center, sigma, period):
 
 
 def assign_logpriors(
-    parnames, parvalunc, obs_length=1
+    fit_parameter_names, parvalunc, obs_length=1
 ):  # parvalunc is a dictionary with mean values ([0]) and uncertainties ([1])of the parameters.
     """Assign per-parameter log-prior functions from values and uncertainties.
 
@@ -99,7 +99,7 @@ def assign_logpriors(
     logps = []
     logging.info("Setting up priors")
 
-    for par in parnames:
+    for par in fit_parameter_names:
         log_line = f"{par}: "
         if par == "TASC":
             period = parvalunc["PB"][0] / 86400.0

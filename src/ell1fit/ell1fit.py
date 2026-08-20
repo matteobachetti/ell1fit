@@ -271,7 +271,7 @@ def _get_nharm_suffix(nharm):
 
 def _make_outroot_getter(
     files,
-    list_parameter_names,
+    requested_parameter_names,
     energy_range,
     nharm,
     likelihood_func,
@@ -297,7 +297,7 @@ def _make_outroot_getter(
         outroot = (
             initial_outroot
             + "_"
-            + "_".join(list_parameter_names)
+            + "_".join(requested_parameter_names)
             + energy_str
             + nharm_str
             + likelihood_str
@@ -309,20 +309,20 @@ def _make_outroot_getter(
     return get_outroot
 
 
-def _collect_parameter_names(parameters, list_parameter_names, likelihood_func):
-    """Collect fit parameter names matching selected tokens and phase rules."""
-    parameter_names = []
+def _collect_parameter_names(parameters, requested_parameter_names, likelihood_func):
+    """Expand the user-requested parameter tokens into per-file fit parameter names."""
+    fit_parameter_names = []
     for f in parameters:
         if f.startswith("Phase") and likelihood_func == pletsch_clarke_likelihood:
-            parameter_names.append(f)
+            fit_parameter_names.append(f)
             continue
 
-        for g in list_parameter_names:
+        for g in requested_parameter_names:
             # Startswith alone was confusing PBDOT for PB
             if f == g or (f.startswith(g) and freq_re.match(f)):
-                parameter_names.append(f)
+                fit_parameter_names.append(f)
 
-    return parameter_names
+    return fit_parameter_names
 
 
 def _get_outroots(get_outroot, n_files):
@@ -379,13 +379,13 @@ def _enrich_results_with_observation_metadata(
     return results
 
 
-def _write_results_products(results, n_files, get_outroot, list_parameter_names, model):
+def _write_results_products(results, n_files, get_outroot, requested_parameter_names, model):
     """Write combined and per-file result tables plus updated parfiles."""
     table_results = Table(rows=[results])
     output_file = get_outroot(None) + "_results.ecsv"
     safe_save(table_results, output_file)
 
-    split_tables = split_output_results(table_results, n_files, list_parameter_names)
+    split_tables = split_output_results(table_results, n_files, requested_parameter_names)
     for i, table in enumerate(split_tables):
         outfile = get_outroot(i) + "_results.ecsv"
         table.write(outfile, overwrite=True)
@@ -608,40 +608,40 @@ def _build_profiles_and_weights(
 
 def _prepare_fit_setup(
     parameters,
-    list_parameter_names,
+    requested_parameter_names,
     likelihood_func,
     parameters_with_unc,
     observation_length,
     model,
 ):
     """Collect fit parameters, priors, factors, and initial fit values."""
-    parameter_names = _collect_parameter_names(
+    fit_parameter_names = _collect_parameter_names(
         parameters,
-        list_parameter_names,
+        requested_parameter_names,
         likelihood_func=likelihood_func,
     )
     logprior_funcs = assign_logpriors(
-        parameter_names,
+        fit_parameter_names,
         parameters_with_unc,
         obs_length=observation_length,
     )
     factors = get_factors(
-        parameter_names,
+        fit_parameter_names,
         model,
         observation_length,
         parvalunc=parameters_with_unc,
     )
 
     try:
-        input_mean_fit_pars = [parameters[par] for par in parameter_names]
+        input_mean_fit_pars = [parameters[par] for par in fit_parameter_names]
     except KeyError as exc:
         raise ValueError("One or more parameters are missing from the parameter file") from exc
 
-    return parameter_names, logprior_funcs, factors, input_mean_fit_pars
+    return fit_parameter_names, logprior_funcs, factors, input_mean_fit_pars
 
 
 def _trace_phase_0_likelihood(
-    parameter_names,
+    fit_parameter_names,
     times_from_pepoch,
     parameters,
     input_mean_fit_pars,
@@ -653,12 +653,12 @@ def _trace_phase_0_likelihood(
     tolerance=1e-8,
 ):
     """Optionally trace the likelihood around Phase_0 for diagnostics."""
-    for parameter in [p for p in parameter_names if p.startswith("Phase_")]:
-        idx = parameter_names.index(parameter)
+    for parameter in [p for p in fit_parameter_names if p.startswith("Phase_")]:
+        idx = fit_parameter_names.index(parameter)
         results_trace = trace_likelihood_over_parameter(
             times_from_pepoch,
             parameters,
-            parameter_names,
+            fit_parameter_names,
             input_mean_fit_pars,
             logprior_funcs,
             factors,
@@ -831,7 +831,7 @@ def _load_and_format_events(
 def trace_likelihood_over_parameter(
     times_from_pepoch,
     model_parameters,
-    fit_parameters,
+    fit_parameter_names,
     values,
     logprior_funcs,
     factors,
@@ -861,7 +861,7 @@ def trace_likelihood_over_parameter(
     _, _, func_to_maximize = _build_posterior_functions(
         times_from_pepoch=times_from_pepoch,
         model_parameters=model_parameters,
-        fit_parameters=fit_parameters,
+        fit_parameter_names=fit_parameter_names,
         values=values,
         logprior_funcs=logprior_funcs,
         factors=factors,
@@ -873,7 +873,7 @@ def trace_likelihood_over_parameter(
         debug_func=False,
     )
 
-    idx = fit_parameters.index(parameter_name)
+    idx = fit_parameter_names.index(parameter_name)
     results = {}
     for val in parameter_values:
         pars = [0] * len(values)
@@ -886,7 +886,7 @@ def trace_likelihood_over_parameter(
 def _build_posterior_functions(
     times_from_pepoch,
     model_parameters,
-    fit_parameters,
+    fit_parameter_names,
     values,
     logprior_funcs,
     factors,
@@ -907,7 +907,7 @@ def _build_posterior_functions(
 
         logp = 0
         for parname, logp_func, initial, local_value, f in zip(
-            fit_parameters, logprior_funcs, values, pars, factors
+            fit_parameter_names, logprior_funcs, values, pars, factors
         ):
             value = local_value * f + initial
             logp += logp_func(value)
@@ -916,7 +916,7 @@ def _build_posterior_functions(
     def local_phases(pars):
         allpars = copy.deepcopy(model_parameters)
 
-        for par, initial, value, f in zip(fit_parameters, values, pars, factors):
+        for par, initial, value, f in zip(fit_parameter_names, values, pars, factors):
             allpars[par] = value * f + initial
         if debug_local_phases:
             logging.debug(f"Local phases for parameters: {allpars}")
@@ -957,7 +957,7 @@ def _plot_phaseogram_set(reference_phases, fitted_phases, times_from_pepoch, out
 
 def _augment_results_with_fit_metadata(
     results,
-    fit_parameters,
+    fit_parameter_names,
     fit_pars,
     values,
     factors,
@@ -965,7 +965,7 @@ def _augment_results_with_fit_metadata(
 ):
     """Store local-fit summaries and scaling metadata in sampler output."""
     rough_results = {}
-    for par, value in zip(fit_parameters, fit_pars):
+    for par, value in zip(fit_parameter_names, fit_pars):
         rough_results["rough_d" + par] = value
 
     count = 0
@@ -975,7 +975,7 @@ def _augment_results_with_fit_metadata(
 
     results.update(rough_results)
 
-    for par, initial, f in zip(fit_parameters, values, factors):
+    for par, initial, f in zip(fit_parameter_names, values, factors):
         results["d" + par + "_mean"] = results["d" + par + "_50"]
         results["d" + par + "_initial"] = initial
         results["d" + par + "_factor"] = f
@@ -986,7 +986,7 @@ def _augment_results_with_fit_metadata(
 def optimize_solution(
     times_from_pepoch,
     model_parameters,
-    fit_parameters,
+    fit_parameter_names,
     values,
     logprior_funcs,
     factors,
@@ -1019,7 +1019,7 @@ def optimize_solution(
     _, local_phases, func_to_maximize = _build_posterior_functions(
         times_from_pepoch=times_from_pepoch,
         model_parameters=model_parameters,
-        fit_parameters=fit_parameters,
+        fit_parameter_names=fit_parameter_names,
         values=values,
         logprior_funcs=logprior_funcs,
         factors=factors,
@@ -1035,7 +1035,7 @@ def optimize_solution(
         return -func_to_maximize(pars)
 
     logging.info("Initial parameters: ")
-    for par in fit_parameters:
+    for par in fit_parameter_names:
         logging.info(f"  {par}: {model_parameters[par]}")
 
     logging.info("Initial likelihood: " + str(func_to_maximize([0] * len(values))))
@@ -1050,10 +1050,10 @@ def optimize_solution(
 
     pars_dict = copy.deepcopy(model_parameters)
 
-    for par, initial, value, f in zip(fit_parameters, values, fit_pars, factors):
+    for par, initial, value, f in zip(fit_parameter_names, values, fit_pars, factors):
         pars_dict[par] = value * f + initial
 
-    for key in fit_parameters:
+    for key in fit_parameter_names:
         logging.info(
             f"  {key}: {pars_dict[key]} (difference from initial: {pars_dict[key] - model_parameters[key]})"
         )
@@ -1064,28 +1064,28 @@ def optimize_solution(
     _plot_phaseogram_set(phases_zero, phases, times_from_pepoch, outroots, suffix="")
 
     corner_labels = [
-        "d" + par + f"{np.log10(fac):+g}" for (par, fac) in zip(fit_parameters, factors)
+        "d" + par + f"{np.log10(fac):+g}" for (par, fac) in zip(fit_parameter_names, factors)
     ]
     results = safe_run_sampler(
         func_to_maximize,
         fit_pars,
         max_n=nsteps,
         outroot=outroots[-1],
-        labels=["d" + par for par in fit_parameters],
+        labels=["d" + par for par in fit_parameter_names],
         corner_labels=corner_labels,
     )
 
     results.update(model_parameters)
     results = _augment_results_with_fit_metadata(
         results,
-        fit_parameters,
+        fit_parameter_names,
         fit_pars,
         values,
         factors,
         phase_source=pars_dict,
     )
 
-    fit_pars = [results["d" + par + "_50"] for par in fit_parameters]
+    fit_pars = [results["d" + par + "_50"] for par in fit_parameter_names]
     phases = local_phases(fit_pars)
 
     _plot_phaseogram_set(phases_zero, phases, times_from_pepoch, outroots, suffix="_final")
@@ -1163,10 +1163,10 @@ def ell1fit(
 
     nbin = max(32, nharm * 8)
 
-    list_parameter_names = sorted(fit_parameters)
+    requested_parameter_names = sorted(fit_parameters)
     get_outroot = _make_outroot_getter(
         files,
-        list_parameter_names,
+        requested_parameter_names,
         energy_range,
         nharm,
         likelihood_func,
@@ -1217,9 +1217,9 @@ def ell1fit(
         parameters_with_unc,
     )
 
-    parameter_names, logprior_funcs, factors, input_mean_fit_pars = _prepare_fit_setup(
+    fit_parameter_names, logprior_funcs, factors, input_mean_fit_pars = _prepare_fit_setup(
         parameters,
-        list_parameter_names,
+        requested_parameter_names,
         likelihood_func,
         parameters_with_unc,
         observation_length,
@@ -1230,7 +1230,7 @@ def ell1fit(
 
     input_stuff = copy.deepcopy(
         (
-            parameter_names,
+            fit_parameter_names,
             times_from_pepoch,
             parameters,
             input_mean_fit_pars,
@@ -1241,7 +1241,7 @@ def ell1fit(
         )
     )
     _trace_phase_0_likelihood(
-        parameter_names,
+        fit_parameter_names,
         times_from_pepoch,
         parameters,
         input_mean_fit_pars,
@@ -1252,9 +1252,9 @@ def ell1fit(
         outroot=outroots[-1],
         tolerance=tolerance,
     )
-    input_mean_fit_pars = [parameters[par] for par in parameter_names]
+    input_mean_fit_pars = [parameters[par] for par in fit_parameter_names]
     output_stuff = (
-        parameter_names,
+        fit_parameter_names,
         times_from_pepoch,
         parameters,
         input_mean_fit_pars,
@@ -1267,7 +1267,7 @@ def ell1fit(
     results = optimize_solution(
         times_from_pepoch,
         parameters,
-        parameter_names,
+        fit_parameter_names,
         input_mean_fit_pars,
         logprior_funcs,
         factors,
@@ -1294,7 +1294,7 @@ def ell1fit(
         nsteps,
     )
 
-    return _write_results_products(results, n_files, get_outroot, list_parameter_names, model)
+    return _write_results_products(results, n_files, get_outroot, requested_parameter_names, model)
 
 
 def main(args=None):
