@@ -14,32 +14,20 @@ Main stages are:
 The high-level entry point is :func:`ell1fit`; :func:`main` exposes the CLI.
 """
 
-import warnings
-
-import os
 import copy
-import re
 import logging
+import os
+import re
 
 import matplotlib.pyplot as plt
 import numpy as np
-from ell1fit import splitext_improved
-from hendrics.io import load_events
-from stingray.pulse.pulsar import z_n_binned_events, z_n_gauss
-from stingray.stats import (
-    a_from_ssig,
-    z2_n_detection_level,
-    power_confidence_limits,
-)
-from pint.models import get_model
-
-from scipy.interpolate import interp1d
-
 from astropy.table import Table
 from scipy.optimize import minimize
+from stingray.pulse.pulsar import z_n_binned_events, z_n_gauss
 
 from . import version
 from .create_parfile import update_model
+from .events import _load_events_for_all_files
 from .likelihoods import pletsch_clarke_likelihood
 from .likelihoods import rayleigh_as_likelihood
 from .logging import configure_logging
@@ -47,8 +35,11 @@ from .mcmc_utils import calculate_result_array_from_samples  # noqa: F401
 from .mcmc_utils import get_flat_samples  # noqa: F401
 from .mcmc_utils import plot_mcmc_results  # noqa: F401
 from .mcmc_utils import safe_run_sampler
+from .models import _build_parameters_from_models
+from .models import _load_and_validate_models
+from .outputs import _get_outroots
+from .outputs import _make_outroot_getter
 from .phase_utils import _calculate_phases
-from .phase_utils import _mjd_to_sec
 from .phase_utils import _sec_to_mjd  # noqa: F401
 from .phase_utils import add_circular_orbit_numba  # noqa: F401
 from .phase_utils import add_ell1_orbit_numba  # noqa: F401
@@ -66,247 +57,14 @@ from .profile_plotting import create_template_from_profile_harm
 from .profile_plotting import estimate_weighted_profile_std
 from .profile_plotting import get_template_func
 from .profile_plotting import normalize_dyn_profile  # noqa: F401
-from .results_io import _format_energy_string
 from .results_io import safe_save
 from .results_io import split_output_results
 from .scaling import estimate_uncertainties_from_model  # noqa: F401
 from .scaling import get_factors
 from .scaling import order_of_magnitude  # noqa: F401
+from .weighting import pf_weight_versus_energy
 
 freq_re = re.compile(r"^d?F([0-9]+)_([0-9]+)$")
-
-
-def pf_weight_versus_energy(
-    times, energies, parameters, nbin=32, nharm=1, tolerance=1e-8, plot_root_file_name=None
-):
-    """Estimate per-event weights from pulse amplitude versus energy.
-
-    For each input observation, this function computes phases with the current
-    timing model, bins events in energy quantiles, and estimates pulsed
-    amplitude in each energy bin from the :math:`Z_n^2` statistic. The resulting
-    amplitude trend is interpolated and evaluated at each event energy to obtain
-    per-event weights.
-
-    Parameters
-    ----------
-    times : list of np.ndarray
-        Event times (seconds from each file PEPOCH), one array per file.
-    energies : list of np.ndarray
-        Event energies (or PI channels if provided upstream), one array per file.
-    parameters : dict
-        Timing/orbital parameter dictionary consumed by
-        :func:`_calculate_phases`.
-    nbin : int, optional
-        Number of phase bins used to evaluate :math:`Z_n^2` in each energy bin.
-    nharm : int, optional
-        Number of harmonics for :math:`Z_n^2` and pulsed amplitude estimation.
-    tolerance : float, optional
-        Convergence tolerance (seconds) for deorbiting iterations.
-    plot_root_file_name : list of str or None, optional
-        If provided, save one diagnostic amplitude-versus-energy plot per file
-        using these roots.
-
-    Returns
-    -------
-    list of np.ndarray
-        Event weights for each file, aligned with ``times`` and ``energies``.
-    """
-    n_files = len(times)
-    phases = _calculate_phases(times, parameters, tolerance=tolerance)
-
-    weights = []
-    for i in range(n_files):
-        local_phases = np.array(phases[i])
-        local_energies = np.array(energies[i])
-        amps = []
-        amp_errs = []
-        limit_amps_50 = []
-        limit_amps_90 = []
-
-        est_n_bins = local_phases.size // 1000
-        if est_n_bins < 15:
-            est_n_bins = 15
-        if est_n_bins > 25:
-            est_n_bins = 25
-
-        logging.info(
-            f"Estimating the pulsed fraction in {est_n_bins} energy bins using {nharm} harmonics"
-        )
-
-        e_percentiles = np.percentile(local_energies, np.linspace(0, 100, est_n_bins + 1))
-        energy_edges = np.array(list(zip(e_percentiles[:-1], e_percentiles[1:])))
-        mid_energies = np.array([(e[0] + e[1]) / 2 for e in energy_edges])
-
-        for emin, emax in energy_edges:
-            filt_phases = local_phases[(local_energies >= emin) & (local_energies < emax)]
-
-            prof = np.histogram(filt_phases, bins=np.linspace(0, 1, nbin + 1))[0]
-
-            z_n = z_n_binned_events(prof, nharm)
-
-            z_lims = power_confidence_limits(z_n, n=nharm, c=0.68, summed_flag=True)
-            det_lev_05 = z2_n_detection_level(n=nharm, epsilon=0.5)
-            det_lev_09 = z2_n_detection_level(n=nharm, epsilon=0.1)
-
-            amp = a_from_ssig(z_n, ncounts=filt_phases.size)
-            a_low = a_from_ssig(z_lims[0], ncounts=filt_phases.size)
-            a_high = a_from_ssig(z_lims[1], ncounts=filt_phases.size)
-            if a_low > amp or a_high / 2 > amp:
-                a_low = 0
-
-            amps.append(amp)
-            amp_errs.append((amp - a_low, a_high - amp))
-            limit_amps_50.append(a_from_ssig(det_lev_05, ncounts=filt_phases.size))
-            limit_amps_90.append(a_from_ssig(det_lev_09, ncounts=filt_phases.size))
-
-        amp = np.array(amps)
-        amp_corr = np.copy(amp)
-        amp_errs = np.array(amp_errs)
-
-        amp_errs = [np.array(amp_errs)[:, 0], np.array(amp_errs)[:, 1]]
-
-        limit_amps_50 = np.array(limit_amps_50)
-        limit_amps_90 = np.array(limit_amps_90)
-        amp_corr = np.concatenate([[0, amp_corr[0]], amp_corr, [amp_corr[-1], 0]])
-        limit_amps_50 = np.concatenate(
-            [[0, limit_amps_50[0]], limit_amps_50, [limit_amps_50[-1], 0]]
-        )
-        limit_amps_90 = np.concatenate(
-            [[0, limit_amps_90[0]], limit_amps_90, [limit_amps_90[-1], 0]]
-        )
-
-        energy_points = np.concatenate(
-            [
-                [e_percentiles[0] - 1e-15, e_percentiles[0]],
-                mid_energies,
-                [e_percentiles[-1], e_percentiles[-1] + 1e-15],
-            ]
-        )
-        # Never give less credibility than the amplitude that would be detected
-        # with 50% probability from noise!
-        low_amp = amp_corr < limit_amps_50
-        amp_corr[low_amp] = limit_amps_50[low_amp]
-
-        func = interp1d(energy_points, amp_corr, kind="linear", assume_sorted=True)
-
-        fine_energy_range = np.linspace(energy_points[0], energy_points[-1], 1000)
-        fine_amps = func(fine_energy_range)
-        fine_amps_50 = interp1d(energy_points, limit_amps_50, kind="linear", assume_sorted=True)(
-            fine_energy_range
-        )
-        fine_amps_90 = interp1d(energy_points, limit_amps_90, kind="linear", assume_sorted=True)(
-            fine_energy_range
-        )
-
-        if plot_root_file_name is not None:
-            with _plot_style_context():
-                plt.figure(f"{plot_root_file_name[i]}")
-                plt.errorbar(
-                    mid_energies,
-                    amp,
-                    yerr=amp_errs,
-                    xerr=[mid_energies - energy_edges[:, 0], energy_edges[:, 1] - mid_energies],
-                    fmt="o",
-                )
-                plt.semilogx(fine_energy_range, fine_amps, color="black", label="Estimated weight")
-                plt.plot(fine_energy_range, fine_amps_50, color="red", label="50% detection limit")
-                plt.plot(fine_energy_range, fine_amps_90, color="grey", label="90% detection limit")
-                plt.legend()
-                plt.savefig(f"{plot_root_file_name[i]}.jpg")
-                plt.close()
-
-        # Normalize weights so that the maximum expected pulsed amplitude maps
-        # to weight=1. This keeps the weighted likelihood well behaved.
-        amp_norm = np.nanmax(fine_amps)
-        if not np.isfinite(amp_norm) or amp_norm <= 0:
-            warnings.warn(
-                "Could not normalize pulsed-fraction weights; falling back to uniform weights."
-            )
-            fine_amps = np.ones_like(fine_amps)
-        else:
-            fine_amps = fine_amps / amp_norm
-            fine_amps = np.clip(fine_amps, 0.0, 1.0)
-
-        weight_func = interp1d(
-            fine_energy_range,
-            fine_amps,
-            kind="linear",
-            assume_sorted=True,
-        )
-        local_weights = np.asarray(weight_func(local_energies), dtype=float)
-        local_weights = np.nan_to_num(local_weights, nan=0.0, posinf=1.0, neginf=0.0)
-        local_weights = np.clip(local_weights, 0.0, 1.0)
-        weights.append(local_weights)
-
-    return weights
-
-
-def _get_likelihood_suffix(likelihood_func):
-    """Return output-name suffix for selected likelihood implementation."""
-    if likelihood_func == rayleigh_as_likelihood:
-        return "_rayleigh"
-    return ""
-
-
-def _get_weight_suffix(use_weight):
-    """Return output-name suffix when energy weights are enabled."""
-    if use_weight:
-        return "_pf_weight"
-    return ""
-
-
-def _get_pi_suffix(use_pi):
-    """Return output-name suffix when weighting uses PI channels instead of energy."""
-    if use_pi:
-        return "_pi"
-    return ""
-
-
-def _get_nharm_suffix(nharm):
-    """Return output-name suffix for harmonic count when > 1."""
-    if nharm > 1:
-        return f"_N{nharm}"
-    return ""
-
-
-def _make_outroot_getter(
-    files,
-    requested_parameter_names,
-    energy_range,
-    nharm,
-    likelihood_func,
-    use_weight,
-    use_pi=False,
-    general_outroot=None,
-):
-    """Build a closure that returns the configured output root name."""
-    energy_str = _format_energy_string(energy_range)
-    nharm_str = _get_nharm_suffix(nharm)
-    likelihood_str = _get_likelihood_suffix(likelihood_func)
-    weight_str = _get_weight_suffix(use_weight)
-    pi_str = _get_pi_suffix(use_pi)
-
-    def get_outroot(file_n=None):
-        if file_n is not None:
-            initial_outroot = splitext_improved(files[file_n])[0]
-        elif general_outroot is not None:
-            initial_outroot = general_outroot
-        else:
-            initial_outroot = "out"
-
-        outroot = (
-            initial_outroot
-            + "_"
-            + "_".join(requested_parameter_names)
-            + energy_str
-            + nharm_str
-            + likelihood_str
-            + weight_str
-            + pi_str
-        )
-        return outroot
-
-    return get_outroot
 
 
 def _collect_parameter_names(parameters, requested_parameter_names, likelihood_func):
@@ -323,16 +81,6 @@ def _collect_parameter_names(parameters, requested_parameter_names, likelihood_f
                 fit_parameter_names.append(f)
 
     return fit_parameter_names
-
-
-def _get_outroots(get_outroot, n_files):
-    """Return per-file roots plus a final aggregate root."""
-    outroots = [get_outroot(i) for i in range(n_files)]
-    if n_files == 1:
-        outroots += [get_outroot(0)]
-    else:
-        outroots += [get_outroot(None)]
-    return outroots
 
 
 def _enrich_results_with_observation_metadata(
@@ -399,92 +147,6 @@ def _write_results_products(results, n_files, get_outroot, requested_parameter_n
             print(new_model.as_parfile(include_info=os.name != "nt"), file=fobj)
 
     return output_file
-
-
-def _load_and_validate_models(parfiles):
-    """Load PINT models, validate ELL1 constraints, and align binary epochs."""
-    model = []
-    pepoch = []
-
-    for i in range(len(parfiles)):
-        model.append(get_model(parfiles[i]))
-        pepoch.append(model[i].PEPOCH.value)
-
-        if hasattr(model[i], "T0") or model[i].BINARY.value != "ELL1":
-            raise ValueError("This script wants an ELL1 model, with TASC, not T0, defined")
-
-        model[i].change_binary_epoch(pepoch[i])
-
-    ref_model = copy.deepcopy(model[0])
-    ref_model.change_binary_epoch(np.mean(pepoch))
-
-    return model, pepoch, ref_model
-
-
-def _load_events_for_all_files(files, energy_range, pepoch, get_outroot, use_pi=False):
-    """Load all event files and compute per-file exposure and duration."""
-    n_files = len(files)
-    times_from_pepoch = [[] for _ in range(n_files)]
-    observation_length = np.zeros(n_files, dtype=float)
-    energies = [[] for _ in range(n_files)]
-    expo = np.zeros(n_files)
-
-    for i in range(n_files):
-        fname = files[i]
-        times_from_pepoch[i], gtis, energies[i] = _load_and_format_events(
-            fname,
-            energy_range,
-            pepoch[i],
-            plotfile=get_outroot(i) + f"_lightcurve_{i}.jpg",
-            return_energy=True,
-            use_pi=use_pi,
-        )
-        expo[i] += np.sum(np.diff(gtis, axis=1))
-        observation_length[i] = times_from_pepoch[i][-1] - times_from_pepoch[i][0]
-
-    return times_from_pepoch, observation_length, energies, expo
-
-
-def _build_parameters_from_models(model, ref_model, observation_length, ignore_uncertainties=False):
-    """Assemble global and per-file parameter dictionaries from timing models."""
-    n_files = len(model)
-    parameters_with_unc = _get_par_dict(
-        ref_model,
-        ignore_uncertainties=ignore_uncertainties,
-        obs_length=np.min(observation_length),
-    )
-    del parameters_with_unc["PEPOCH"]
-
-    for i in range(n_files):
-        count = 0
-        file_parameters_with_unc = _get_par_dict(
-            model[i],
-            ignore_uncertainties=ignore_uncertainties,
-            obs_length=observation_length[i],
-        )
-
-        while f"F{count}" in file_parameters_with_unc:
-            parameters_with_unc[f"F{count}_{i}"] = [
-                file_parameters_with_unc[f"F{count}"][0],
-                file_parameters_with_unc[f"F{count}"][1],
-            ]
-            if f"F{count}" in parameters_with_unc:
-                del parameters_with_unc[f"F{count}"]
-            count += 1
-
-        parameters_with_unc[f"PEPOCH_{i}"] = [
-            file_parameters_with_unc["PEPOCH"][0],
-            file_parameters_with_unc["PEPOCH"][1],
-        ]
-        parameters_with_unc[f"Phase_{i}"] = [
-            parameters_with_unc["Phase"][0],
-            parameters_with_unc["Phase"][1],
-        ]
-
-    # _calculate_phases expects file-specific phase keys.
-    del parameters_with_unc["Phase"]
-    parameters = {f: parameters_with_unc[f][0] for f in parameters_with_unc}
-    return parameters_with_unc, parameters
 
 
 def _prepare_templates_and_phase_priors(
@@ -696,138 +358,6 @@ def _trace_phase_0_likelihood(
     return parameters
 
 
-def _get_par_dict(
-    model,
-    ignore_uncertainties=False,
-    obs_length=1,
-):  # The dictionary contains lists [parameter mean, parameter uncertainty]
-    """Build a parameter/uncertainty dictionary from a PINT timing model.
-
-    The returned mapping stores ``[value, uncertainty]`` for each parameter and
-    fills missing uncertainties with heuristic defaults suitable for priors.
-    """
-
-    def return_unc(param):
-        if param.uncertainty_value is None or param.uncertainty_value == 0:
-            return np.nan
-        return param.uncertainty_value.astype(float)
-
-    parameters = {
-        "Phase": [0, 0],
-        "PB": [model.PB.value.astype(float) * 86400, return_unc(model.PB) * 86400],
-        "TASC": [model.TASC.value.astype(float), return_unc(model.TASC)],
-        "A1": [model.A1.value.astype(float), return_unc(model.A1)],
-        "EPS1": [model.EPS1.value.astype(float), return_unc(model.EPS1)],
-        "EPS2": [model.EPS2.value.astype(float), return_unc(model.EPS2)],
-        "PBDOT": [model.PBDOT.value.astype(float), return_unc(model.PBDOT)],
-        "PEPOCH": [
-            model.PEPOCH.value.astype(float),
-            return_unc(model.PEPOCH),
-        ],  # I added Pepoch
-    }
-
-    count = 0
-    while hasattr(model, f"F{count}"):
-        parameters[f"F{count}"] = [
-            getattr(model, f"F{count}").value.astype(float),
-            return_unc(getattr(model, f"F{count}")),
-        ]
-        count += 1
-
-    if ignore_uncertainties:
-        # Start from a clean slate
-        for par in parameters:
-            parameters[par][1] = np.nan
-
-    # Then, give sensible defaults for the uncertainties of some critical
-    # parameters that are not set
-    def check_uncertainty(par, default_uncertainty):
-        if np.isnan(parameters[par][1]) or np.isinf(parameters[par][1]) or ignore_uncertainties:
-            parameters[par][1] = default_uncertainty
-
-    check_uncertainty("PB", parameters["PB"][0] / 2)
-
-    Omega = 2 * np.pi / parameters["PB"][0]
-    X = parameters["A1"][0]
-    f = parameters["F0"][0]
-
-    count = 0
-
-    while hasattr(model, f"F{count}"):
-        obs_length_change = 10 / obs_length ** (count + 1)
-        max_orbital_change = X * Omega ** (count + 1) * f
-        logging.debug(
-            f"F{count}: max_orbital_change={max_orbital_change}, "
-            f"obs_length_change={obs_length_change}"
-        )
-        default_unc = 10 * max_orbital_change + obs_length_change
-        check_uncertainty(f"F{count}", default_unc)
-        count += 1
-
-    return parameters
-
-
-def _load_and_format_events(
-    event_file,
-    energy_range,
-    pepoch,
-    plotlc=True,
-    plotfile="lightcurve.jpg",
-    return_energy=False,
-    use_pi=False,
-):
-    """Load an event file, apply filtering, and express times from PEPOCH.
-
-    Parameters
-    ----------
-    event_file : str
-        Input event file readable by ``hendrics.io.load_events``.
-    energy_range : tuple or None
-        ``(emin, emax)`` range applied through ``filter_energy_range``. This is
-        always interpreted in calibrated energy (keV), regardless of ``use_pi``.
-    pepoch : float
-        Reference epoch (MJD) used to compute ``times_from_pepoch``.
-    plotlc : bool, optional
-        If True, save a quick-look light curve.
-    plotfile : str, optional
-        Output filename for the light-curve plot.
-    return_energy : bool, optional
-        If True, also return event energies (or PI if ``use_pi=True``).
-    use_pi : bool, optional
-        Return PI channels instead of calibrated energy values (only affects
-        what is returned for weighting; the ``energy_range`` cut above is
-        still applied in calibrated energy).
-
-    Returns
-    -------
-    tuple
-        ``(times_from_pepoch, gtis_from_pepoch)`` or
-        ``(times_from_pepoch, gtis_from_pepoch, energy)``.
-    """
-    events = load_events(event_file)
-    events.apply_gtis(inplace=True)
-
-    if plotlc:
-        lc = events.to_lc(100)
-
-        with _plot_style_context():
-            fig = plt.figure("LC", figsize=(3.5, 2.65))
-            lc.plot(ax=plt.gca())
-            plt.savefig(plotfile)
-            plt.close(fig)
-
-    if energy_range is not None:
-        events.filter_energy_range(energy_range, inplace=True)
-    mjdref = events.mjdref
-    pepoch_met = _mjd_to_sec(pepoch, mjdref)
-    times_from_pepoch = (events.time - pepoch_met).astype(float)
-    gtis_from_pepoch = (events.gti - pepoch_met).astype(float)
-    energy = events.pi if use_pi else events.energy
-    if return_energy:
-        return times_from_pepoch, gtis_from_pepoch, energy
-    return times_from_pepoch, gtis_from_pepoch
-
-
 def trace_likelihood_over_parameter(
     times_from_pepoch,
     parameters,
@@ -993,7 +523,6 @@ def optimize_solution(
     template_func,
     nsteps=1000,
     minimize_first=False,
-    nharm=1,
     outroots=("out",),
     tolerance=1e-8,
     likelihood_func=pletsch_clarke_likelihood,
@@ -1240,18 +769,6 @@ def ell1fit(
 
     outroots = _get_outroots(get_outroot, n_files)
 
-    input_stuff = copy.deepcopy(
-        (
-            fit_parameter_names,
-            times_from_pepoch,
-            parameters,
-            input_mean_fit_pars,
-            logprior_funcs,
-            factors,
-            template_func,
-            likelihood_func,
-        )
-    )
     _trace_phase_0_likelihood(
         fit_parameter_names,
         times_from_pepoch,
@@ -1264,17 +781,9 @@ def ell1fit(
         outroot=outroots[-1],
         tolerance=tolerance,
     )
+    # _trace_phase_0_likelihood moves each Phase_i to its best-fit value, so
+    # re-read the baseline before handing it to the optimizer.
     input_mean_fit_pars = [parameters[par] for par in fit_parameter_names]
-    output_stuff = (
-        fit_parameter_names,
-        times_from_pepoch,
-        parameters,
-        input_mean_fit_pars,
-        logprior_funcs,
-        factors,
-        template_func,
-        likelihood_func,
-    )
 
     results = optimize_solution(
         times_from_pepoch,
@@ -1286,7 +795,6 @@ def ell1fit(
         template_func,
         nsteps=nsteps,
         minimize_first=minimize_first,
-        nharm=nharm,
         outroots=outroots,
         tolerance=tolerance,
         likelihood_func=likelihood_func,

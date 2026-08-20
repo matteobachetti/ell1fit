@@ -19,12 +19,7 @@ def _flat_logprior(bound0, bound1):
     callable
         Function returning ``0`` inside bounds and ``-inf`` outside.
     """
-    val = 1 / (bound1 - bound0)
-    if np.isinf(val) or np.isnan(val):
-        val = 0
-
     def func(x):
-
         if x < bound0 or x > bound1:
             return -np.inf
         return 0
