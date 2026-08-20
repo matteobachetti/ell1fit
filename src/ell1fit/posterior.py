@@ -27,7 +27,7 @@ import logging
 import matplotlib.pyplot as plt
 import numpy as np
 
-from .phase_utils import _calculate_phases
+from .phase_utils import NonInvertibleOrbitError, _calculate_phases
 from .plotting import plot_style_context as _plot_style_context
 
 
@@ -58,13 +58,14 @@ def _trace_phase_0_likelihood(observations, setup, outroot):
         best_phase = phase_values[np.nanargmax(ll_values)]
 
         with _plot_style_context():
-            plt.figure("trace_" + parameter)
+            fig = plt.figure("trace_" + parameter)
             plt.plot(phase_values, ll_values, color="black")
             plt.axvline(parameters[parameter], color="k", alpha=0.5, ls="--")
             plt.axvline(best_phase, color="r", ls="--")
             plt.xlabel(parameter)
             plt.ylabel("log likelihood")
             plt.savefig(outroot + f"_trace_{parameter}.jpg")
+            plt.close(fig)
 
         ll_values_clean = [
             ll for ll in list(results_trace.values()) if not np.isnan(ll) and not np.isinf(ll)
@@ -180,7 +181,16 @@ def _build_posterior_functions(
         if np.isinf(lp):
             return lp
 
-        phases = local_phases(pars)
+        try:
+            phases = local_phases(pars)
+        except NonInvertibleOrbitError:
+            # A trial position outside the physically invertible region: the
+            # pulsar's projected orbital motion would be superluminal, so pulse
+            # phases are undefined there. Reject it as impossible rather than
+            # letting the deorbiting iteration grind against a map that has no
+            # fixed point. A Gaussian prior alone cannot do this -- its log-pdf
+            # is hugely negative but finite, so the check above never fires.
+            return -np.inf
 
         ll = 0
         for i in range(len(phases)):

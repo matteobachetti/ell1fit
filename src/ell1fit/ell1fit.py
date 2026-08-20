@@ -42,6 +42,7 @@ from .priors import assign_logpriors
 from .templates import create_template_from_profile_harm
 from .templates import estimate_weighted_profile_std
 from .templates import get_template_func
+from .refinement import refine_templates_and_solution
 from .results_io import safe_save
 from .results_io import split_output_results
 from .scaling import get_factors
@@ -242,11 +243,20 @@ def _build_profiles_and_weights(
         profile_weight = folded_profile(
             times_from_pepoch, parameters, weights, nbin=nbin, tolerance=tolerance
         )
+        # This comparison was previously drawn but never saved or closed, so it
+        # produced nothing and leaked a figure per file. Saving it makes it the
+        # diagnostic it was evidently meant to be; closing it matters because
+        # iterative refinement calls this repeatedly.
         with _plot_style_context():
-            for p, pw in zip(profile, profile_weight):
-                plt.figure()
-                plt.plot(np.concatenate((p, p)) / p.max())
-                plt.plot(np.concatenate((pw, pw)) / pw.max())
+            for i, (p, pw) in enumerate(zip(profile, profile_weight)):
+                fig = plt.figure(figsize=(3.5, 2.65))
+                plt.plot(np.concatenate((p, p)) / p.max(), label="unweighted")
+                plt.plot(np.concatenate((pw, pw)) / pw.max(), label="weighted")
+                plt.xlabel("Phase bin (two cycles)")
+                plt.ylabel("Normalized counts")
+                plt.legend()
+                plt.savefig(get_outroot(i) + "_weighted_profile_comparison.jpg")
+                plt.close(fig)
     else:
         profile_weight = profile
 
@@ -323,6 +333,7 @@ def ell1fit(
     use_weight=False,
     use_pi=False,
     ignore_uncertainties=False,
+    template_iterations=1,
 ):
     """Fit spin and ELL1 orbital parameters from one or more event files.
 
@@ -365,6 +376,15 @@ def ell1fit(
         energy regardless of this flag.
     ignore_uncertainties : bool, optional
         If True, ignore uncertainties from input parfiles when building priors.
+    template_iterations : int, optional
+        Maximum passes of template refinement. The template is initially built
+        by folding with the input parfile's solution; if that solution is
+        imperfect the fold is smeared and, because orbital errors produce
+        structured rather than random phase residuals, the template comes out
+        skewed. Refolding with the improved solution and rebuilding removes
+        that. ``1`` (the default) disables refinement entirely and is
+        bit-identical to not having the feature. See
+        :mod:`ell1fit.refinement`.
 
     Returns
     -------
@@ -468,6 +488,17 @@ def ell1fit(
     # re-centre the local coordinate system before handing it to the optimizer.
     setup = setup.with_baseline_from(parameters)
 
+    # Refold and rebuild the template against the improved solution, so the
+    # template the MCMC uses is not the one smeared by the input parfile's
+    # errors. A single iteration is a no-op by construction.
+    setup, refinement_history = refine_templates_and_solution(
+        observations,
+        setup,
+        nbin=nbin,
+        nharm=nharm,
+        max_iterations=template_iterations,
+    )
+
     results = optimize_solution(
         observations,
         setup,
@@ -475,6 +506,12 @@ def ell1fit(
         minimize_first=minimize_first,
         outroots=outroots,
     )
+    results["template_iterations"] = template_iterations
+    results["template_passes_run"] = len(refinement_history)
+    if refinement_history:
+        results["template_final_shift"] = refinement_history[-1]["max_shift"]
+        results["template_converged"] = refinement_history[-1]["converged"]
+
     results = _enrich_results_with_observation_metadata(
         results,
         model,
@@ -575,6 +612,17 @@ def main(args=None):
             "calibrated energy. No effect without --use-weight."
         ),
     )
+    parser.add_argument(
+        "--template-iterations",
+        type=int,
+        default=1,
+        help=(
+            "Maximum passes of iterative template refinement. Each pass refolds "
+            "with the current best solution and rebuilds the pulse template, so "
+            "the template is not the one smeared by errors in the input parfile. "
+            "1 (default) disables refinement."
+        ),
+    )
     parser.add_argument("--ignore-uncertainties", action="store_true", default=False)
 
     args = parser.parse_args(args)
@@ -599,4 +647,5 @@ def main(args=None):
         use_weight=args.use_weight,
         use_pi=args.use_pi,
         ignore_uncertainties=args.ignore_uncertainties,
+        template_iterations=args.template_iterations,
     )

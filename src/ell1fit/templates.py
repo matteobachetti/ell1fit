@@ -37,8 +37,32 @@ def create_template_from_profile_harm(
     imagefile="template.png",
     nharm=None,
     final_nbin=None,
+    plot=True,
 ):
-    """Create a smooth pulse template from a folded profile."""
+    """Create a smooth pulse template from a folded profile.
+
+    Parameters
+    ----------
+    profile : np.ndarray
+        Folded pulse profile.
+    imagefile : str, optional
+        Where to save the diagnostic figure. Ignored when ``plot`` is False.
+    nharm : int or None, optional
+        Number of harmonics retained. Defaults to ``profile.size * 3 / 16``.
+    final_nbin : int or None, optional
+        Number of bins in the returned template.
+    plot : bool, optional
+        Whether to write the diagnostic figure. Iterative refinement rebuilds
+        the template once per pass, and writing a figure each time is both slow
+        and useless -- only the final template is worth looking at.
+
+    Returns
+    -------
+    template : np.ndarray
+        The smoothed template.
+    additional_phase : float
+        Phase offset of the template peak, wrapped to ``[-0.5, 0.5)``.
+    """
     nbin = profile.size
     prof = np.concatenate((profile, profile, profile))
     dph = 1 / profile.size
@@ -92,6 +116,9 @@ def create_template_from_profile_harm(
 
     additional_phase = phases_around_zero(additional_phase)
     template = template[:final_nbin].real
+
+    if not plot:
+        return template * final_nbin / nbin, additional_phase
 
     with _plot_style_context():
         fig = plt.figure(figsize=(3.5, 2.65))
