@@ -242,56 +242,6 @@ def pf_weight_versus_energy(
     return weights
 
 
-def renormalize_results(results, name, result_name, mean, factor):
-    """
-    Examples
-    --------
-    >>> results = {"Bu0_mean": 0, "Bu0_ne": 0.1, "Bu0_pe": 0.2}
-    >>> mean = 13
-    >>> factor = 10
-    >>> res = renormalize_results(results, "Bu1", "Bu0", mean, factor)
-    >>> bool(np.isclose(res["Bu1"], 13))
-    True
-    >>> bool(np.isclose(res["Bu1_ne"], 1))
-    True
-    >>> bool(np.isclose(res["Bu1_pe"], 2))
-    True
-    """
-    value = results[result_name + "_mean"]
-    error_n = results[result_name + "_ne"]
-    error_p = results[result_name + "_pe"]
-
-    results[name] = value * factor + mean
-    results[name + "_ne"] = error_n * factor
-    results[name + "_pe"] = error_p * factor
-
-    return results
-
-
-def _list_zoom_factors(input_fit_par_labels, zoom):
-    """Build a list of per-parameter scaling factors from a zoom mapping.
-
-    Parameters
-    ----------
-    input_fit_par_labels : list of str
-        Parameters in fit order.
-    zoom : dict or None
-        Optional dictionary of explicit scale factors by parameter name.
-
-    Returns
-    -------
-    list of float
-        Scale factor per input label, defaulting to ``1``.
-    """
-    factors = []
-    for par in input_fit_par_labels:
-        if zoom is not None and par in zoom:
-            factors.append(zoom[par])
-        else:
-            factors.append(1)
-    return factors
-
-
 def _get_likelihood_suffix(likelihood_func):
     """Return output-name suffix for selected likelihood implementation."""
     if likelihood_func == rayleigh_as_likelihood:
