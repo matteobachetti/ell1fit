@@ -127,6 +127,7 @@ def optimize_solution(
     nsteps=1000,
     minimize_first=False,
     outroots=("out",),
+    reference_phases=None,
 ):
     """Optimize and sample pulsar timing parameters for multiple event files.
 
@@ -138,6 +139,23 @@ def optimize_solution(
 
     Parameters are handled in local coordinates: for each fitted parameter,
     ``physical = local * factor + initial``.
+
+    Parameters
+    ----------
+    reference_phases : list of np.ndarray or None, optional
+        Phases to draw in the left-hand panel of the comparison phaseograms --
+        the "before" of a before-and-after. Pass the phases of the solution the
+        run *started* from.
+
+        This must be supplied by the caller rather than derived here. The
+        obvious derivation, evaluating the posterior at local coordinates zero,
+        silently means "whatever ``setup.baseline_values`` currently holds",
+        which is only the starting solution as long as nothing has re-centred
+        the baseline in between. Iterative template refinement does exactly
+        that, and the comparison then comes out as the refined solution against
+        itself: two identical panels, and a diagnostic that always looks
+        perfect. Defaults to the local-zero solution when omitted, which is
+        correct only when no refinement has run.
 
     Returns
     -------
@@ -189,9 +207,10 @@ def optimize_solution(
         )
     logging.info("Fitted likelihood: " + str(func_to_maximize(fit_pars)))
     phases = local_phases(fit_pars)
-    phases_zero = local_phases(all_zeros)
+    if reference_phases is None:
+        reference_phases = local_phases(all_zeros)
 
-    _plot_phaseogram_set(phases_zero, phases, times_from_pepoch, outroots, suffix="")
+    _plot_phaseogram_set(reference_phases, phases, times_from_pepoch, outroots, suffix="")
 
     corner_labels = [
         "d" + par + f"{np.log10(fac):+g}" for (par, fac) in zip(fit_parameter_names, factors)
@@ -218,6 +237,6 @@ def optimize_solution(
     fit_pars = [results["d" + par + "_50"] for par in fit_parameter_names]
     phases = local_phases(fit_pars)
 
-    _plot_phaseogram_set(phases_zero, phases, times_from_pepoch, outroots, suffix="_final")
+    _plot_phaseogram_set(reference_phases, phases, times_from_pepoch, outroots, suffix="_final")
 
     return results

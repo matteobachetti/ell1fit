@@ -213,3 +213,64 @@ def test_setup_is_not_mutated_in_place(offset_setup):
     assert setup.template_funcs is original_templates
     assert list(setup.baseline_values) == original_baseline
     assert dataclasses.is_dataclass(refined)
+
+
+def test_comparison_phaseogram_reference_survives_refinement(offset_setup, monkeypatch, tmp_path):
+    """The "before" panel must show the starting solution, not the refined one.
+
+    ``optimize_solution`` used to derive its left-hand panel by evaluating the
+    posterior at local coordinates zero, which silently means "whatever the
+    baseline currently holds". Refinement re-centres the baseline on its own
+    result, so the comparison became the refined solution plotted against
+    itself -- two identical panels, and a diagnostic that always looks perfect
+    however badly the fit went.
+
+    This pins that the reference passed in is the one actually plotted, and
+    that it still differs from the fitted phases after refinement has moved the
+    solution.
+    """
+    import numpy as np
+
+    from ell1fit import fitting
+    from ell1fit.phase_utils import _calculate_phases
+
+    _, observations, setup = offset_setup
+
+    # The "before" phases, captured while the baseline is still the start.
+    reference = _calculate_phases(
+        observations.times_from_pepoch, setup.parameters, tolerance=setup.tolerance
+    )
+
+    refined, history = refine_templates_and_solution(
+        observations, setup, nbin=NBIN, nharm=NHARM, max_iterations=3
+    )
+    assert history, "refinement should have run, or this proves nothing"
+
+    captured = {}
+
+    def fake_plot(reference_phases, fitted_phases, times, outroots, suffix=""):
+        captured[suffix] = (reference_phases, fitted_phases)
+
+    monkeypatch.setattr(fitting, "_plot_phaseogram_set", fake_plot)
+    monkeypatch.setattr(
+        fitting, "safe_run_sampler",
+        lambda *a, **k: {f"d{p}_{q}": 0.0 for p in refined.parameter_names
+                         for q in (1, 10, 16, 50, 84, 90, 99)},
+    )
+
+    fitting.optimize_solution(
+        observations, refined, nsteps=10,
+        outroots=[str(tmp_path / f"p{i}") for i in range(observations.n_files + 1)],
+        reference_phases=reference,
+    )
+
+    assert captured, "the phaseogram comparison was never drawn"
+    for suffix, (ref_used, fitted_used) in captured.items():
+        for i in range(observations.n_files):
+            assert np.array_equal(ref_used[i], reference[i]), (
+                f"panel '{suffix}' did not plot the reference it was given"
+            )
+            assert not np.allclose(ref_used[i], fitted_used[i], rtol=0, atol=1e-9), (
+                f"panel '{suffix}' shows the same phases on both sides: the "
+                "before-and-after comparison is uninformative"
+            )

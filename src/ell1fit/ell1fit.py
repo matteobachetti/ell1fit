@@ -34,6 +34,7 @@ from .models import _build_parameters_from_models
 from .models import _load_and_validate_models
 from .outputs import _get_outroots
 from .outputs import _make_outroot_getter
+from .phase_utils import _calculate_phases
 from .phase_utils import folded_profile
 from .phase_utils import phases_around_zero
 from .plotting import plot_style_context as _plot_style_context
@@ -488,6 +489,15 @@ def ell1fit(
     # re-centre the local coordinate system before handing it to the optimizer.
     setup = setup.with_baseline_from(parameters)
 
+    # Capture the "before" phases now, while the baseline still describes the
+    # solution this run started from. Refinement re-centres the baseline on its
+    # own result, so deriving these later -- as evaluating the posterior at
+    # local zero would -- yields the refined solution instead, and the
+    # comparison phaseograms end up showing it against itself.
+    reference_phases = _calculate_phases(
+        observations.times_from_pepoch, setup.parameters, tolerance=setup.tolerance
+    )
+
     # Refold and rebuild the template against the improved solution, so the
     # template the MCMC uses is not the one smeared by the input parfile's
     # errors. A single iteration is a no-op by construction.
@@ -505,6 +515,7 @@ def ell1fit(
         nsteps=nsteps,
         minimize_first=minimize_first,
         outroots=outroots,
+        reference_phases=reference_phases,
     )
     results["template_iterations"] = template_iterations
     results["template_passes_run"] = len(refinement_history)
