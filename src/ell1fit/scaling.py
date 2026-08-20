@@ -1,11 +1,10 @@
 """Parameter scaling and uncertainty heuristics for ell1fit."""
 
 import logging
-import re
 
 import numpy as np
 
-simple_freq_re = re.compile(r"^d?F([0-9]+)")
+from .phase_utils import simple_freq_re
 
 
 def order_of_magnitude(value):

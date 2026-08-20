@@ -2,12 +2,11 @@
 
 import copy
 import os
-import re
 import warnings
 
 from astropy.table import Table, vstack, TableMergeError
 
-simple_freq_re = re.compile(r"^d?F([0-9]+)")
+from .phase_utils import simple_freq_re
 
 
 def _format_energy_string(energy_range):

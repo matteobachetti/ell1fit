@@ -73,7 +73,6 @@ from .scaling import estimate_uncertainties_from_model  # noqa: F401
 from .scaling import get_factors
 from .scaling import order_of_magnitude  # noqa: F401
 
-simple_freq_re = re.compile(r"^d?F([0-9]+)")
 freq_re = re.compile(r"^d?F([0-9]+)_([0-9]+)$")
 
 

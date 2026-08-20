@@ -1,9 +1,15 @@
 """Phase and orbital timing utilities used by ell1fit."""
 
+import re
 import warnings
 
 import numpy as np
 from numba import float32, float64, int64, njit, prange, vectorize
+
+#: Matches a frequency-derivative parameter name (``F0``, ``F1``, ...),
+#: optionally prefixed with ``d`` for the local-coordinate fit variant
+#: (``dF0``, ``dF1``, ...).
+simple_freq_re = re.compile(r"^d?F([0-9]+)")
 
 
 @njit
