@@ -944,14 +944,14 @@ def _build_posterior_functions(
     return logprior, local_phases, func_to_maximize
 
 
-def _plot_phaseogram_set(reference_phases, fitted_phases, times_from_pepoch, outroot, suffix=""):
+def _plot_phaseogram_set(reference_phases, fitted_phases, times_from_pepoch, outroots, suffix=""):
     """Plot reference vs fitted phaseograms for each input file."""
     for i in range(len(times_from_pepoch)):
         _compare_phaseograms(
             reference_phases[i],
             phases_from_zero_to_one(fitted_phases[i]),
             times_from_pepoch[i],
-            fname=outroot[i] + suffix + ".jpg",
+            fname=outroots[i] + suffix + ".jpg",
         )
 
 
@@ -994,7 +994,7 @@ def optimize_solution(
     nsteps=1000,
     minimize_first=False,
     nharm=1,
-    outroot="out",
+    outroots=("out",),
     tolerance=1e-8,
     likelihood_func=pletsch_clarke_likelihood,
     weights=None,
@@ -1061,7 +1061,7 @@ def optimize_solution(
     phases = local_phases(fit_pars)
     phases_zero = local_phases(all_zeros)
 
-    _plot_phaseogram_set(phases_zero, phases, times_from_pepoch, outroot, suffix="")
+    _plot_phaseogram_set(phases_zero, phases, times_from_pepoch, outroots, suffix="")
 
     corner_labels = [
         "d" + par + f"{np.log10(fac):+g}" for (par, fac) in zip(fit_parameters, factors)
@@ -1070,7 +1070,7 @@ def optimize_solution(
         func_to_maximize,
         fit_pars,
         max_n=nsteps,
-        outroot=outroot[-1],
+        outroot=outroots[-1],
         labels=["d" + par for par in fit_parameters],
         corner_labels=corner_labels,
     )
@@ -1088,7 +1088,7 @@ def optimize_solution(
     fit_pars = [results["d" + par + "_50"] for par in fit_parameters]
     phases = local_phases(fit_pars)
 
-    _plot_phaseogram_set(phases_zero, phases, times_from_pepoch, outroot, suffix="_final")
+    _plot_phaseogram_set(phases_zero, phases, times_from_pepoch, outroots, suffix="_final")
 
     return results
 
@@ -1275,7 +1275,7 @@ def ell1fit(
         nsteps=nsteps,
         minimize_first=minimize_first,
         nharm=nharm,
-        outroot=outroots,
+        outroots=outroots,
         tolerance=tolerance,
         likelihood_func=likelihood_func,
         weights=weights if use_weight else None,
