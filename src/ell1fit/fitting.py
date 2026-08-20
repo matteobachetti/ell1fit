@@ -20,7 +20,6 @@ import logging
 import numpy as np
 from scipy.optimize import minimize
 
-from .likelihoods import pletsch_clarke_likelihood
 from .mcmc_utils import safe_run_sampler
 from .phase_utils import phases_from_zero_to_one
 from .posterior import _build_posterior_functions
@@ -87,18 +86,7 @@ def _bounds_in_local_coordinates(values, factors, logprior_funcs):
     return bounds
 
 
-def point_estimate_fit(
-    times_from_pepoch,
-    parameters,
-    fit_parameter_names,
-    values,
-    logprior_funcs,
-    factors,
-    template_func,
-    tolerance=1e-8,
-    likelihood_func=pletsch_clarke_likelihood,
-    weights=None,
-):
+def point_estimate_fit(observations, setup):
     """Find the best-fit position by bounded local optimization, without MCMC.
 
     Separated from :func:`optimize_solution` so that callers which only need a
@@ -115,49 +103,30 @@ def point_estimate_fit(
         The posterior function that was optimized, so callers can evaluate it
         again without rebuilding it.
     """
-    _, _, func_to_maximize = _build_posterior_functions(
-        times_from_pepoch=times_from_pepoch,
-        parameters=parameters,
-        fit_parameter_names=fit_parameter_names,
-        values=values,
-        logprior_funcs=logprior_funcs,
-        factors=factors,
-        template_func=template_func,
-        likelihood_func=likelihood_func,
-        tolerance=tolerance,
-        weights=weights,
-        debug_local_phases=False,
-        debug_func=False,
-    )
+    _, _, func_to_maximize = _build_posterior_functions(observations, setup)
 
     def func_to_minimize(pars):
         return -func_to_maximize(pars)
 
-    bounds = _bounds_in_local_coordinates(values, factors, logprior_funcs)
+    values = setup.baseline_values
+    factors = setup.factors
+    bounds = _bounds_in_local_coordinates(values, factors, setup.logprior_funcs)
     result = minimize(func_to_minimize, [0] * len(values), bounds=bounds)
     fit_pars = result.x
 
-    fitted_parameters = copy.deepcopy(parameters)
-    for par, initial, value, factor in zip(fit_parameter_names, values, fit_pars, factors):
+    fitted_parameters = copy.deepcopy(setup.parameters)
+    for par, initial, value, factor in zip(setup.parameter_names, values, fit_pars, factors):
         fitted_parameters[par] = value * factor + initial
 
     return fit_pars, fitted_parameters, func_to_maximize
 
 
 def optimize_solution(
-    times_from_pepoch,
-    parameters,
-    fit_parameter_names,
-    values,
-    logprior_funcs,
-    factors,
-    template_func,
+    observations,
+    setup,
     nsteps=1000,
     minimize_first=False,
     outroots=("out",),
-    tolerance=1e-8,
-    likelihood_func=pletsch_clarke_likelihood,
-    weights=None,
 ):
     """Optimize and sample pulsar timing parameters for multiple event files.
 
@@ -176,17 +145,16 @@ def optimize_solution(
         Aggregated result dictionary containing posterior summaries, initial
         values, scaling factors, and copied model metadata.
     """
+    times_from_pepoch = observations.times_from_pepoch
+    parameters = setup.parameters
+    fit_parameter_names = setup.parameter_names
+    values = setup.baseline_values
+    factors = setup.factors
+    logprior_funcs = setup.logprior_funcs
+
     _, local_phases, func_to_maximize = _build_posterior_functions(
-        times_from_pepoch=times_from_pepoch,
-        parameters=parameters,
-        fit_parameter_names=fit_parameter_names,
-        values=values,
-        logprior_funcs=logprior_funcs,
-        factors=factors,
-        template_func=template_func,
-        likelihood_func=likelihood_func,
-        tolerance=tolerance,
-        weights=weights,
+        observations,
+        setup,
         debug_local_phases=True,
         debug_func=True,
     )

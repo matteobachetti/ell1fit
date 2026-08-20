@@ -3,8 +3,9 @@ import os
 import pytest
 import numpy as np
 from astropy.table import Table
-from ..ell1fit import add_circular_orbit_numba, add_ell1_orbit_numba, safe_save
-from ..ell1fit import simple_circular_deorbit_numba, simple_ell1_deorbit_numba
+from ..phase_utils import add_circular_orbit_numba, add_ell1_orbit_numba
+from ..phase_utils import simple_circular_deorbit_numba, simple_ell1_deorbit_numba
+from ..results_io import safe_save
 
 
 @pytest.mark.parametrize("A1", [1, 10, 40])

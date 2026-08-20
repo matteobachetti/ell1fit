@@ -30,40 +30,23 @@ from .fitting import optimize_solution
 from .likelihoods import pletsch_clarke_likelihood
 from .likelihoods import rayleigh_as_likelihood
 from .logging import configure_logging
-from .mcmc_utils import calculate_result_array_from_samples  # noqa: F401
-from .mcmc_utils import get_flat_samples  # noqa: F401
-from .mcmc_utils import plot_mcmc_results  # noqa: F401
-from .mcmc_utils import safe_run_sampler  # noqa: F401
 from .models import _build_parameters_from_models
 from .models import _load_and_validate_models
 from .outputs import _get_outroots
 from .outputs import _make_outroot_getter
-from .phase_utils import _calculate_phases  # noqa: F401
-from .phase_utils import _sec_to_mjd  # noqa: F401
-from .phase_utils import add_circular_orbit_numba  # noqa: F401
-from .phase_utils import add_ell1_orbit_numba  # noqa: F401
-from .phase_utils import fast_phase  # noqa: F401
 from .phase_utils import folded_profile
-from .phase_utils import interp_nb  # noqa: F401
 from .phase_utils import phases_around_zero
-from .phase_utils import phases_from_zero_to_one  # noqa: F401
-from .phase_utils import simple_circular_deorbit_numba  # noqa: F401
-from .phase_utils import simple_ell1_deorbit_numba  # noqa: F401
 from .plotting import plot_style_context as _plot_style_context
-from .posterior import _build_posterior_functions  # noqa: F401
 from .posterior import _trace_phase_0_likelihood
-from .posterior import trace_likelihood_over_parameter  # noqa: F401
 from .priors import assign_logpriors
-from .profile_plotting import _compare_phaseograms  # noqa: F401
-from .profile_plotting import normalize_dyn_profile  # noqa: F401
 from .templates import create_template_from_profile_harm
 from .templates import estimate_weighted_profile_std
 from .templates import get_template_func
 from .results_io import safe_save
 from .results_io import split_output_results
-from .scaling import estimate_uncertainties_from_model  # noqa: F401
 from .scaling import get_factors
-from .scaling import order_of_magnitude  # noqa: F401
+from .setup_types import FitSetup
+from .setup_types import ObservationSet
 from .weighting import pf_weight_versus_energy
 
 freq_re = re.compile(r"^d?F([0-9]+)_([0-9]+)$")
@@ -277,8 +260,20 @@ def _prepare_fit_setup(
     parameters_with_unc,
     observation_length,
     model,
+    template_funcs=None,
+    weights=None,
+    tolerance=1e-8,
 ):
-    """Collect fit parameters, priors, factors, and initial fit values."""
+    """Collect fit parameters, priors, factors, and initial fit values.
+
+    Returns
+    -------
+    FitSetup
+        The bundle defining what is being fitted. Must be built *after* the
+        templates exist: the per-file ``Phase_i`` offset they determine is what
+        :func:`ell1fit.priors.assign_logpriors` centres that parameter's prior
+        on.
+    """
     fit_parameter_names = _collect_parameter_names(
         parameters,
         requested_parameter_names,
@@ -301,7 +296,17 @@ def _prepare_fit_setup(
     except KeyError as exc:
         raise ValueError("One or more parameters are missing from the parameter file") from exc
 
-    return fit_parameter_names, logprior_funcs, factors, input_mean_fit_pars
+    return FitSetup(
+        parameter_names=fit_parameter_names,
+        baseline_values=input_mean_fit_pars,
+        logprior_funcs=logprior_funcs,
+        factors=factors,
+        template_funcs=template_funcs,
+        parameters=parameters,
+        likelihood_func=likelihood_func,
+        weights=weights,
+        tolerance=tolerance,
+    )
 
 
 def ell1fit(
@@ -394,6 +399,17 @@ def ell1fit(
         use_pi=use_pi,
     )
 
+    observations = ObservationSet(
+        files=files,
+        models=model,
+        ref_model=ref_model,
+        pepoch=pepoch,
+        times_from_pepoch=times_from_pepoch,
+        energies=energies,
+        exposures=expo,
+        observation_length=observation_length,
+    )
+
     parameters_with_unc, parameters = _build_parameters_from_models(
         model,
         ref_model,
@@ -428,47 +444,31 @@ def ell1fit(
         parameters_with_unc,
     )
 
-    fit_parameter_names, logprior_funcs, factors, input_mean_fit_pars = _prepare_fit_setup(
+    setup = _prepare_fit_setup(
         parameters,
         requested_parameter_names,
         likelihood_func,
         parameters_with_unc,
         observation_length,
         model,
+        template_funcs=template_func,
+        weights=weights if use_weight else None,
+        tolerance=tolerance,
     )
 
     outroots = _get_outroots(get_outroot, n_files)
 
-    _trace_phase_0_likelihood(
-        fit_parameter_names,
-        times_from_pepoch,
-        parameters,
-        input_mean_fit_pars,
-        logprior_funcs,
-        factors,
-        template_func,
-        likelihood_func,
-        outroot=outroots[-1],
-        tolerance=tolerance,
-    )
+    _trace_phase_0_likelihood(observations, setup, outroot=outroots[-1])
     # _trace_phase_0_likelihood moves each Phase_i to its best-fit value, so
-    # re-read the baseline before handing it to the optimizer.
-    input_mean_fit_pars = [parameters[par] for par in fit_parameter_names]
+    # re-centre the local coordinate system before handing it to the optimizer.
+    setup = setup.with_baseline_from(parameters)
 
     results = optimize_solution(
-        times_from_pepoch,
-        parameters,
-        fit_parameter_names,
-        input_mean_fit_pars,
-        logprior_funcs,
-        factors,
-        template_func,
+        observations,
+        setup,
         nsteps=nsteps,
         minimize_first=minimize_first,
         outroots=outroots,
-        tolerance=tolerance,
-        likelihood_func=likelihood_func,
-        weights=weights if use_weight else None,
     )
     results = _enrich_results_with_observation_metadata(
         results,

@@ -10,8 +10,6 @@ epoch. That keeps their magnitude small, which matters: the spin phase is
 the float64 significand that the deorbiting tolerance depends on.
 """
 
-import logging  # noqa: F401
-
 import matplotlib.pyplot as plt
 import numpy as np
 from hendrics.io import load_events

@@ -21,47 +21,36 @@ callers do not each re-derive it.
 """
 
 import copy
+import dataclasses
 import logging
 
 import matplotlib.pyplot as plt
 import numpy as np
 
-from .likelihoods import pletsch_clarke_likelihood
 from .phase_utils import _calculate_phases
 from .plotting import plot_style_context as _plot_style_context
 
 
-def _trace_phase_0_likelihood(
-    fit_parameter_names,
-    times_from_pepoch,
-    parameters,
-    input_mean_fit_pars,
-    logprior_funcs,
-    factors,
-    template_func,
-    likelihood_func,
-    outroot,
-    tolerance=1e-8,
-):
-    """Optionally trace the likelihood around Phase_0 for diagnostics."""
-    for parameter in [p for p in fit_parameter_names if p.startswith("Phase_")]:
-        idx = fit_parameter_names.index(parameter)
+def _trace_phase_0_likelihood(observations, setup, outroot):
+    """Trace the likelihood around each file's Phase_i and move it to the peak.
+
+    Mutates ``setup.parameters`` in place, leaving each ``Phase_i`` at its
+    best-fit value. Callers must re-centre the local coordinate system
+    afterwards -- see :meth:`FitSetup.with_baseline_from`.
+    """
+    parameters = setup.parameters
+    factors = setup.factors
+    for parameter in [p for p in setup.parameter_names if p.startswith("Phase_")]:
+        idx = setup.parameter_names.index(parameter)
         results_trace = trace_likelihood_over_parameter(
-            times_from_pepoch,
-            parameters,
-            fit_parameter_names,
-            input_mean_fit_pars,
-            logprior_funcs,
-            factors,
-            template_func,
+            observations,
+            setup,
             parameter_name=parameter,
             parameter_values=np.linspace(
                 parameters[parameter] - 6 * factors[idx],
                 parameters[parameter] + 6 * factors[idx],
                 100,
             ),
-            likelihood_func=likelihood_func,
-            tolerance=tolerance,
         )
 
         phase_values = list(results_trace.keys())
@@ -88,17 +77,10 @@ def _trace_phase_0_likelihood(
 
 
 def trace_likelihood_over_parameter(
-    times_from_pepoch,
-    parameters,
-    fit_parameter_names,
-    values,
-    logprior_funcs,
-    factors,
-    template_func,
+    observations,
+    setup,
     parameter_name,
     parameter_values,
-    likelihood_func=pletsch_clarke_likelihood,
-    tolerance=1e-8,
 ):
     """Trace the posterior (log-likelihood + log-prior) over one parameter.
 
@@ -117,22 +99,16 @@ def trace_likelihood_over_parameter(
         Mapping from scanned physical parameter value to posterior value.
     """
 
+    # A trace is a diagnostic of the likelihood surface itself, so it is taken
+    # unweighted regardless of how the fit is configured.
     _, _, func_to_maximize = _build_posterior_functions(
-        times_from_pepoch=times_from_pepoch,
-        parameters=parameters,
-        fit_parameter_names=fit_parameter_names,
-        values=values,
-        logprior_funcs=logprior_funcs,
-        factors=factors,
-        template_func=template_func,
-        likelihood_func=likelihood_func,
-        tolerance=tolerance,
-        weights=None,
-        debug_local_phases=False,
-        debug_func=False,
+        observations,
+        dataclasses.replace(setup, weights=None),
     )
 
-    idx = fit_parameter_names.index(parameter_name)
+    values = setup.baseline_values
+    factors = setup.factors
+    idx = setup.parameter_names.index(parameter_name)
     results = {}
     for val in parameter_values:
         pars = [0] * len(values)
@@ -143,20 +119,37 @@ def trace_likelihood_over_parameter(
 
 
 def _build_posterior_functions(
-    times_from_pepoch,
-    parameters,
-    fit_parameter_names,
-    values,
-    logprior_funcs,
-    factors,
-    template_func,
-    likelihood_func,
-    tolerance=1e-8,
-    weights=None,
+    observations,
+    setup,
     debug_local_phases=False,
     debug_func=False,
 ):
-    """Build shared posterior components used by trace and optimization flows."""
+    """Build shared posterior components used by trace and optimization flows.
+
+    Parameters
+    ----------
+    observations : ObservationSet
+        The event data to evaluate against.
+    setup : FitSetup
+        What is being fitted: free parameters, baseline, scaling, priors,
+        templates, likelihood and weights.
+
+    Returns
+    -------
+    tuple of callable
+        ``(logprior, local_phases, func_to_maximize)``, each taking a position
+        in local coordinates.
+    """
+    times_from_pepoch = observations.times_from_pepoch
+    parameters = setup.parameters
+    fit_parameter_names = setup.parameter_names
+    values = setup.baseline_values
+    logprior_funcs = setup.logprior_funcs
+    factors = setup.factors
+    template_func = setup.template_funcs
+    likelihood_func = setup.likelihood_func
+    tolerance = setup.tolerance
+    weights = setup.weights
 
     def logprior(pars):
         if np.any(np.isnan(pars)):
