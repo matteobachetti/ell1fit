@@ -629,7 +629,7 @@ def _build_profiles_and_weights(
             parameters,
             nbin=32,
             nharm=1,
-            tolerance=1e-8,
+            tolerance=tolerance,
             plot_root_file_name=[get_outroot(i) + "_pf_weight_spectrum" for i in range(n_files)],
         )
 
@@ -691,6 +691,7 @@ def _trace_phase_0_likelihood(
     template_func,
     likelihood_func,
     outroot,
+    tolerance=1e-8,
 ):
     """Optionally trace the likelihood around Phase_0 for diagnostics."""
     for parameter in [p for p in parameter_names if p.startswith("Phase_")]:
@@ -710,6 +711,7 @@ def _trace_phase_0_likelihood(
                 100,
             ),
             likelihood_func=likelihood_func,
+            tolerance=tolerance,
         )
 
         phase_values = list(results_trace.keys())
@@ -878,6 +880,7 @@ def trace_likelihood_over_parameter(
     parameter_name,
     parameter_values,
     likelihood_func=pletsch_clarke_likelihood,
+    tolerance=1e-8,
 ):
     """Trace the posterior (log-likelihood + log-prior) over one parameter.
 
@@ -901,7 +904,7 @@ def trace_likelihood_over_parameter(
         factors=factors,
         template_func=template_func,
         likelihood_func=likelihood_func,
-        tolerance=1e-8,
+        tolerance=tolerance,
         weights=None,
         debug_local_phases=False,
         debug_func=False,
@@ -1274,6 +1277,7 @@ def ell1fit(
         template_func,
         likelihood_func,
         outroot=outroots[-1],
+        tolerance=tolerance,
     )
     input_mean_fit_pars = [parameters[par] for par in parameter_names]
     output_stuff = (
