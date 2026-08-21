@@ -1,7 +1,7 @@
 """Likelihood utilities for phase-based pulsar timing fits."""
 
 import numpy as np
-from numba import njit
+from ._numba_compat import njit
 from stingray.pulse.pulsar import z_n_events
 
 

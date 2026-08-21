@@ -26,7 +26,7 @@ import logging
 import matplotlib.pyplot as plt
 import numpy as np
 from numpy.fft import fft, fftfreq, ifft
-from numba import njit, prange
+from ._numba_compat import njit, prange
 from scipy.interpolate import interp1d, make_interp_spline
 
 from .phase_utils import phases_around_zero, phases_from_zero_to_one

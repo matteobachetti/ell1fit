@@ -4,7 +4,7 @@ import logging
 import re
 
 import numpy as np
-from numba import float32, float64, int64, njit, prange, vectorize
+from ._numba_compat import float32, float64, int64, njit, prange, vectorize
 
 #: Matches a frequency-derivative parameter name (``F0``, ``F1``, ...),
 #: optionally prefixed with ``d`` for the local-coordinate fit variant
