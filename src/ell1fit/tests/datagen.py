@@ -52,6 +52,10 @@ class InjectedSolution:
         Time of ascending node, MJD.
     EPS1, EPS2 : float
         ELL1 Laplace-Lagrange eccentricity parameters.
+    PBDOT : float
+        Rate of change of the orbital period, dimensionless (s/s). Zero by
+        default, in which case every quantity below reduces exactly to its
+        constant-period form.
     pepoch_ref : float
         Reference epoch (MJD) at which ``F0``/``F1`` are defined.
     """
@@ -63,6 +67,7 @@ class InjectedSolution:
     TASC: float = 56682.0669
     EPS1: float = 1.5e-4
     EPS2: float = -2.1e-4
+    PBDOT: float = 0.0
     pepoch_ref: float = 56682.0
 
     @property
@@ -86,12 +91,29 @@ class InjectedSolution:
 
         With ``PBDOT = 0`` this is the same physical solution, but it produces a
         genuinely different ``TASC`` value per epoch -- which is the point.
+
+        A nonzero ``PBDOT`` makes the orbit count quadratic in time,
+        :math:`N = x - \\tfrac{1}{2}\\dot{P_b}x^2` with :math:`x = \\Delta t/P_b`,
+        so the ascending nodes are no longer evenly spaced and the alias is
+        ``n * PB + n**2 * PB * PBDOT / 2`` from the reference. The expression
+        reduces exactly to ``n * PB`` when ``PBDOT`` is zero.
         """
-        n_orbits = np.round((pepoch - self.TASC) / self.PB)
-        return self.TASC + n_orbits * self.PB
+        x = (pepoch - self.TASC) / self.PB
+        n_orbits = np.round(x - 0.5 * self.PBDOT * x**2)
+        return self.TASC + n_orbits * self.PB + n_orbits**2 * self.PB * self.PBDOT / 2
+
+    def PB_sec_near(self, pepoch):
+        """Orbital period, in seconds, valid at the alias near ``pepoch``.
+
+        The period a parfile quotes is the one in force at the ``TASC`` it
+        quotes, so an epoch-local ``TASC`` has to be written with an
+        epoch-local ``PB``.
+        """
+        elapsed = (self.tasc_near(pepoch) - self.TASC) * SEC_PER_DAY
+        return self.PB_sec + self.PBDOT * elapsed
 
 
-def orbital_delay(t_from_tasc_sec, solution):
+def orbital_delay(t_from_tasc_sec, solution, pb_sec=None):
     """Roemer delay of the ELL1 model, in seconds.
 
     This is the *forward* model: given a time in the pulsar frame, it returns
@@ -103,13 +125,21 @@ def orbital_delay(t_from_tasc_sec, solution):
         Pulsar-frame time measured from ``TASC``, in seconds.
     solution : InjectedSolution
         The injected truth.
+    pb_sec : float or None, optional
+        Orbital period in force at that ``TASC``. Defaults to the reference
+        period. Supplying the epoch-local one is what makes a nonzero
+        ``PBDOT`` come out right: measured from the nearest ascending node,
+        the neglected quadratic term is under ``1e-10`` orbits across an
+        observation, so the local period *is* the exact model there.
 
     Returns
     -------
     np.ndarray
         Delay in seconds.
     """
-    phase = 2 * np.pi * t_from_tasc_sec / solution.PB_sec
+    if pb_sec is None:
+        pb_sec = solution.PB_sec
+    phase = 2 * np.pi * t_from_tasc_sec / pb_sec
     return solution.A1 * (
         np.sin(phase)
         + 0.5 * solution.EPS1 * np.sin(2 * phase)
@@ -205,7 +235,9 @@ def generate_epoch(
     -------
     dict
         ``times_from_pepoch``, ``energy``, ``pi``, ``gtis_from_pepoch``,
-        ``pepoch``, ``F0``, ``F1``, ``TASC``, and ``phase0``.
+        ``pepoch``, ``F0``, ``F1``, ``TASC``, ``PB``, and ``phase0``. ``TASC``
+        and ``PB`` are the epoch-local pair, which differ per epoch once
+        ``PBDOT`` is nonzero.
     """
     if rng is None:
         rng = np.random.default_rng()
@@ -213,6 +245,7 @@ def generate_epoch(
     F0, F1 = solution.spin_at(pepoch)
     tasc = solution.tasc_near(pepoch)
     tasc_sec = (tasc - pepoch) * SEC_PER_DAY
+    pb_sec = solution.PB_sec_near(pepoch)
 
     gtis = _build_gtis(duration, n_gtis, gti_duty)
     live_time = np.sum(np.diff(gtis, axis=1))
@@ -239,7 +272,7 @@ def generate_epoch(
         energy = energy[keep]
 
         # Forward orbital model: pulsar frame -> observed arrival time.
-        t_obs = t_pulsar + orbital_delay(t_pulsar - tasc_sec, solution)
+        t_obs = t_pulsar + orbital_delay(t_pulsar - tasc_sec, solution, pb_sec=pb_sec)
 
         in_gti = _in_gtis(t_obs, gtis)
         accepted["t"].append(t_obs[in_gti])
@@ -263,6 +296,7 @@ def generate_epoch(
         "F0": F0,
         "F1": F1,
         "TASC": tasc,
+        "PB": pb_sec / SEC_PER_DAY,
         "phase0": phase0,
         "live_time": live_time,
     }
@@ -304,7 +338,7 @@ PEPOCH               {PEPOCH:.16g}
 PLANET_SHAPIRO                          N
 BINARY                               ELL1
 PB                   {PB:.16g} {PB_unc:.3g}
-PBDOT                                   0
+PBDOT                {PBDOT:.16g}
 A1                   {A1:.16g} {A1_unc:.3g}
 TASC                 {TASC:.16g} {TASC_unc:.3g}
 EPS1                 {EPS1:.16g}
@@ -353,11 +387,14 @@ def write_parfile(path, epoch, solution, index=0, offsets=None, uncertainties=No
     values = {
         "F0": epoch["F0"],
         "F1": epoch["F1"],
-        "PB": solution.PB,
+        # TASC and PB are the epoch-local pair: a parfile's period is the one
+        # in force at the TASC it quotes. With PBDOT = 0 this is solution.PB.
+        "PB": epoch["PB"],
         "A1": solution.A1,
         "TASC": epoch["TASC"],
         "EPS1": solution.EPS1,
         "EPS2": solution.EPS2,
+        "PBDOT": solution.PBDOT,
     }
     for name, offset in offsets.items():
         if name not in values:
