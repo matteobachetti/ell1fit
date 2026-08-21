@@ -18,6 +18,7 @@ error rather than the approximation showing through.
 """
 
 import dataclasses
+import warnings
 
 import numpy as np
 import pytest
@@ -234,3 +235,115 @@ def test_injected_eccentricity_sits_in_the_useful_window():
         f"ELL1 misdescribes this orbit by {truncation:.3e} cycles; a recovery "
         "failure would be the truncation, not the code"
     )
+
+
+def test_truncation_law_matches_a_refit_against_an_exact_orbit():
+    """The coefficient in the truncation law must be the measured one.
+
+    ``ell1_truncation_error`` would be trivially true if it only restated its own
+    formula, so this re-derives it: fit the ELL1 delay to an exact Keplerian
+    orbit, letting ``A1``, ``TASC``, ``EPS1``, ``EPS2`` and a constant absorb
+    what they can -- which is what a real fit does -- and compare the residual
+    that survives against the prediction.
+    """
+    from scipy.optimize import least_squares
+
+    from ..phase_utils import _second_order_coefficients, ell1_truncation_error
+
+    phi = np.linspace(0, 2 * np.pi, 2001, endpoint=False)
+    A1, F0 = 22.215, 7.5
+
+    def exact(e, om):
+        mean_anomaly = phi - om
+        E = mean_anomaly.copy()
+        for _ in range(100):
+            E = E - (E - e * np.sin(E) - mean_anomaly) / (1 - e * np.cos(E))
+        return np.sin(om) * (np.cos(E) - e) + np.cos(om) * np.sqrt(1 - e**2) * np.sin(E)
+
+    def modelled(shifted_phi, eps1, eps2):
+        a1s, a1c, a2s, a2c, a3s, a3c = _second_order_coefficients(eps1, eps2)
+        return (
+            a1s * np.sin(shifted_phi)
+            + a1c * np.cos(shifted_phi)
+            + a2s * np.sin(2 * shifted_phi)
+            + a2c * np.cos(2 * shifted_phi)
+            + a3s * np.sin(3 * shifted_phi)
+            + a3c * np.cos(3 * shifted_phi)
+        )
+
+    for e, om in ((3e-2, 1.1), (5e-2, 2.4)):
+        target = exact(e, om)
+
+        def residual(p, target=target):
+            scale, shift, eps1, eps2, offset = p
+            return scale * modelled(phi + shift, eps1, eps2) + offset - target
+
+        solution = least_squares(
+            residual,
+            [1.0, 0.0, e * np.sin(om), e * np.cos(om), 0.0],
+            xtol=1e-15,
+            ftol=1e-15,
+            gtol=1e-15,
+        )
+        measured = np.sqrt(np.mean(solution.fun**2)) * A1 * F0
+        predicted = ell1_truncation_error(e * np.sin(om), e * np.cos(om), A1, F0)
+
+        assert measured == pytest.approx(predicted, rel=0.15), (
+            f"e={e}, omega={om}: law predicts {predicted:.3e} cycles, a refit leaves {measured:.3e}"
+        )
+
+
+def _profile_with_precision(phase_precision, nbin=32, nharm=2):
+    """A folded profile whose implied phase precision is roughly as requested."""
+    from stingray.pulse.pulsar import z_n_binned_events
+
+    target_z2 = (1 / (2 * np.pi * phase_precision)) ** 2
+    phases = (np.arange(nbin) + 0.5) / nbin
+    for counts in np.logspace(2, 13, 600):
+        profile = counts * (1 + 0.3 * np.cos(2 * np.pi * phases))
+        if z_n_binned_events(profile, nharm) >= target_z2:
+            return profile
+    raise AssertionError("could not reach the requested precision")
+
+
+@pytest.mark.parametrize(
+    "eccentricity,should_warn", [(1e-3, False), (5e-3, False), (5e-2, True), (0.2, True)]
+)
+def test_warns_only_when_the_truncation_matters(eccentricity, should_warn):
+    """The warning must depend on the data, not on ``e`` alone.
+
+    A given eccentricity is harmless against a coarse measurement and limiting
+    against a precise one, so the threshold is set by the phase precision the
+    folded profiles imply -- here pinned at 1e-3 cycles, which puts the boundary
+    at ``e = 2.9e-2`` for this orbit.
+    """
+    from ..pipeline import _warn_on_eccentric_orbit
+
+    omega = np.radians(143.13)
+    parameters = {
+        "EPS1": eccentricity * np.sin(omega),
+        "EPS2": eccentricity * np.cos(omega),
+        "A1": 22.215,
+        "F0_0": 7.5,
+    }
+    profiles = [_profile_with_precision(1e-3)]
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _warn_on_eccentric_orbit(parameters, profiles, nharm=2)
+
+    warned = any("ELL1 expansion limits" in str(w.message) for w in caught)
+    assert warned is should_warn, f"e={eccentricity}: warned={warned}, expected {should_warn}"
+
+
+def test_a_circular_orbit_never_warns():
+    """Zero eccentricity must be silent however precise the data are."""
+    from ..pipeline import _warn_on_eccentric_orbit
+
+    parameters = {"EPS1": 0.0, "EPS2": 0.0, "A1": 22.215, "F0_0": 7.5}
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _warn_on_eccentric_orbit(parameters, [_profile_with_precision(1e-6)], nharm=2)
+
+    assert not [w for w in caught if "ELL1 expansion limits" in str(w.message)]

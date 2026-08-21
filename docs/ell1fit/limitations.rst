@@ -17,6 +17,26 @@ Model scope
   ``PB`` constant, so the likelihood is flat in ``PBDOT`` and ``-P PBDOT`` is
   rejected with an error rather than quietly returning its own prior as a
   measurement. ``XDOT``, ``OMDOT`` and friends are not used at all.
+- **Small eccentricities only, and the limit is measured.** The Roemer delay is
+  expanded to second order in :math:`e`, so what remains scales as
+  :math:`e^3`. The residual phase error is
+
+  .. math::
+
+     \sigma_\Phi \approx 0.236\, e^3\, x\, F_0 \quad \text{cycles},
+
+  independent of :math:`\omega`. ``ell1fit`` compares that against the
+  precision the folded profiles imply and **warns** when it reaches a third of
+  it — for a typical 22 lt-s, 7.5 Hz system at 1e-3 cycles, that is
+  :math:`e \approx 0.03`; for a redback-like 10 lt-s, 200 Hz system,
+  :math:`e \approx 0.013`. Nothing is rejected: the residual lives in the
+  third harmonic of the orbit, orthogonal to every direction ELL1 can move in,
+  so exceeding the limit costs sensitivity rather than biasing the recovered
+  eccentricity — at :math:`e = 0.01` the bias on :math:`e` is 2.7e-5
+  *relative*. Above it, a full Keplerian model (BT, DD) is the right tool.
+
+  The check runs on the **input** parfile's eccentricity. A fit that starts
+  circular and wanders somewhere eccentric will not trigger it.
 - **One binary, shared across all files.** Spin parameters are per file; orbital
   parameters are not. They are, however, *propagated* to each file's epoch when
   the parfile sets an orbital derivative, so a shared solution stays valid

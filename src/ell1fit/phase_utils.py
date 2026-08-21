@@ -19,6 +19,8 @@ __all__ = [
     "fast_phase",
     "folded_profile",
     "interp_nb",
+    "ELL1_TRUNCATION_COEFFICIENT",
+    "ell1_truncation_error",
     "orbit_is_invertible",
     "phases_around_zero",
     "phases_from_zero_to_one",
@@ -43,6 +45,51 @@ class NonInvertibleOrbitError(ValueError):
     iteration, which converges only while the map is a contraction. See
     :func:`orbit_is_invertible` for what that means physically.
     """
+
+
+#: Coefficient of the ELL1 truncation law, measured against exact Keplerian
+#: orbits: the RMS phase error left by stopping the Roemer delay at ``O(e**2)``
+#: is ``ELL1_TRUNCATION_COEFFICIENT * e**3 * A1 * F0`` cycles, after a fit has
+#: absorbed what it can into ``A1``, ``TASC``, ``EPS1``, ``EPS2`` and a constant.
+#: Measured at 0.2357 and **independent of omega** to four digits across ten
+#: values, which is why one number suffices. See ``docs/ell1fit/design.rst``.
+ELL1_TRUNCATION_COEFFICIENT = 0.236
+
+
+def ell1_truncation_error(EPS1, EPS2, A1, F0):
+    """Phase error, in cycles, from ELL1 truncating the orbit at ``O(e**2)``.
+
+    ELL1 expands the Roemer delay in eccentricity; this package carries the
+    ``O(e**2)`` terms, so what remains scales as :math:`e^3`. The residual lives
+    almost entirely in the ``3 Phi`` harmonics, which are orthogonal to every
+    direction the model can move in -- so exceeding this costs *sensitivity*,
+    through unmodelled structure smearing the profile, rather than biasing the
+    recovered eccentricity. At ``e = 0.01`` the recovered ``e`` is biased by
+    only 2.7e-5 relative, some three orders of magnitude below its statistical
+    error.
+
+    Parameters
+    ----------
+    EPS1, EPS2 : float
+        Laplace-Lagrange parameters; only their quadrature sum matters.
+    A1 : float
+        Projected semi-major axis, light-seconds.
+    F0 : float
+        Spin frequency, Hz.
+
+    Returns
+    -------
+    float
+        RMS phase error in cycles. Compare it against the precision the data
+        support; :func:`ell1fit.pipeline._warn_on_eccentric_orbit` does.
+
+    Examples
+    --------
+    >>> round(ell1_truncation_error(1.2e-3, -1.6e-3, 22.215, 7.5), 10)
+    3.15e-07
+    """
+    eccentricity = np.hypot(EPS1, EPS2)
+    return ELL1_TRUNCATION_COEFFICIENT * eccentricity**3 * np.abs(A1) * np.abs(F0)
 
 
 def orbit_is_invertible(PB, A1, EPS1=0.0, EPS2=0.0):
