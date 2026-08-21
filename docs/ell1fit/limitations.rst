@@ -18,7 +18,11 @@ Model scope
   rejected with an error rather than quietly returning its own prior as a
   measurement. ``XDOT``, ``OMDOT`` and friends are not used at all.
 - **One binary, shared across all files.** Spin parameters are per file; orbital
-  parameters are not.
+  parameters are not. They are, however, *propagated* to each file's epoch when
+  the parfile sets an orbital derivative, so a shared solution stays valid
+  across a long baseline. Ignoring that propagation costs up to
+  ``PBDOT * baseline**2`` in phase — measured at 3e-2 cycles for
+  ``PBDOT = 1e-10`` over ten years, against the ~1e-3 cycles a fit resolves.
 
 The Rayleigh statistic
 ----------------------

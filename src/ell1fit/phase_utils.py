@@ -322,8 +322,23 @@ def _calculate_phases(times_from_pepoch, parameters, tolerance=1e-8):
         )
 
     for i in range(n_files):
-        tasc_raw = _mjd_to_sec(parameters["TASC"], parameters[f"PEPOCH_{i}"])
-        tasc = ((tasc_raw + 0.5 * pb) % pb) - 0.5 * pb
+        # The binary is global -- one PB, TASC, A1, EPS1, EPS2 -- but those
+        # values are referenced to one epoch, and orbital derivatives carry
+        # them away from it. Each file adds a fixed offset that makes them
+        # valid at its own PEPOCH. The offsets are exactly zero, so this loop
+        # is unchanged, whenever the model sets no orbital derivative; direct
+        # callers building a parameter dictionary by hand need not supply them.
+        # See :func:`ell1fit.models._orbital_epoch_offsets`.
+        pb_i = pb + parameters.get(f"PB_offset_{i}", 0.0)
+        a1_i = parameters["A1"] + parameters.get(f"A1_offset_{i}", 0.0)
+        eps1_i = parameters["EPS1"] + parameters.get(f"EPS1_offset_{i}", 0.0)
+        eps2_i = parameters["EPS2"] + parameters.get(f"EPS2_offset_{i}", 0.0)
+
+        tasc_raw = _mjd_to_sec(
+            parameters["TASC"] + parameters.get(f"TASC_offset_{i}", 0.0),
+            parameters[f"PEPOCH_{i}"],
+        )
+        tasc = ((tasc_raw + 0.5 * pb_i) % pb_i) - 0.5 * pb_i
         if np.abs(tasc_raw - tasc) > 1e-9:
             # Normal operation, not an anomaly: TASC is only defined modulo PB,
             # and it lands more than half an orbit from PEPOCH whenever the two
@@ -333,21 +348,21 @@ def _calculate_phases(times_from_pepoch, parameters, tolerance=1e-8):
 
         deorbit_times_from_pepoch = simple_ell1_deorbit_numba(
             times_from_pepoch[i],
-            pb,
-            parameters["A1"],
+            pb_i,
+            a1_i,
             tasc,
-            parameters["EPS1"],
-            parameters["EPS2"],
+            eps1_i,
+            eps2_i,
             tolerance=tolerance,
         )
 
         deorbited_pepoch = simple_ell1_deorbit_numba(
             np.array([0.0]),
-            pb,
-            parameters["A1"],
+            pb_i,
+            a1_i,
             tasc,
-            parameters["EPS1"],
-            parameters["EPS2"],
+            eps1_i,
+            eps2_i,
             tolerance=tolerance,
         )
 
