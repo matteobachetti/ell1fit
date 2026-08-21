@@ -18,6 +18,12 @@ MANIFEST
 .ipynb_checkpoints
 .hypothesis/
 
+# uv's resolved dependency lock. Nothing in the build or test chain reads it --
+# CI runs tox, which resolves from pyproject.toml, as does anyone installing the
+# package. Committing it would pin a development environment that no automation
+# consults and that would quietly go stale.
+uv.lock
+
 # Sphinx
 docs/api
 docs/_build
