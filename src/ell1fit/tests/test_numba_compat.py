@@ -124,7 +124,7 @@ def test_compiled_kernels_agree_with_the_pure_python_fallback():
                 old = out[i]
                 phase = omega * out[i]
                 out[i] = t - A1 * (
-                    np.sin(phase) + EPS1 / 2 * np.sin(2 * phase) + EPS2 / 2 * np.cos(2 * phase)
+                    np.sin(phase) + EPS2 / 2 * np.sin(2 * phase) - EPS1 / 2 * np.cos(2 * phase)
                 )
                 n += 1
             out[i] += TASC

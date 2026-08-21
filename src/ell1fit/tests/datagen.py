@@ -140,10 +140,15 @@ def orbital_delay(t_from_tasc_sec, solution, pb_sec=None):
     if pb_sec is None:
         pb_sec = solution.PB_sec
     phase = 2 * np.pi * t_from_tasc_sec / pb_sec
+    # Lange et al. (2001) / tempo's bnryell1.f, to first order in e, with
+    # EPS1 = e sin(omega) and EPS2 = e cos(omega). Written from the published
+    # form rather than copied from phase_utils: the package once paired these
+    # terms the other way round, and a generator that shared the mistake
+    # confirmed it instead of catching it.
     return solution.A1 * (
         np.sin(phase)
-        + 0.5 * solution.EPS1 * np.sin(2 * phase)
-        + 0.5 * solution.EPS2 * np.cos(2 * phase)
+        + 0.5 * solution.EPS2 * np.sin(2 * phase)
+        - 0.5 * solution.EPS1 * np.cos(2 * phase)
     )
 
 

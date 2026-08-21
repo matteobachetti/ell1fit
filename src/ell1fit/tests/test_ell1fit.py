@@ -1,6 +1,7 @@
 """Unit tests for the orbital kernels, phase conventions, and result I/O."""
 
 import os
+import re
 
 import pytest
 import numpy as np
@@ -161,9 +162,9 @@ def test_deorbit_is_correct_for_an_event_exactly_at_tasc():
     whether to keep going. With a plain sentinel of 0 that comparison was false
     on entry for an event at exactly TASC -- where the first, circular-only
     estimate is also exactly 0 -- so the loop was skipped and the returned time
-    was missing the whole EPS2 cos(2 phi) term. That term is at its maximum at
+    was missing the whole EPS1 cos(2 phi) term. That term is at its maximum at
     phi = 0, so the error was maximal precisely where it was silently ignored:
-    A1 * EPS2 / 2, here 2.3e-3 s, against a requested tolerance of 1e-8.
+    A1 * EPS1 / 2, here 1.7e-3 s, against a requested tolerance of 1e-8.
     """
     PB, A1, TASC = 218849.0, 22.215, 0.0
     EPS1, EPS2 = 1.5e-4, -2.1e-4
@@ -176,13 +177,19 @@ def test_deorbit_is_correct_for_an_event_exactly_at_tasc():
     te = out - TASC
     phase = omega * te
     reconstructed = te + A1 * (
-        np.sin(phase) + EPS1 / 2 * np.sin(2 * phase) + EPS2 / 2 * np.cos(2 * phase)
+        np.sin(phase) + EPS2 / 2 * np.sin(2 * phase) - EPS1 / 2 * np.cos(2 * phase)
     )
     residual = np.abs(reconstructed + TASC - times)
     assert np.all(residual < 1e-8), f"deorbit did not solve its own equation: {residual}"
 
-    # Specifically at TASC the solution is not zero: it is -A1 * EPS2 / 2.
-    assert abs(out[0] - TASC) > 1e-6, "the EPS terms were never applied at TASC"
+    # Specifically at TASC the solution is not zero: to leading order it is
+    # +A1 * EPS1 / 2. The converged value sits ~0.06% below that, because the
+    # circular sin term is no longer exactly zero once the EPS terms have
+    # moved the solution off TASC -- hence the loose tolerance on a check whose
+    # point is the sign and the order of magnitude, not the last digit.
+    assert out[0] - TASC == pytest.approx(A1 * EPS1 / 2, rel=1e-2), (
+        "the EPS terms were never applied at TASC"
+    )
 
 
 def test_deorbit_tolerance_actually_tightens_the_solution():
@@ -293,3 +300,87 @@ def test_phases_are_flat_in_pbdot():
         assert np.array_equal(perturbed, reference), (
             f"PBDOT={pbdot} changed the phases: it is no longer an inert parameter"
         )
+
+
+def _kepler_delay_over_x(phi, e, om):
+    """Exact Keplerian Roemer delay divided by ``x``, ``TASC`` at the ascending node.
+
+    Solves ``M = E - e sin E`` by Newton iteration and evaluates
+    ``(r/a) sin(omega + nu) = sin(omega)(cos E - e)
+    + cos(omega) sqrt(1 - e^2) sin E``. No approximation in ``e``, and nothing
+    imported from the code under test.
+    """
+    M = phi - om
+    E = M.copy()
+    for _ in range(80):
+        E = E - (E - e * np.sin(E) - M) / (1 - e * np.cos(E))
+    return np.sin(om) * (np.cos(E) - e) + np.cos(om) * np.sqrt(1 - e**2) * np.sin(E)
+
+
+@pytest.mark.parametrize("om", [0.0, 0.7, 2.5, -1.3])
+def test_ell1_delay_matches_an_exact_keplerian_orbit(om):
+    """ELL1 must agree with an exact Kepler orbit to second order in ``e``.
+
+    This pins the pairing of ``EPS1``/``EPS2`` onto the ``2 Phi`` harmonics.
+    ELL1 truncates at first order in eccentricity, so the residual against an
+    exact orbit must fall as ``e**2``. Pairing the two parameters the other way
+    round -- which this package did until the convention was corrected to match
+    PINT and tempo -- rotates the orbit by 90 degrees in ``omega``, leaving a
+    residual that falls only as ``e``. Measured, at ``e = 1e-4``: ``9.0e-09``
+    correct against ``7.1e-05`` swapped.
+
+    A constant offset is removed first. ELL1 absorbs a constant
+    ``-1.5 e sin(omega)`` into ``TASC`` by construction, and a constant delay is
+    not an error in the orbit's shape.
+    """
+    PB, A1, TASC = 218849.0, 22.215, 0.0
+    times = np.linspace(0, PB, 4001, endpoint=False)
+    phi = 2 * np.pi * times / PB
+
+    residuals = {}
+    for e in (1e-4, 1e-3, 1e-2):
+        eps1, eps2 = e * np.sin(om), e * np.cos(om)
+        exact = _kepler_delay_over_x(phi, e, om)
+        modelled = (add_ell1_orbit_numba(times, PB, A1, TASC, eps1, eps2) - times) / A1
+
+        residual = exact - modelled
+        residual -= residual.mean()
+        residuals[e] = np.max(np.abs(residual))
+
+        # The measured coefficient is ~0.9 e^2; 10 leaves room without letting
+        # a first-order error through, which is ~700 e^2 at these values.
+        assert residuals[e] < 10 * e**2, (
+            f"omega={om}, e={e}: residual {residuals[e]:.3e} is too large to be "
+            "second order -- the EPS1/EPS2 harmonics are probably mispaired"
+        )
+
+    # Second order means a hundredfold drop per decade of e, not tenfold.
+    for smaller, larger in ((1e-4, 1e-3), (1e-3, 1e-2)):
+        ratio = residuals[larger] / residuals[smaller]
+        assert ratio == pytest.approx(100, rel=0.2), (
+            f"omega={om}: residual scales as e^{np.log10(ratio):.2f}, not e^2"
+        )
+
+
+def test_pint_defines_eps1_as_e_sin_omega(tmp_path):
+    """Pin the convention on PINT's side of the boundary too.
+
+    The package reads ``EPS1``/``EPS2`` straight out of a PINT-parsed parfile,
+    so the delay above is only right if PINT means by them what the delay
+    assumes: ``EPS1 = e sin(omega)``, ``EPS2 = e cos(omega)``. PINT derives
+    ``ECC`` and ``OM`` from them, which states its convention without needing
+    TOAs or an ephemeris.
+    """
+    from pint.models import get_model
+
+    eps1, eps2 = 0.003, 0.004
+    source = open(os.path.join(os.path.dirname(__file__), "data", "events0.par")).read()
+    source = re.sub(r"^EPS1\s.*$", f"EPS1 {eps1}", source, flags=re.M)
+    source = re.sub(r"^EPS2\s.*$", f"EPS2 {eps2}", source, flags=re.M)
+    parfile = tmp_path / "eccentric.par"
+    parfile.write_text(source)
+
+    model = get_model(str(parfile))
+
+    assert float(model.ECC.value) == pytest.approx(np.hypot(eps1, eps2))
+    assert float(model.OM.value) == pytest.approx(np.degrees(np.arctan2(eps1, eps2)))

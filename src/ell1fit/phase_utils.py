@@ -177,8 +177,8 @@ def simple_ell1_deorbit_numba(
     twopi = 2 * np.pi
     omega = twopi / PB
     out_times = np.empty_like(times)
-    k1 = EPS1 / 2
-    k2 = EPS2 / 2
+    k1 = EPS2 / 2
+    k2 = -EPS1 / 2
     for i in prange(times.size):
         t = times[i] - TASC
         # Circular first guess; the EPS terms are applied inside the loop, so
@@ -187,7 +187,7 @@ def simple_ell1_deorbit_numba(
         # Seeding this to a plain 0 collided with a legitimate solution of
         # exactly 0, reached whenever an event sits precisely at TASC. The
         # comparison was then false on entry, the loop was skipped, and the
-        # returned value was missing the whole EPS2 cos(2 phi) term -- which is
+        # returned value was missing the whole EPS1 cos(2 phi) term -- which is
         # at its maximum right there. Offsetting guarantees one iteration.
         old_out = out_times[i] + 2 * tolerance + 1.0
         n_iter = 0
@@ -202,13 +202,23 @@ def simple_ell1_deorbit_numba(
 
 
 def add_ell1_orbit_numba(times, PB, A1, TASC, EPS1, EPS2):
-    """Apply ELL1 orbital delays to times (forward model)."""
+    """Apply ELL1 orbital delays to times (forward model).
+
+    The Roemer delay follows the tempo/PINT convention,
+
+    ``dt = A1 * (sin(Phi) + EPS2/2 * sin(2 Phi) - EPS1/2 * cos(2 Phi))``
+
+    with ``EPS1 = e sin(omega)`` and ``EPS2 = e cos(omega)``. Getting the
+    pairing wrong rotates the orbit by 90 degrees in ``omega`` while leaving
+    ``e`` untouched, which is invisible in any test that generates its own data
+    with the same mistake. See :func:`ell1fit.tests.test_ell1fit`.
+    """
     twopi = 2 * np.pi
     omega = twopi / PB
     phase = omega * (times - TASC)
     twophase = 2 * phase
-    k1 = EPS1 / 2
-    k2 = EPS2 / 2
+    k1 = EPS2 / 2
+    k2 = -EPS1 / 2
     return times + A1 * (np.sin(phase) + k1 * np.sin(twophase) + k2 * np.cos(twophase))
 
 

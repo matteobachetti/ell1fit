@@ -31,8 +31,8 @@ which stay finite and uncorrelated as the orbit circularises. The delay is then
 .. math::
 
    \Delta_R(t) = x \left[ \sin\Phi
-                 + \frac{\epsilon_1}{2}\sin 2\Phi
-                 + \frac{\epsilon_2}{2}\cos 2\Phi \right],
+                 + \frac{\epsilon_2}{2}\sin 2\Phi
+                 - \frac{\epsilon_1}{2}\cos 2\Phi \right],
    \qquad \Phi = \frac{2\pi (t - T_{ASC})}{P_B},
 
 with :math:`x = A_1` the projected semi-major axis in light-seconds and
