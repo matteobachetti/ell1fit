@@ -27,15 +27,20 @@ jobs:
             python: 3.x
             toxenv: codestyle
 
-          - name: Python 3.9 with minimal dependencies
-            os: ubuntu-latest
-            python: 3.9
-            toxenv: py39-test
-
-          - name: Python 3.11 with all optional dependencies and coverage checking
+          - name: Python 3.11 with minimal dependencies
             os: ubuntu-latest
             python: 3.11
-            toxenv: py311-test-alldeps-cov
+            toxenv: py311-test
+
+          - name: Python 3.12 with all optional dependencies and coverage checking
+            os: ubuntu-latest
+            python: 3.12
+            toxenv: py312-test-alldeps-cov
+
+          - name: Python 3.13 with all optional dependencies and coverage checking
+            os: ubuntu-latest
+            python: 3.13
+            toxenv: py313-test-alldeps-cov
 
           - name: macOS - Python 3.11 with all optional dependencies
             os: macos-latest
@@ -47,19 +52,28 @@ jobs:
             python: 3.11
             toxenv: py311-test-alldeps
 
+          # Builds the HTML documentation with warnings treated as errors, so a
+          # malformed docstring or a broken cross-reference fails the build
+          # rather than silently degrading the rendered docs. The examples in
+          # docs/*.rst are executed separately, by the test environments above.
+          - name: Documentation build
+            os: ubuntu-latest
+            python: 3.12
+            toxenv: build_docs
+
     steps:
     - name: Checkout code
-      uses: actions/checkout@v2
+      uses: actions/checkout@v4
       with:
         fetch-depth: 0
     - name: Set up python ${{ matrix.python }} on ${{ matrix.os }}
-      uses: actions/setup-python@v2
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python }}
     - name: Install base dependencies
       run: |
         python -m pip install --upgrade pip
-        python -m pip install tox codecov
+        python -m pip install tox
     - name: Test with tox
       run: |
         tox -e ${{ matrix.toxenv }}

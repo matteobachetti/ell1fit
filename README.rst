@@ -6,6 +6,51 @@ Fit an ELL1 orbital model to pulsar data, accounting for spin derivatives
     :alt: Powered by Astropy Badge
 
 
+Development
+-----------
+
+Everything below runs through `tox <https://tox.wiki>`_, which builds an
+isolated environment for each task, so the only thing to install first is tox
+itself::
+
+    python -m pip install tox
+
+Run the test suite. This also executes the examples embedded in the
+documentation, so they cannot drift out of step with the code::
+
+    tox -e py311-test
+
+Build the HTML documentation. Warnings are treated as errors, so a malformed
+docstring or a broken cross-reference fails the build rather than quietly
+producing degraded pages. The result lands in ``docs/_build/html``::
+
+    tox -e build_docs
+
+Check code style — both the linter and the formatter::
+
+    tox -e codestyle
+
+Check that external links in the documentation still resolve. This one is also
+run weekly by CI, since links rot on their own schedule rather than yours::
+
+    tox -e linkcheck
+
+If you would rather work in an environment you already have, install the
+package with its test and documentation extras and call the tools directly::
+
+    python -m pip install -e ".[test,docs]"
+    pytest --pyargs ell1fit docs
+    cd docs && sphinx-build -W -b html . _build/html
+
+To confirm that a change left the numerical results untouched — which is what
+you want when restructuring rather than altering behaviour — take a snapshot
+before and after and compare them bit for bit::
+
+    python tools/refactor_net.py capture -o before.json
+    # ... make the change ...
+    python tools/refactor_net.py capture -o after.json
+    python tools/refactor_net.py diff before.json after.json
+
 License
 -------
 
