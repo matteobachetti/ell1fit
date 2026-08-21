@@ -69,17 +69,46 @@ opposite direction from the bias it corrects: the template can begin absorbing
 noise, which then pulls the solution. This is mild at low ``nharm`` and real at
 high ``nharm``, so the harmonic count is held fixed while iterating.
 
-Measured over 40 realizations with a deliberately mis-set ``A1``, refinement
-reduced the bias by a factor of 5.4 — from a 3.4σ systematic to something
-consistent with zero. But only about half of *individual* realizations landed
-closer to the truth than they started: this is a shift of the distribution, not
-a per-fit guarantee.
+.. warning::
 
-.. note::
+   **On the current code, refinement does not appear to help, and may slightly
+   hurt.** This is worth stating plainly because the feature was built to remove
+   a bias that measurement now attributes to something else.
 
-   That measurement predates fixes to both the optimizer conditioning and the
-   refinement convergence threshold, either of which could change the size of
-   the effect. Treat the factor of 5.4 as indicative rather than current.
+   An early measurement over 40 realizations, with a deliberately mis-set
+   ``A1``, found a 3.4σ bias in the one-pass fit which three passes reduced by a
+   factor of 5.4. Both the optimizer's parameter conditioning and the refinement
+   loop's convergence threshold were subsequently found to be wrong, and fixed.
+   Repeating the identical measurement afterwards inverted the result:
+
+   .. list-table::
+      :header-rows: 1
+      :widths: 30 25 25 20
+
+      * -
+        - bias, 1 pass
+        - bias, 3 passes
+        - RMS ratio
+      * - before those fixes
+        - +4.1e-03 (t = 3.4)
+        - +7.6e-04 (t = 0.8)
+        - 0.74 (better)
+      * - **on the current code**
+        - −1.8e-04 (t = −0.2)
+        - −2.3e-03 (t = −2.8)
+        - **1.17 (worse)**
+
+   The one-pass bias has essentially vanished: it was largely an artifact of an
+   optimizer that was not reliably finding the global optimum, rather than of a
+   smeared template. With the fit already at the optimum, further passes mostly
+   let the template absorb noise — the risk described above.
+
+   This is a single configuration (one offset size, one parameter, ``nharm=2``)
+   and the effect is about 2σ, so it does not establish that refinement is
+   useless. It may still help when the starting ephemeris is badly wrong, which
+   an 0.02 lt-s offset may no longer represent. It does mean the default of 1 is
+   the right default on present evidence, and that anyone enabling refinement
+   should verify it helps on their own data rather than assuming.
 
 Numerical
 ---------
