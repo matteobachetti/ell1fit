@@ -56,6 +56,14 @@ class InjectedSolution:
         Rate of change of the orbital period, dimensionless (s/s). Zero by
         default, in which case every quantity below reduces exactly to its
         constant-period form.
+    exact_kepler : bool
+        Generate arrival times from an *exact* Keplerian orbit rather than from
+        the ELL1 first-order expansion. ``EPS1``/``EPS2`` still define the
+        truth, by way of ``e`` and ``omega``; what changes is that the orbit is
+        no longer truncated. This is the Blandford-Teukolsky description that
+        ELL1 approximates, and fitting data generated this way is the only test
+        here that can see the truncation at all -- see
+        :func:`kepler_orbital_delay`.
     pepoch_ref : float
         Reference epoch (MJD) at which ``F0``/``F1`` are defined.
     """
@@ -68,7 +76,18 @@ class InjectedSolution:
     EPS1: float = 1.5e-4
     EPS2: float = -2.1e-4
     PBDOT: float = 0.0
+    exact_kepler: bool = False
     pepoch_ref: float = 56682.0
+
+    @property
+    def ECC(self):
+        """Orbital eccentricity, ``sqrt(EPS1**2 + EPS2**2)``."""
+        return float(np.hypot(self.EPS1, self.EPS2))
+
+    @property
+    def OM(self):
+        """Longitude of periastron in radians, ``atan2(EPS1, EPS2)``."""
+        return float(np.arctan2(self.EPS1, self.EPS2))
 
     @property
     def PB_sec(self):
@@ -149,6 +168,64 @@ def orbital_delay(t_from_tasc_sec, solution, pb_sec=None):
         np.sin(phase)
         + 0.5 * solution.EPS2 * np.sin(2 * phase)
         - 0.5 * solution.EPS1 * np.cos(2 * phase)
+    )
+
+
+def kepler_orbital_delay(t_from_tasc_sec, solution, pb_sec=None):
+    """Roemer delay of an *exact* Keplerian orbit, in seconds.
+
+    ELL1 is a first-order expansion of this. Generating events from the exact
+    orbit and fitting them with ELL1 is therefore the only way to see the
+    truncation error, and the only way to check that ``EPS1``/``EPS2`` come back
+    at ``e sin(omega)`` and ``e cos(omega)`` rather than at whatever the
+    expansion happens to be self-consistent with.
+
+    Kepler's equation ``M = E - e sin(E)`` is solved by Newton iteration, and
+    the projected separation follows from the standard relations
+    ``r cos(nu) = a (cos E - e)`` and ``r sin(nu) = a sqrt(1 - e^2) sin E``::
+
+        delay = A1 * [sin(omega) (cos E - e)
+                      + cos(omega) sqrt(1 - e^2) sin E]
+
+    The mean anomaly is measured from periastron while the ELL1 phase is
+    measured from the ascending node, so ``M = Phi - omega``; PINT states the
+    same relation as ``ELL1_T0 = TASC + PB/(2 pi) arctan(eps1/eps2)``.
+
+    At ``e = 0`` this reduces to ``A1 sin(Phi)`` identically.
+
+    Parameters
+    ----------
+    t_from_tasc_sec : np.ndarray
+        Pulsar-frame time measured from ``TASC``, in seconds.
+    solution : InjectedSolution
+        The injected truth.
+    pb_sec : float or None, optional
+        Orbital period in force at that ``TASC``. See :func:`orbital_delay`.
+
+    Returns
+    -------
+    np.ndarray
+        Delay in seconds.
+    """
+    if pb_sec is None:
+        pb_sec = solution.PB_sec
+    e, om = solution.ECC, solution.OM
+
+    phi = 2 * np.pi * t_from_tasc_sec / pb_sec
+    mean_anomaly = phi - om
+
+    eccentric_anomaly = mean_anomaly.copy()
+    for _ in range(100):
+        step = (eccentric_anomaly - e * np.sin(eccentric_anomaly) - mean_anomaly) / (
+            1 - e * np.cos(eccentric_anomaly)
+        )
+        eccentric_anomaly = eccentric_anomaly - step
+        if np.max(np.abs(step)) < 1e-15:
+            break
+
+    return solution.A1 * (
+        np.sin(om) * (np.cos(eccentric_anomaly) - e)
+        + np.cos(om) * np.sqrt(1 - e**2) * np.sin(eccentric_anomaly)
     )
 
 
@@ -277,7 +354,8 @@ def generate_epoch(
         energy = energy[keep]
 
         # Forward orbital model: pulsar frame -> observed arrival time.
-        t_obs = t_pulsar + orbital_delay(t_pulsar - tasc_sec, solution, pb_sec=pb_sec)
+        delay = kepler_orbital_delay if solution.exact_kepler else orbital_delay
+        t_obs = t_pulsar + delay(t_pulsar - tasc_sec, solution, pb_sec=pb_sec)
 
         in_gti = _in_gtis(t_obs, gtis)
         accepted["t"].append(t_obs[in_gti])
