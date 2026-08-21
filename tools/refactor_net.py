@@ -244,7 +244,7 @@ def capture_end_to_end(dataset, outdir, full=False):
     """Layer 1: run the CLI as a user would and record every numeric output."""
     from astropy.table import Table
 
-    from ell1fit.ell1fit import main as main_ell1fit
+    from ell1fit.cli import main as main_ell1fit
 
     record = {}
     outroot = os.path.join(outdir, "net")

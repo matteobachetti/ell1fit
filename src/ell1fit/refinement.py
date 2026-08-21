@@ -155,9 +155,7 @@ def refine_templates_and_solution(
         # How far the solution moved, in units of each parameter's own scale.
         max_shift = float(np.max(np.abs(fit_pars))) if len(fit_pars) else 0.0
 
-        profiles = folded_profile(
-            times, fitted_parameters, nbin=nbin, tolerance=current.tolerance
-        )
+        profiles = folded_profile(times, fitted_parameters, nbin=nbin, tolerance=current.tolerance)
         score = _profile_score(profiles, nharm)
 
         template_funcs, _ = _templates_from_profiles(profiles, nharm)
@@ -170,8 +168,9 @@ def refine_templates_and_solution(
         )
 
         converged = max_shift < tolerance
-        history.append({"iteration": iteration, "score": score, "max_shift": max_shift,
-                        "converged": converged})
+        history.append(
+            {"iteration": iteration, "score": score, "max_shift": max_shift, "converged": converged}
+        )
         logging.info(
             f"Template refinement pass {iteration}/{max_iterations}: "
             f"Z^2 = {score:.1f}, max|dtheta|/factor = {max_shift:.3g}, "

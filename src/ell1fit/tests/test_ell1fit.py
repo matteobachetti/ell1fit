@@ -128,8 +128,13 @@ def test_posterior_rejects_non_invertible_orbits_as_impossible():
         "Phase_0": np.float64(0.0),
     }
     observations = ObservationSet(
-        files=["synthetic"], models=[None], ref_model=None, pepoch=[56682.0],
-        times_from_pepoch=times, energies=[None], exposures=np.array([60000.0]),
+        files=["synthetic"],
+        models=[None],
+        ref_model=None,
+        pepoch=[56682.0],
+        times_from_pepoch=times,
+        energies=[None],
+        exposures=np.array([60000.0]),
         observation_length=np.array([60000.0]),
     )
     setup = FitSetup(
@@ -239,3 +244,19 @@ class TestRayleighLimitations:
         base = pletsch_clarke_likelihood(phases, one)
         assert pletsch_clarke_likelihood(phases, two) != base
         assert pletsch_clarke_likelihood(phases, one, weights=weights) != base
+
+
+def test_mjd_to_sec_accepts_plain_floats_and_arrays():
+    """Conversion must not depend on being handed numpy types.
+
+    The original implementation called ``.astype`` on its result, so a plain
+    Python float raised ``AttributeError``. Nothing in the pipeline hit it,
+    because PINT returns ``np.float64`` -- but any code building a parameter
+    dictionary by hand did.
+    """
+    from ell1fit.phase_utils import _mjd_to_sec
+
+    assert _mjd_to_sec(56682.5, 56682.0) == pytest.approx(43200.0)
+    assert _mjd_to_sec(np.float64(56682.5), np.float64(56682.0)) == pytest.approx(43200.0)
+    assert _mjd_to_sec(np.float64(56682.5), 56682.0) == pytest.approx(43200.0)
+    assert np.allclose(_mjd_to_sec(np.array([56682.5, 56683.0]), 56682.0), [43200.0, 86400.0])

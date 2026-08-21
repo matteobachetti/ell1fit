@@ -283,9 +283,7 @@ class UniformCubicTemplate:
             if phases.size >= PARALLEL_TEMPLATE_THRESHOLD
             else _evaluate_uniform_cubic_floored
         )
-        probs = kernel(
-            phases, self.coefficients, self.x0, self.dx, self.n_intervals, floor
-        )
+        probs = kernel(phases, self.coefficients, self.x0, self.dx, self.n_intervals, floor)
         if weights is None:
             return float(np.sum(np.log(probs)))
 

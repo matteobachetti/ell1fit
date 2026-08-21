@@ -40,7 +40,7 @@ import numpy as np
 import pytest
 from astropy.table import Table
 
-from ell1fit.ell1fit import main as main_ell1fit
+from ell1fit.cli import main as main_ell1fit
 from ell1fit.fitting import point_estimate_fit
 from ell1fit.phase_utils import folded_profile
 from ell1fit.posterior import _build_posterior_functions
@@ -229,13 +229,10 @@ def test_fit_improves_on_its_starting_point(dataset):
 
     assert np.isfinite(at_start), "the starting position should be evaluable"
     assert at_fit >= at_start, (
-        f"the optimizer returned a worse position than it started from: "
-        f"{at_start!r} -> {at_fit!r}"
+        f"the optimizer returned a worse position than it started from: {at_start!r} -> {at_fit!r}"
     )
 
     # And it must actually have moved: a fit that returns its input unchanged
     # would satisfy the inequality above trivially.
-    assert np.any(np.abs(fit_pars) > 1e-6), (
-        f"the optimizer did not move at all: {fit_pars!r}"
-    )
+    assert np.any(np.abs(fit_pars) > 1e-6), f"the optimizer did not move at all: {fit_pars!r}"
     assert fitted_parameters["A1"] != setup.parameters["A1"]

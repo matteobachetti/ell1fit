@@ -14,7 +14,7 @@ which is the condition the refinement tests exist to exercise.
 
 import os
 
-from ..ell1fit import _prepare_fit_setup
+from ..pipeline import _prepare_fit_setup
 from ..events import _load_events_for_all_files
 from ..likelihoods import pletsch_clarke_likelihood
 from ..models import _build_parameters_from_models, _load_and_validate_models

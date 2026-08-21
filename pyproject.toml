@@ -41,7 +41,7 @@ docs = [
 ]
 
 [project.scripts]
-ell1fit = "ell1fit.ell1fit:main"
+ell1fit = "ell1fit.cli:main"
 ell1par = "ell1fit.create_parfile:main"
 ell1updatebinary = "ell1fit.update_binary:main"
 

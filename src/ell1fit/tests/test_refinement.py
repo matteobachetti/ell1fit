@@ -252,13 +252,17 @@ def test_comparison_phaseogram_reference_survives_refinement(offset_setup, monke
 
     monkeypatch.setattr(fitting, "_plot_phaseogram_set", fake_plot)
     monkeypatch.setattr(
-        fitting, "safe_run_sampler",
-        lambda *a, **k: {f"d{p}_{q}": 0.0 for p in refined.parameter_names
-                         for q in (1, 10, 16, 50, 84, 90, 99)},
+        fitting,
+        "safe_run_sampler",
+        lambda *a, **k: {
+            f"d{p}_{q}": 0.0 for p in refined.parameter_names for q in (1, 10, 16, 50, 84, 90, 99)
+        },
     )
 
     fitting.optimize_solution(
-        observations, refined, nsteps=10,
+        observations,
+        refined,
+        nsteps=10,
         outroots=[str(tmp_path / f"p{i}") for i in range(observations.n_files + 1)],
         reference_phases=reference,
     )
