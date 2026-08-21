@@ -133,7 +133,7 @@ class InjectedSolution:
 
 
 def orbital_delay(t_from_tasc_sec, solution, pb_sec=None):
-    """Roemer delay of the ELL1 model, in seconds.
+    """Roemer delay of the ELL1 model, in seconds, to second order in e.
 
     This is the *forward* model: given a time in the pulsar frame, it returns
     the delay to add to obtain the observed arrival time.
@@ -159,15 +159,26 @@ def orbital_delay(t_from_tasc_sec, solution, pb_sec=None):
     if pb_sec is None:
         pb_sec = solution.PB_sec
     phase = 2 * np.pi * t_from_tasc_sec / pb_sec
-    # Lange et al. (2001) / tempo's bnryell1.f, to first order in e, with
-    # EPS1 = e sin(omega) and EPS2 = e cos(omega). Written from the published
-    # form rather than copied from phase_utils: the package once paired these
-    # terms the other way round, and a generator that shared the mistake
-    # confirmed it instead of catching it.
+    # tempo's bnryell1.f `dre`, with EPS1 = e sin(omega), EPS2 = e cos(omega):
+    # first order plus the Wex-Zhu o(e^2) block, matching the order the package
+    # computes. Written out as published rather than copied from phase_utils --
+    # the package once paired these terms the other way round, and a generator
+    # that shared the mistake confirmed it instead of catching it. Note this is
+    # the literal harmonic form, where phase_utils folds the same expression
+    # into six coefficients so it needs only one sine and one cosine.
+    e1, e2 = solution.EPS1, solution.EPS2
     return solution.A1 * (
         np.sin(phase)
-        + 0.5 * solution.EPS2 * np.sin(2 * phase)
-        - 0.5 * solution.EPS1 * np.cos(2 * phase)
+        - 0.5 * (e1 * np.cos(2 * phase) - e2 * np.sin(2 * phase))
+        - (1 / 8)
+        * (
+            -2 * e1 * e2 * np.cos(phase)
+            + 6 * e1 * e2 * np.cos(3 * phase)
+            + 3 * e1 * e1 * np.sin(phase)
+            + 5 * e2 * e2 * np.sin(phase)
+            + 3 * e1 * e1 * np.sin(3 * phase)
+            - 3 * e2 * e2 * np.sin(3 * phase)
+        )
     )
 
 

@@ -26,7 +26,8 @@ the two Laplace–Lagrange parameters
 
    \epsilon_1 = e \sin\omega, \qquad \epsilon_2 = e \cos\omega,
 
-which stay finite and uncorrelated as the orbit circularises. The delay is then
+which stay finite and uncorrelated as the orbit circularises. To first order in
+:math:`e` the delay is then
 
 .. math::
 
@@ -37,6 +38,19 @@ which stay finite and uncorrelated as the orbit circularises. The delay is then
 
 with :math:`x = A_1` the projected semi-major axis in light-seconds and
 :math:`P_B` the orbital period.
+
+``ell1fit`` computes one order further, adding the Wex–Zhu :math:`O(e^2)` block
+that tempo's ``bnryell1.f`` and PINT also use:
+
+.. math::
+
+   -\frac{x}{8} \Big[ &-2\epsilon_1\epsilon_2\cos\Phi
+                      + 6\epsilon_1\epsilon_2\cos 3\Phi \\
+                      &+ 3\epsilon_1^2\sin\Phi + 5\epsilon_2^2\sin\Phi \\
+                      &+ 3\epsilon_1^2\sin 3\Phi - 3\epsilon_2^2\sin 3\Phi \Big].
+
+That leaves a truncation error of order :math:`e^3` instead of :math:`e^2`, and
+it costs nothing — see :doc:`design`.
 
 Why X-ray data need a different method
 --------------------------------------

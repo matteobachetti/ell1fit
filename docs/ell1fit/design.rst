@@ -113,7 +113,7 @@ pair
 
    \epsilon_1 = e \sin\omega, \qquad \epsilon_2 = e \cos\omega,
 
-and expands the Roemer delay to first order in :math:`e`:
+and expands the Roemer delay. To first order in :math:`e`,
 
 .. math::
 
@@ -125,7 +125,9 @@ The parameterisation is due to Lange et al. (2001), *MNRAS* **326**, 274; the
 implementation of record is tempo's `bnryell1.f
 <https://github.com/nanograv/tempo/blob/master/src/bnryell1.f>`_, whose header
 states the two definitions above and credits Wex (1998). PINT is a faithful
-port of it.
+port of it. What both actually compute — and what this package computes — is one
+order further, with the Wex–Zhu :math:`O(e^2)` block written out in
+:doc:`motivation`. See `Second order costs nothing`_ for why that is free.
 
 Note that the pairing is *asymmetric*: :math:`\epsilon_2` goes with
 :math:`\sin 2\Phi` and :math:`\epsilon_1` with :math:`-\cos 2\Phi`. Exchanging
@@ -190,7 +192,47 @@ truncates at first order, the residual against an exact orbit must fall as
 
 A hundredfold drop per decade against a tenfold one. ``test_ell1fit.py``
 asserts both the bound and the scaling exponent, over several values of
-:math:`\omega`, which is a statement no documentation can drift away from.
+:math:`\omega`, which is a statement no documentation can drift away from. With
+the :math:`O(e^2)` block included the same test demands a *thousandfold* drop,
+so it pins the pairing and the expansion order together.
+
+Second order costs nothing
+--------------------------
+
+ELL1 is normally written to first order, and carrying the :math:`O(e^2)` block
+sounds like paying for accuracy nobody needs on a nearly circular orbit. It is
+the other way round: the second-order kernel is **faster** than the first-order
+one it replaced.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 30 30
+
+   * - deorbiting 200,000 events
+     - first order
+     - with :math:`O(e^2)`
+   * - :math:`e = 0`
+     - 2.18 ms
+     - 2.08 ms
+   * - :math:`e = 10^{-2}`
+     - 2.79 ms
+     - 2.49 ms
+
+The reason is that the deorbiting iteration is **transcendental-bound** — it is
+limited by ``sin``/``cos`` throughput, not by arithmetic. Written naively the
+second-order delay needs five transcendental calls per iteration
+(:math:`\sin\Phi`, :math:`\sin 2\Phi`, :math:`\cos 2\Phi`, :math:`\sin 3\Phi`,
+:math:`\cos 3\Phi`) against the first-order form's three. But collecting the
+whole expression into six harmonic coefficients
+(:func:`ell1fit.phase_utils._second_order_coefficients`) lets every multiple
+angle come from :math:`\sin\Phi` and :math:`\cos\Phi` through exact identities,
+so it needs **two**. The extra polynomial work costs less than the one trig call
+it saves.
+
+So there is no first-order option, and no flag. Carrying a second code path
+would have bought a slower, less accurate model. At :math:`e = 0` the kernel is
+bit-for-bit identical to the circular one, so nothing changes for the orbits
+this code is usually pointed at.
 
 The cost of the old convention, for scale: at :math:`e = 0.005` the delay was
 wrong by 0.0035\ :math:`\,x`, which for ``A1`` = 22.2 lt-s and ``F0`` = 7.5 Hz
