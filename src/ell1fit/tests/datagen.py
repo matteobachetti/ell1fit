@@ -51,7 +51,16 @@ class InjectedSolution:
     TASC : float
         Time of ascending node, MJD.
     EPS1, EPS2 : float
-        ELL1 Laplace-Lagrange eccentricity parameters.
+        ELL1 Laplace-Lagrange eccentricity parameters, ``e sin(omega)`` and
+        ``e cos(omega)``. The defaults give ``e = 2.0e-3`` at
+        ``omega = 143.1 deg``, chosen so that the eccentricity is a firm
+        detection rather than a marginal one. The default fixture reaches
+        ``sigma(EPS) = 1.45e-4``, which makes this a **12.5 sigma** measurement
+        where the previous ``e = 2.6e-4`` was 1.8 sigma -- too weak for anything
+        to tell a correct eccentricity model from a broken one. It is still an
+        order of magnitude inside the range where the second-order expansion is
+        faithful: the truncation error here is 3e-7 cycles, against a limit of
+        ``e = 2.9e-2`` at 1e-3 cycles.
     PBDOT : float
         Rate of change of the orbital period, dimensionless (s/s). Zero by
         default, in which case every quantity below reduces exactly to its
@@ -73,8 +82,8 @@ class InjectedSolution:
     PB: float = 2.532971
     A1: float = 22.215
     TASC: float = 56682.0669
-    EPS1: float = 1.5e-4
-    EPS2: float = -2.1e-4
+    EPS1: float = 1.2e-3
+    EPS2: float = -1.6e-3
     PBDOT: float = 0.0
     exact_kepler: bool = False
     pepoch_ref: float = 56682.0

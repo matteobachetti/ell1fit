@@ -10,11 +10,11 @@ So here the events come from an exact Keplerian (Blandford--Teukolsky) orbit,
 with Kepler's equation solved numerically, and the fit is asked to describe them
 with ELL1. See :func:`ell1fit.tests.datagen.kepler_orbital_delay`.
 
-The eccentricity is deliberately small. ELL1 truncates at first order, so its
-description of an exact orbit carries a residual that grows as :math:`e^2`; at
-the ``2e-3`` used here the resulting bias on ``e`` itself is about ``2e-9``,
-five orders of magnitude below the statistical uncertainty, so anything that
-fails here is a real error rather than the approximation showing through.
+The eccentricity is deliberately modest. ELL1 truncates the Roemer delay -- at
+second order here -- so its description of an exact orbit carries a residual
+growing as :math:`e^3`; at the ``2e-3`` used, that is 3e-7 cycles, four orders
+of magnitude below what the fit resolves. Anything that fails here is a real
+error rather than the approximation showing through.
 """
 
 import dataclasses
@@ -28,9 +28,11 @@ from ..scaling import TARGET_LOCAL_SIGMA, precondition_factors
 from .datagen import InjectedSolution, make_multi_epoch_dataset
 from .helpers import build_pipeline_state
 
-#: Injected orbit. Chosen so the eccentricity is a ~12 sigma detection with the
-#: event count below, while staying far inside the regime where ELL1 is a good
-#: description -- see ``test_ell1_truncation`` for where that stops being true.
+#: Injected orbit. A different ``omega`` from the default solution, so the two
+#: fixtures between them exercise more than one orbital orientation. The
+#: eccentricity matches the default and is a ~22 sigma detection at the event
+#: count below; ``test_injected_eccentricity_sits_in_the_useful_window`` states
+#: the window it has to sit in.
 ECCENTRICITY = 2.0e-3
 OMEGA_DEG = 71.0
 
@@ -200,3 +202,35 @@ def test_exact_and_expanded_generators_differ_at_all(kepler_fit, ell1_fit):
 
     assert kepler_values["EPS1"] != ell1_values["EPS1"]
     assert kepler_values["EPS2"] != ell1_values["EPS2"]
+
+
+def test_injected_eccentricity_sits_in_the_useful_window():
+    """The default injected ``e`` must be both measurable and faithfully modelled.
+
+    Two constraints pull in opposite directions, and the injected value has to
+    satisfy both. Too small and the eccentricity is not detected, so no test can
+    distinguish a correct eccentricity model from a broken one -- the earlier
+    default of ``e = 2.6e-4`` was a 1.8 sigma signal in this fixture. Too large
+    and ELL1 stops describing the orbit, so a failure would mean the truncation
+    rather than the code.
+
+    Asserted on the injected quantities alone, so this is deterministic and
+    costs nothing. The measured detection significance at ``e = 2.0e-3`` is
+    12.5 sigma with the default event count and 22 sigma at 12000 per epoch.
+    """
+    solution = InjectedSolution()
+
+    # Amplitude of the eccentric (2 Phi) terms, in cycles.
+    signal = solution.A1 * solution.ECC / 2 * solution.F0
+    # Second-order truncation error against an exact orbit; see the measured law
+    # in docs/ell1fit/design.rst.
+    truncation = 0.236 * solution.ECC**3 * solution.A1 * solution.F0
+
+    assert signal > 0.05, (
+        f"the eccentric terms contribute only {signal:.4f} cycles; too weak for "
+        "the recovery tests to mean anything"
+    )
+    assert truncation < 1e-5, (
+        f"ELL1 misdescribes this orbit by {truncation:.3e} cycles; a recovery "
+        "failure would be the truncation, not the code"
+    )
