@@ -260,3 +260,36 @@ def test_mjd_to_sec_accepts_plain_floats_and_arrays():
     assert _mjd_to_sec(np.float64(56682.5), np.float64(56682.0)) == pytest.approx(43200.0)
     assert _mjd_to_sec(np.float64(56682.5), 56682.0) == pytest.approx(43200.0)
     assert np.allclose(_mjd_to_sec(np.array([56682.5, 56683.0]), 56682.0), [43200.0, 86400.0])
+
+
+def test_phases_are_flat_in_pbdot():
+    """The phase model must be provably independent of ``PBDOT``.
+
+    This is the fact that justifies rejecting ``-P PBDOT`` in
+    :func:`ell1fit.pipeline._reject_unfittable_parameters`: ``_calculate_phases``
+    passes a constant ``PB`` to the deorbiting kernel, so the likelihood has no
+    gradient in ``PBDOT`` and fitting it would return the prior.
+
+    If ``PBDOT`` ever enters the phase model for real, this test fails -- which
+    is the point. The guard must then be removed rather than left to reject a
+    parameter that has become fittable.
+    """
+    parameters = {
+        "PB": 30000.0,
+        "A1": 1.0,
+        "TASC": 57000.0,
+        "EPS1": 1e-4,
+        "EPS2": -2e-4,
+        "PBDOT": 0.0,
+        "PEPOCH_0": 57000.0,
+        "F0_0": 100.0,
+        "Phase_0": 0.0,
+    }
+    times = [np.linspace(0, 1e6, 1000)]
+
+    reference = _calculate_phases(times, parameters)[0]
+    for pbdot in (1e-12, 1e-10, 1e-8):
+        perturbed = _calculate_phases(times, dict(parameters, PBDOT=pbdot))[0]
+        assert np.array_equal(perturbed, reference), (
+            f"PBDOT={pbdot} changed the phases: it is no longer an inert parameter"
+        )

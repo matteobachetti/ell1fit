@@ -11,8 +11,12 @@ Model scope
 - **ELL1 only.** The model must define ``TASC``, not ``T0``; a model with ``T0``
   is rejected at load. ELL1 is appropriate for nearly circular orbits, which is
   what it exists for, but it is not a general Keplerian solver.
-- **No orbital derivatives beyond** ``PBDOT``. ``XDOT``, ``OMDOT`` and friends
-  are not fitted.
+- **No orbital derivative is fitted.** ``PBDOT`` is honoured as an *input*:
+  PINT applies it when each model's binary epoch is aligned to its ``PEPOCH``,
+  so a parfile value does reach the computation. But the phase model holds
+  ``PB`` constant, so the likelihood is flat in ``PBDOT`` and ``-P PBDOT`` is
+  rejected with an error rather than quietly returning its own prior as a
+  measurement. ``XDOT``, ``OMDOT`` and friends are not used at all.
 - **One binary, shared across all files.** Spin parameters are per file; orbital
   parameters are not.
 

@@ -66,12 +66,43 @@ from .setup_types import ObservationSet
 from .weighting import pf_weight_versus_energy
 
 __all__ = [
+    "UNFITTABLE_PARAMETERS",
     "_prepare_fit_setup",
     "ell1fit",
 ]
 
 
 freq_re = re.compile(r"^d?F([0-9]+)_([0-9]+)$")
+
+
+#: Parameters that appear in the parameter dictionary but that the phase model
+#: is flat in, mapped to the reason. Fitting one of these would add a dimension
+#: the likelihood does not depend on, so the chain would simply return the
+#: prior -- and the result table would report that prior as a measurement.
+UNFITTABLE_PARAMETERS = {
+    "PBDOT": (
+        "the phase model holds the orbital period constant. PINT applies PBDOT "
+        "once, when each parfile's binary epoch is aligned to its PEPOCH, and "
+        "nothing downstream of that depends on it"
+    ),
+}
+
+
+def _reject_unfittable_parameters(requested_parameter_names):
+    """Refuse to fit parameters the likelihood is flat in.
+
+    Raises
+    ------
+    ValueError
+        If any requested parameter appears in :data:`UNFITTABLE_PARAMETERS`.
+    """
+    for par in requested_parameter_names:
+        if par in UNFITTABLE_PARAMETERS:
+            raise ValueError(
+                f"{par} cannot be fitted: {UNFITTABLE_PARAMETERS[par]}. "
+                f"Fitting it would sample the prior rather than the data. "
+                f"Set {par} in the parfile instead."
+            )
 
 
 def _collect_parameter_names(parameters, requested_parameter_names, likelihood_func):
@@ -440,6 +471,7 @@ def ell1fit(
     nbin = max(32, nharm * 8)
 
     requested_parameter_names = sorted(fit_parameters)
+    _reject_unfittable_parameters(requested_parameter_names)
     get_outroot = _make_outroot_getter(
         files,
         requested_parameter_names,
