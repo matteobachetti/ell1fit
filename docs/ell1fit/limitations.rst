@@ -11,10 +11,38 @@ Model scope
 - **ELL1 only.** The model must define ``TASC``, not ``T0``; a model with ``T0``
   is rejected at load. ELL1 is appropriate for nearly circular orbits, which is
   what it exists for, but it is not a general Keplerian solver.
-- **No orbital derivatives beyond** ``PBDOT``. ``XDOT``, ``OMDOT`` and friends
-  are not fitted.
+- **No orbital derivative is fitted.** ``PBDOT`` is honoured as an *input*:
+  PINT applies it when each model's binary epoch is aligned to its ``PEPOCH``,
+  so a parfile value does reach the computation. But the phase model holds
+  ``PB`` constant, so the likelihood is flat in ``PBDOT`` and ``-P PBDOT`` is
+  rejected with an error rather than quietly returning its own prior as a
+  measurement. ``XDOT``, ``OMDOT`` and friends are not used at all.
+- **Small eccentricities only, and the limit is measured.** The Roemer delay is
+  expanded to second order in :math:`e`, so what remains scales as
+  :math:`e^3`. The residual phase error is
+
+  .. math::
+
+     \sigma_\Phi \approx 0.236\, e^3\, x\, F_0 \quad \text{cycles},
+
+  independent of :math:`\omega`. ``ell1fit`` compares that against the
+  precision the folded profiles imply and **warns** when it reaches a third of
+  it — for a typical 22 lt-s, 7.5 Hz system at 1e-3 cycles, that is
+  :math:`e \approx 0.03`; for a redback-like 10 lt-s, 200 Hz system,
+  :math:`e \approx 0.013`. Nothing is rejected: the residual lives in the
+  third harmonic of the orbit, orthogonal to every direction ELL1 can move in,
+  so exceeding the limit costs sensitivity rather than biasing the recovered
+  eccentricity — at :math:`e = 0.01` the bias on :math:`e` is 2.7e-5
+  *relative*. Above it, a full Keplerian model (BT, DD) is the right tool.
+
+  The check runs on the **input** parfile's eccentricity. A fit that starts
+  circular and wanders somewhere eccentric will not trigger it.
 - **One binary, shared across all files.** Spin parameters are per file; orbital
-  parameters are not.
+  parameters are not. They are, however, *propagated* to each file's epoch when
+  the parfile sets an orbital derivative, so a shared solution stays valid
+  across a long baseline. Ignoring that propagation costs up to
+  ``PBDOT * baseline**2`` in phase — measured at 3e-2 cycles for
+  ``PBDOT = 1e-10`` over ten years, against the ~1e-3 cycles a fit resolves.
 
 The Rayleigh statistic
 ----------------------

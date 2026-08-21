@@ -51,7 +51,28 @@ class InjectedSolution:
     TASC : float
         Time of ascending node, MJD.
     EPS1, EPS2 : float
-        ELL1 Laplace-Lagrange eccentricity parameters.
+        ELL1 Laplace-Lagrange eccentricity parameters, ``e sin(omega)`` and
+        ``e cos(omega)``. The defaults give ``e = 2.0e-3`` at
+        ``omega = 143.1 deg``, chosen so that the eccentricity is a firm
+        detection rather than a marginal one. The default fixture reaches
+        ``sigma(EPS) = 1.45e-4``, which makes this a **12.5 sigma** measurement
+        where the previous ``e = 2.6e-4`` was 1.8 sigma -- too weak for anything
+        to tell a correct eccentricity model from a broken one. It is still an
+        order of magnitude inside the range where the second-order expansion is
+        faithful: the truncation error here is 3e-7 cycles, against a limit of
+        ``e = 2.9e-2`` at 1e-3 cycles.
+    PBDOT : float
+        Rate of change of the orbital period, dimensionless (s/s). Zero by
+        default, in which case every quantity below reduces exactly to its
+        constant-period form.
+    exact_kepler : bool
+        Generate arrival times from an *exact* Keplerian orbit rather than from
+        the ELL1 first-order expansion. ``EPS1``/``EPS2`` still define the
+        truth, by way of ``e`` and ``omega``; what changes is that the orbit is
+        no longer truncated. This is the Blandford-Teukolsky description that
+        ELL1 approximates, and fitting data generated this way is the only test
+        here that can see the truncation at all -- see
+        :func:`kepler_orbital_delay`.
     pepoch_ref : float
         Reference epoch (MJD) at which ``F0``/``F1`` are defined.
     """
@@ -61,9 +82,21 @@ class InjectedSolution:
     PB: float = 2.532971
     A1: float = 22.215
     TASC: float = 56682.0669
-    EPS1: float = 1.5e-4
-    EPS2: float = -2.1e-4
+    EPS1: float = 1.2e-3
+    EPS2: float = -1.6e-3
+    PBDOT: float = 0.0
+    exact_kepler: bool = False
     pepoch_ref: float = 56682.0
+
+    @property
+    def ECC(self):
+        """Orbital eccentricity, ``sqrt(EPS1**2 + EPS2**2)``."""
+        return float(np.hypot(self.EPS1, self.EPS2))
+
+    @property
+    def OM(self):
+        """Longitude of periastron in radians, ``atan2(EPS1, EPS2)``."""
+        return float(np.arctan2(self.EPS1, self.EPS2))
 
     @property
     def PB_sec(self):
@@ -86,13 +119,30 @@ class InjectedSolution:
 
         With ``PBDOT = 0`` this is the same physical solution, but it produces a
         genuinely different ``TASC`` value per epoch -- which is the point.
+
+        A nonzero ``PBDOT`` makes the orbit count quadratic in time,
+        :math:`N = x - \\tfrac{1}{2}\\dot{P_b}x^2` with :math:`x = \\Delta t/P_b`,
+        so the ascending nodes are no longer evenly spaced and the alias is
+        ``n * PB + n**2 * PB * PBDOT / 2`` from the reference. The expression
+        reduces exactly to ``n * PB`` when ``PBDOT`` is zero.
         """
-        n_orbits = np.round((pepoch - self.TASC) / self.PB)
-        return self.TASC + n_orbits * self.PB
+        x = (pepoch - self.TASC) / self.PB
+        n_orbits = np.round(x - 0.5 * self.PBDOT * x**2)
+        return self.TASC + n_orbits * self.PB + n_orbits**2 * self.PB * self.PBDOT / 2
+
+    def PB_sec_near(self, pepoch):
+        """Orbital period, in seconds, valid at the alias near ``pepoch``.
+
+        The period a parfile quotes is the one in force at the ``TASC`` it
+        quotes, so an epoch-local ``TASC`` has to be written with an
+        epoch-local ``PB``.
+        """
+        elapsed = (self.tasc_near(pepoch) - self.TASC) * SEC_PER_DAY
+        return self.PB_sec + self.PBDOT * elapsed
 
 
-def orbital_delay(t_from_tasc_sec, solution):
-    """Roemer delay of the ELL1 model, in seconds.
+def orbital_delay(t_from_tasc_sec, solution, pb_sec=None):
+    """Roemer delay of the ELL1 model, in seconds, to second order in e.
 
     This is the *forward* model: given a time in the pulsar frame, it returns
     the delay to add to obtain the observed arrival time.
@@ -103,17 +153,99 @@ def orbital_delay(t_from_tasc_sec, solution):
         Pulsar-frame time measured from ``TASC``, in seconds.
     solution : InjectedSolution
         The injected truth.
+    pb_sec : float or None, optional
+        Orbital period in force at that ``TASC``. Defaults to the reference
+        period. Supplying the epoch-local one is what makes a nonzero
+        ``PBDOT`` come out right: measured from the nearest ascending node,
+        the neglected quadratic term is under ``1e-10`` orbits across an
+        observation, so the local period *is* the exact model there.
 
     Returns
     -------
     np.ndarray
         Delay in seconds.
     """
-    phase = 2 * np.pi * t_from_tasc_sec / solution.PB_sec
+    if pb_sec is None:
+        pb_sec = solution.PB_sec
+    phase = 2 * np.pi * t_from_tasc_sec / pb_sec
+    # tempo's bnryell1.f `dre`, with EPS1 = e sin(omega), EPS2 = e cos(omega):
+    # first order plus the Wex-Zhu o(e^2) block, matching the order the package
+    # computes. Written out as published rather than copied from phase_utils --
+    # the package once paired these terms the other way round, and a generator
+    # that shared the mistake confirmed it instead of catching it. Note this is
+    # the literal harmonic form, where phase_utils folds the same expression
+    # into six coefficients so it needs only one sine and one cosine.
+    e1, e2 = solution.EPS1, solution.EPS2
     return solution.A1 * (
         np.sin(phase)
-        + 0.5 * solution.EPS1 * np.sin(2 * phase)
-        + 0.5 * solution.EPS2 * np.cos(2 * phase)
+        - 0.5 * (e1 * np.cos(2 * phase) - e2 * np.sin(2 * phase))
+        - (1 / 8)
+        * (
+            -2 * e1 * e2 * np.cos(phase)
+            + 6 * e1 * e2 * np.cos(3 * phase)
+            + 3 * e1 * e1 * np.sin(phase)
+            + 5 * e2 * e2 * np.sin(phase)
+            + 3 * e1 * e1 * np.sin(3 * phase)
+            - 3 * e2 * e2 * np.sin(3 * phase)
+        )
+    )
+
+
+def kepler_orbital_delay(t_from_tasc_sec, solution, pb_sec=None):
+    """Roemer delay of an *exact* Keplerian orbit, in seconds.
+
+    ELL1 is a first-order expansion of this. Generating events from the exact
+    orbit and fitting them with ELL1 is therefore the only way to see the
+    truncation error, and the only way to check that ``EPS1``/``EPS2`` come back
+    at ``e sin(omega)`` and ``e cos(omega)`` rather than at whatever the
+    expansion happens to be self-consistent with.
+
+    Kepler's equation ``M = E - e sin(E)`` is solved by Newton iteration, and
+    the projected separation follows from the standard relations
+    ``r cos(nu) = a (cos E - e)`` and ``r sin(nu) = a sqrt(1 - e^2) sin E``::
+
+        delay = A1 * [sin(omega) (cos E - e)
+                      + cos(omega) sqrt(1 - e^2) sin E]
+
+    The mean anomaly is measured from periastron while the ELL1 phase is
+    measured from the ascending node, so ``M = Phi - omega``; PINT states the
+    same relation as ``ELL1_T0 = TASC + PB/(2 pi) arctan(eps1/eps2)``.
+
+    At ``e = 0`` this reduces to ``A1 sin(Phi)`` identically.
+
+    Parameters
+    ----------
+    t_from_tasc_sec : np.ndarray
+        Pulsar-frame time measured from ``TASC``, in seconds.
+    solution : InjectedSolution
+        The injected truth.
+    pb_sec : float or None, optional
+        Orbital period in force at that ``TASC``. See :func:`orbital_delay`.
+
+    Returns
+    -------
+    np.ndarray
+        Delay in seconds.
+    """
+    if pb_sec is None:
+        pb_sec = solution.PB_sec
+    e, om = solution.ECC, solution.OM
+
+    phi = 2 * np.pi * t_from_tasc_sec / pb_sec
+    mean_anomaly = phi - om
+
+    eccentric_anomaly = mean_anomaly.copy()
+    for _ in range(100):
+        step = (eccentric_anomaly - e * np.sin(eccentric_anomaly) - mean_anomaly) / (
+            1 - e * np.cos(eccentric_anomaly)
+        )
+        eccentric_anomaly = eccentric_anomaly - step
+        if np.max(np.abs(step)) < 1e-15:
+            break
+
+    return solution.A1 * (
+        np.sin(om) * (np.cos(eccentric_anomaly) - e)
+        + np.cos(om) * np.sqrt(1 - e**2) * np.sin(eccentric_anomaly)
     )
 
 
@@ -160,7 +292,7 @@ def pulsed_fraction_at(energy, pf_ref=0.25, e_ref=3.0, index=0.6, pf_max=0.85):
 def generate_epoch(
     solution,
     pepoch,
-    duration=100_000.0,
+    duration=None,
     n_events=5000,
     phase0=0.35,
     duty=0.12,
@@ -182,8 +314,9 @@ def generate_epoch(
         The injected truth.
     pepoch : float
         This epoch's reference epoch, MJD.
-    duration : float, optional
-        Observation span in seconds (wall clock, before GTI filtering).
+    duration : float or None, optional
+        Observation span in seconds (wall clock, before GTI filtering). Defaults
+        to one full orbital period -- see :func:`make_multi_epoch_dataset`.
     n_events : int, optional
         Approximate number of events surviving GTI filtering.
     phase0 : float, optional
@@ -205,14 +338,23 @@ def generate_epoch(
     -------
     dict
         ``times_from_pepoch``, ``energy``, ``pi``, ``gtis_from_pepoch``,
-        ``pepoch``, ``F0``, ``F1``, ``TASC``, and ``phase0``.
+        ``pepoch``, ``F0``, ``F1``, ``TASC``, ``PB``, and ``phase0``. ``TASC``
+        and ``PB`` are the epoch-local pair, which differ per epoch once
+        ``PBDOT`` is nonzero.
     """
     if rng is None:
         rng = np.random.default_rng()
+    if duration is None:
+        # One full orbit *inside the good-time intervals*, not merely one orbit
+        # of wall clock: the last GTI ends at ((n - 1) + duty) / n of the span,
+        # so a span of exactly PB would leave the final tenth of the orbit
+        # unsampled.
+        duration = solution.PB_sec * n_gtis / (n_gtis - 1 + gti_duty)
 
     F0, F1 = solution.spin_at(pepoch)
     tasc = solution.tasc_near(pepoch)
     tasc_sec = (tasc - pepoch) * SEC_PER_DAY
+    pb_sec = solution.PB_sec_near(pepoch)
 
     gtis = _build_gtis(duration, n_gtis, gti_duty)
     live_time = np.sum(np.diff(gtis, axis=1))
@@ -239,7 +381,8 @@ def generate_epoch(
         energy = energy[keep]
 
         # Forward orbital model: pulsar frame -> observed arrival time.
-        t_obs = t_pulsar + orbital_delay(t_pulsar - tasc_sec, solution)
+        delay = kepler_orbital_delay if solution.exact_kepler else orbital_delay
+        t_obs = t_pulsar + delay(t_pulsar - tasc_sec, solution, pb_sec=pb_sec)
 
         in_gti = _in_gtis(t_obs, gtis)
         accepted["t"].append(t_obs[in_gti])
@@ -263,6 +406,7 @@ def generate_epoch(
         "F0": F0,
         "F1": F1,
         "TASC": tasc,
+        "PB": pb_sec / SEC_PER_DAY,
         "phase0": phase0,
         "live_time": live_time,
     }
@@ -304,7 +448,7 @@ PEPOCH               {PEPOCH:.16g}
 PLANET_SHAPIRO                          N
 BINARY                               ELL1
 PB                   {PB:.16g} {PB_unc:.3g}
-PBDOT                                   0
+PBDOT                {PBDOT:.16g}
 A1                   {A1:.16g} {A1_unc:.3g}
 TASC                 {TASC:.16g} {TASC_unc:.3g}
 EPS1                 {EPS1:.16g}
@@ -353,11 +497,14 @@ def write_parfile(path, epoch, solution, index=0, offsets=None, uncertainties=No
     values = {
         "F0": epoch["F0"],
         "F1": epoch["F1"],
-        "PB": solution.PB,
+        # TASC and PB are the epoch-local pair: a parfile's period is the one
+        # in force at the TASC it quotes. With PBDOT = 0 this is solution.PB.
+        "PB": epoch["PB"],
         "A1": solution.A1,
         "TASC": epoch["TASC"],
         "EPS1": solution.EPS1,
         "EPS2": solution.EPS2,
+        "PBDOT": solution.PBDOT,
     }
     for name, offset in offsets.items():
         if name not in values:
@@ -410,7 +557,7 @@ def make_multi_epoch_dataset(
     solution=None,
     epoch_offsets=(0.0, 37.0, 91.0),
     n_events=5000,
-    duration=100_000.0,
+    duration=None,
     phase0=(0.35, 0.35, 0.35),
     duty=0.12,
     seed=20260820,
@@ -432,8 +579,23 @@ def make_multi_epoch_dataset(
         different orbital alias of ``TASC``.
     n_events : int, optional
         Events per epoch.
-    duration : float, optional
-        Observation span per epoch, in seconds.
+    duration : float or None, optional
+        Observation span per epoch, in seconds. Defaults to **one full orbital
+        period**, which is what it takes to constrain the orbit.
+
+        ``A1`` fixes the amplitude of a sinusoid in orbital phase and ``EPS1``/
+        ``EPS2`` the amplitudes of its second harmonic, so a span covering only
+        part of an orbit measures them from an arc rather than a cycle. Measured
+        at fixed total counts, going from 0.46 to 1.0 orbits improves
+        ``sigma(EPS)`` by a factor of 1.8 for the same photons. The tell is the
+        asymmetry: over a partial orbit ``sigma(EPS1)`` and ``sigma(EPS2)``
+        differ by 11%, because the ``sin 2 Phi`` and ``cos 2 Phi`` directions are
+        sampled unequally; over a full orbit they agree to 0.3%. Two orbits buy
+        nothing further.
+
+        Longer spans are free here: the generator draws a fixed number of events
+        regardless, so a wider span lowers the count rate rather than raising the
+        cost of anything.
     phase0 : sequence of float, optional
         Per-epoch pulse phase offset.
     duty : float, optional

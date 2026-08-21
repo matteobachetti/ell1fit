@@ -1,0 +1,349 @@
+"""Recovery of the ELL1 eccentricity parameters from an exact Keplerian orbit.
+
+Every other test of the orbital model generates its data from the ELL1
+expansion itself. That checks the implementation, but it cannot check the
+*parameterisation*: whether ``EPS1`` and ``EPS2`` come back at
+:math:`e\\sin\\omega` and :math:`e\\cos\\omega` of a real orbit, or merely at
+whatever the expansion happens to be self-consistent with.
+
+So here the events come from an exact Keplerian (Blandford--Teukolsky) orbit,
+with Kepler's equation solved numerically, and the fit is asked to describe them
+with ELL1. See :func:`ell1fit.tests.datagen.kepler_orbital_delay`.
+
+The eccentricity is deliberately modest. ELL1 truncates the Roemer delay -- at
+second order here -- so its description of an exact orbit carries a residual
+growing as :math:`e^3`; at the ``2e-3`` used, that is 3e-7 cycles, four orders
+of magnitude below what the fit resolves. Anything that fails here is a real
+error rather than the approximation showing through.
+"""
+
+import dataclasses
+import warnings
+
+import numpy as np
+import pytest
+
+from ..fitting import point_estimate_fit
+from ..posterior import _build_posterior_functions
+from ..scaling import TARGET_LOCAL_SIGMA, precondition_factors
+from .datagen import InjectedSolution, make_multi_epoch_dataset
+from .helpers import build_pipeline_state
+
+#: Injected orbit. A different ``omega`` from the default solution, so the two
+#: fixtures between them exercise more than one orbital orientation. The
+#: eccentricity matches the default and is a ~22 sigma detection at the event
+#: count below; ``test_injected_eccentricity_sits_in_the_useful_window`` states
+#: the window it has to sit in.
+ECCENTRICITY = 2.0e-3
+OMEGA_DEG = 71.0
+
+#: Fixed, so the test is deterministic. Over 15 realizations the pull scatter
+#: was 1.10 and 0.88 for EPS1/EPS2 with a maximum absolute pull of 2.68, so the
+#: three-sigma bound asserted below is a real bound and not a fitted one.
+SEED = 20260820
+
+
+def _laplace_sigma(func, position, step=TARGET_LOCAL_SIGMA):
+    """Marginal 1-sigma widths from the numerical Hessian of the log-posterior.
+
+    Central differences at one preconditioned sigma, then invert. Cheaper than
+    an MCMC by three orders of magnitude, and enough to ask whether a recovered
+    value sits within its own uncertainty.
+    """
+    n = len(position)
+    hessian = np.zeros((n, n))
+    centre = func(position)
+
+    for i in range(n):
+        for j in range(i, n):
+            step_i, step_j = np.zeros(n), np.zeros(n)
+            step_i[i] = step_j[j] = step
+            if i == j:
+                hessian[i, i] = (
+                    func(position + step_i) - 2 * centre + func(position - step_i)
+                ) / step**2
+            else:
+                hessian[i, j] = hessian[j, i] = (
+                    func(position + step_i + step_j)
+                    - func(position + step_i - step_j)
+                    - func(position - step_i + step_j)
+                    + func(position - step_i - step_j)
+                ) / (4 * step**2)
+
+    return np.sqrt(np.diag(np.linalg.inv(-hessian)))
+
+
+def _fit(outdir, exact_kepler):
+    """Generate one dataset and return the fitted values with their sigmas."""
+    omega = np.radians(OMEGA_DEG)
+    solution = InjectedSolution(
+        EPS1=ECCENTRICITY * np.sin(omega),
+        EPS2=ECCENTRICITY * np.cos(omega),
+        exact_kepler=exact_kepler,
+    )
+    dataset = make_multi_epoch_dataset(
+        str(outdir),
+        solution=solution,
+        epoch_offsets=(0.0, 37.0, 91.0),
+        n_events=12000,
+        seed=SEED,
+    )
+
+    observations, setup = build_pipeline_state(
+        dataset, fit_parameters=("A1", "EPS1", "EPS2", "F0"), nharm=2
+    )
+    setup = dataclasses.replace(
+        setup,
+        factors=precondition_factors(
+            _build_posterior_functions(observations, setup)[2],
+            setup.factors,
+            setup.n_parameters,
+        ),
+    )
+
+    fit_position, fitted, posterior = point_estimate_fit(observations, setup)
+    sigma_local = _laplace_sigma(posterior, fit_position)
+
+    values, sigmas = {}, {}
+    for name in ("EPS1", "EPS2", "A1"):
+        index = setup.parameter_names.index(name)
+        values[name] = fitted[name]
+        sigmas[name] = sigma_local[index] * setup.factors[index]
+    return solution, values, sigmas
+
+
+@pytest.fixture(scope="module")
+def kepler_fit(tmp_path_factory):
+    """Fit of events generated from the exact Keplerian orbit."""
+    return _fit(tmp_path_factory.mktemp("kepler"), exact_kepler=True)
+
+
+@pytest.fixture(scope="module")
+def ell1_fit(tmp_path_factory):
+    """The same, generated from the ELL1 expansion, as a paired control."""
+    return _fit(tmp_path_factory.mktemp("ell1"), exact_kepler=False)
+
+
+def test_eps_recovered_from_an_exact_keplerian_orbit(kepler_fit):
+    """``EPS1``/``EPS2`` must come back at ``e sin(omega)``/``e cos(omega)``.
+
+    The orbit the events came from was never expressed in ELL1 terms at all --
+    it was integrated from ``ECC`` and ``OM`` through Kepler's equation. So this
+    is a test of the parameterisation, not of the expansion.
+    """
+    solution, values, sigmas = kepler_fit
+
+    for name, truth in (("EPS1", solution.EPS1), ("EPS2", solution.EPS2)):
+        pull = (values[name] - truth) / sigmas[name]
+        assert abs(pull) < 3, (
+            f"{name} = {values[name]:.6e} +- {sigmas[name]:.2e} against an "
+            f"injected {truth:.6e}: {pull:+.2f} sigma"
+        )
+
+
+def test_ecc_and_om_recovered_from_an_exact_keplerian_orbit(kepler_fit):
+    """The same statement in the Blandford--Teukolsky variables.
+
+    ``e`` and ``omega`` are what a reader of the fit actually wants, and they
+    are the variables the orbit was injected in. Uncertainties are propagated
+    from the two components, neglecting their covariance.
+    """
+    solution, values, sigmas = kepler_fit
+
+    eps1, eps2 = values["EPS1"], values["EPS2"]
+    sig1, sig2 = sigmas["EPS1"], sigmas["EPS2"]
+    eccentricity = np.hypot(eps1, eps2)
+
+    sigma_ecc = np.hypot(eps1 * sig1, eps2 * sig2) / eccentricity
+    sigma_om = np.hypot(eps2 * sig1, eps1 * sig2) / eccentricity**2
+
+    assert abs(eccentricity - solution.ECC) < 3 * sigma_ecc, (
+        f"e = {eccentricity:.6e} +- {sigma_ecc:.2e} against {solution.ECC:.6e}"
+    )
+
+    omega = np.arctan2(eps1, eps2)
+    assert abs(omega - solution.OM) < 3 * sigma_om, (
+        f"omega = {np.degrees(omega):.2f} +- {np.degrees(sigma_om):.2f} deg "
+        f"against {OMEGA_DEG:.2f} deg"
+    )
+
+
+def test_ell1_and_exact_orbits_agree_at_this_eccentricity(kepler_fit, ell1_fit):
+    """Paired check that the truncation is negligible where it is claimed to be.
+
+    Both datasets use the same seed, so the noise realization is shared and
+    cancels: any difference between the two fits is the approximation itself,
+    not scatter. At ``e = 2e-3`` the two agree to better than a tenth of a
+    sigma, measured at 0.11 across three seeds.
+
+    This is the end-to-end counterpart of the analytic truncation law. It is
+    also the assertion that fails loudly if the two generators ever stop
+    describing the same orbit.
+    """
+    _, kepler_values, kepler_sigmas = kepler_fit
+    _, ell1_values, _ = ell1_fit
+
+    for name in ("EPS1", "EPS2"):
+        difference = abs(kepler_values[name] - ell1_values[name]) / kepler_sigmas[name]
+        assert difference < 0.25, (
+            f"{name} differs by {difference:.2f} sigma between an exact orbit and "
+            "the ELL1 expansion -- larger than the truncation should produce here"
+        )
+
+
+def test_exact_and_expanded_generators_differ_at_all(kepler_fit, ell1_fit):
+    """Guard against the paired test above passing for the wrong reason.
+
+    If ``exact_kepler`` were quietly ignored, the two fixtures would be
+    identical and the agreement test would be vacuous. They must differ a
+    little -- just not much.
+    """
+    _, kepler_values, _ = kepler_fit
+    _, ell1_values, _ = ell1_fit
+
+    assert kepler_values["EPS1"] != ell1_values["EPS1"]
+    assert kepler_values["EPS2"] != ell1_values["EPS2"]
+
+
+def test_injected_eccentricity_sits_in_the_useful_window():
+    """The default injected ``e`` must be both measurable and faithfully modelled.
+
+    Two constraints pull in opposite directions, and the injected value has to
+    satisfy both. Too small and the eccentricity is not detected, so no test can
+    distinguish a correct eccentricity model from a broken one -- the earlier
+    default of ``e = 2.6e-4`` was a 1.8 sigma signal in this fixture. Too large
+    and ELL1 stops describing the orbit, so a failure would mean the truncation
+    rather than the code.
+
+    Asserted on the injected quantities alone, so this is deterministic and
+    costs nothing. The measured detection significance at ``e = 2.0e-3`` is
+    12.5 sigma with the default event count and 22 sigma at 12000 per epoch.
+    """
+    solution = InjectedSolution()
+
+    # Amplitude of the eccentric (2 Phi) terms, in cycles.
+    signal = solution.A1 * solution.ECC / 2 * solution.F0
+    # Second-order truncation error against an exact orbit; see the measured law
+    # in docs/ell1fit/design.rst.
+    truncation = 0.236 * solution.ECC**3 * solution.A1 * solution.F0
+
+    assert signal > 0.05, (
+        f"the eccentric terms contribute only {signal:.4f} cycles; too weak for "
+        "the recovery tests to mean anything"
+    )
+    assert truncation < 1e-5, (
+        f"ELL1 misdescribes this orbit by {truncation:.3e} cycles; a recovery "
+        "failure would be the truncation, not the code"
+    )
+
+
+def test_truncation_law_matches_a_refit_against_an_exact_orbit():
+    """The coefficient in the truncation law must be the measured one.
+
+    ``ell1_truncation_error`` would be trivially true if it only restated its own
+    formula, so this re-derives it: fit the ELL1 delay to an exact Keplerian
+    orbit, letting ``A1``, ``TASC``, ``EPS1``, ``EPS2`` and a constant absorb
+    what they can -- which is what a real fit does -- and compare the residual
+    that survives against the prediction.
+    """
+    from scipy.optimize import least_squares
+
+    from ..phase_utils import _second_order_coefficients, ell1_truncation_error
+
+    phi = np.linspace(0, 2 * np.pi, 2001, endpoint=False)
+    A1, F0 = 22.215, 7.5
+
+    def exact(e, om):
+        mean_anomaly = phi - om
+        E = mean_anomaly.copy()
+        for _ in range(100):
+            E = E - (E - e * np.sin(E) - mean_anomaly) / (1 - e * np.cos(E))
+        return np.sin(om) * (np.cos(E) - e) + np.cos(om) * np.sqrt(1 - e**2) * np.sin(E)
+
+    def modelled(shifted_phi, eps1, eps2):
+        a1s, a1c, a2s, a2c, a3s, a3c = _second_order_coefficients(eps1, eps2)
+        return (
+            a1s * np.sin(shifted_phi)
+            + a1c * np.cos(shifted_phi)
+            + a2s * np.sin(2 * shifted_phi)
+            + a2c * np.cos(2 * shifted_phi)
+            + a3s * np.sin(3 * shifted_phi)
+            + a3c * np.cos(3 * shifted_phi)
+        )
+
+    for e, om in ((3e-2, 1.1), (5e-2, 2.4)):
+        target = exact(e, om)
+
+        def residual(p, target=target):
+            scale, shift, eps1, eps2, offset = p
+            return scale * modelled(phi + shift, eps1, eps2) + offset - target
+
+        solution = least_squares(
+            residual,
+            [1.0, 0.0, e * np.sin(om), e * np.cos(om), 0.0],
+            xtol=1e-15,
+            ftol=1e-15,
+            gtol=1e-15,
+        )
+        measured = np.sqrt(np.mean(solution.fun**2)) * A1 * F0
+        predicted = ell1_truncation_error(e * np.sin(om), e * np.cos(om), A1, F0)
+
+        assert measured == pytest.approx(predicted, rel=0.15), (
+            f"e={e}, omega={om}: law predicts {predicted:.3e} cycles, a refit leaves {measured:.3e}"
+        )
+
+
+def _profile_with_precision(phase_precision, nbin=32, nharm=2):
+    """A folded profile whose implied phase precision is roughly as requested."""
+    from stingray.pulse.pulsar import z_n_binned_events
+
+    target_z2 = (1 / (2 * np.pi * phase_precision)) ** 2
+    phases = (np.arange(nbin) + 0.5) / nbin
+    for counts in np.logspace(2, 13, 600):
+        profile = counts * (1 + 0.3 * np.cos(2 * np.pi * phases))
+        if z_n_binned_events(profile, nharm) >= target_z2:
+            return profile
+    raise AssertionError("could not reach the requested precision")
+
+
+@pytest.mark.parametrize(
+    "eccentricity,should_warn", [(1e-3, False), (5e-3, False), (5e-2, True), (0.2, True)]
+)
+def test_warns_only_when_the_truncation_matters(eccentricity, should_warn):
+    """The warning must depend on the data, not on ``e`` alone.
+
+    A given eccentricity is harmless against a coarse measurement and limiting
+    against a precise one, so the threshold is set by the phase precision the
+    folded profiles imply -- here pinned at 1e-3 cycles, which puts the boundary
+    at ``e = 2.9e-2`` for this orbit.
+    """
+    from ..pipeline import _warn_on_eccentric_orbit
+
+    omega = np.radians(143.13)
+    parameters = {
+        "EPS1": eccentricity * np.sin(omega),
+        "EPS2": eccentricity * np.cos(omega),
+        "A1": 22.215,
+        "F0_0": 7.5,
+    }
+    profiles = [_profile_with_precision(1e-3)]
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _warn_on_eccentric_orbit(parameters, profiles, nharm=2)
+
+    warned = any("ELL1 expansion limits" in str(w.message) for w in caught)
+    assert warned is should_warn, f"e={eccentricity}: warned={warned}, expected {should_warn}"
+
+
+def test_a_circular_orbit_never_warns():
+    """Zero eccentricity must be silent however precise the data are."""
+    from ..pipeline import _warn_on_eccentric_orbit
+
+    parameters = {"EPS1": 0.0, "EPS2": 0.0, "A1": 22.215, "F0_0": 7.5}
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _warn_on_eccentric_orbit(parameters, [_profile_with_precision(1e-6)], nharm=2)
+
+    assert not [w for w in caught if "ELL1 expansion limits" in str(w.message)]

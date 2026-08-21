@@ -47,6 +47,7 @@ from .models import _load_and_validate_models
 from .outputs import _get_outroots
 from .outputs import _make_outroot_getter
 from .phase_utils import _calculate_phases
+from .phase_utils import ell1_truncation_error
 from .phase_utils import folded_profile
 from .phase_utils import phases_around_zero
 from .plotting import plot_style_context as _plot_style_context
@@ -66,12 +67,95 @@ from .setup_types import ObservationSet
 from .weighting import pf_weight_versus_energy
 
 __all__ = [
+    "ELL1_TRUNCATION_WARNING_FRACTION",
+    "UNFITTABLE_PARAMETERS",
     "_prepare_fit_setup",
     "ell1fit",
 ]
 
 
 freq_re = re.compile(r"^d?F([0-9]+)_([0-9]+)$")
+
+
+#: Parameters that appear in the parameter dictionary but that the phase model
+#: is flat in, mapped to the reason. Fitting one of these would add a dimension
+#: the likelihood does not depend on, so the chain would simply return the
+#: prior -- and the result table would report that prior as a measurement.
+UNFITTABLE_PARAMETERS = {
+    "PBDOT": (
+        "the phase model holds the orbital period constant. PINT applies PBDOT "
+        "once, when each parfile's binary epoch is aligned to its PEPOCH, and "
+        "nothing downstream of that depends on it"
+    ),
+}
+
+
+def _reject_unfittable_parameters(requested_parameter_names):
+    """Refuse to fit parameters the likelihood is flat in.
+
+    Raises
+    ------
+    ValueError
+        If any requested parameter appears in :data:`UNFITTABLE_PARAMETERS`.
+    """
+    for par in requested_parameter_names:
+        if par in UNFITTABLE_PARAMETERS:
+            raise ValueError(
+                f"{par} cannot be fitted: {UNFITTABLE_PARAMETERS[par]}. "
+                f"Fitting it would sample the prior rather than the data. "
+                f"Set {par} in the parfile instead."
+            )
+
+
+#: Warn once the ELL1 truncation reaches this fraction of the phase precision
+#: the data support. A systematic at one third of the statistical error inflates
+#: the total by 5%, which is about where it stops being ignorable.
+ELL1_TRUNCATION_WARNING_FRACTION = 1 / 3
+
+
+def _warn_on_eccentric_orbit(parameters, profiles, nharm):
+    """Warn when the orbit is too eccentric for ELL1 to describe at this precision.
+
+    ELL1 exists for nearly circular orbits and expands the Roemer delay in
+    eccentricity, so it stops being a faithful description at large ``e``. Where
+    exactly depends on the data, not on ``e`` alone: the truncation matters only
+    once it is comparable to the precision the observation supports.
+
+    The comparison here is
+    :func:`ell1fit.phase_utils.ell1_truncation_error` against
+    ``1 / (2 pi sqrt(sum Z^2_n))``, the phase precision implied by the folded
+    profiles. That estimator was checked against the fitted ``Phase_i``
+    uncertainty over a sixfold range of event counts and two pulse shapes and
+    tracks it to within 30%, always on the low side -- so this errs toward
+    warning early rather than late.
+
+    Nothing is rejected. Exceeding the limit degrades sensitivity rather than
+    biasing the eccentricity, so the fit remains meaningful; the user just needs
+    to know the model is working outside its range.
+    """
+    truncation = ell1_truncation_error(
+        parameters["EPS1"], parameters["EPS2"], parameters["A1"], parameters["F0_0"]
+    )
+    if truncation <= 0:
+        return
+
+    total_z2 = float(np.sum([z_n_binned_events(profile, nharm) for profile in profiles]))
+    if not np.isfinite(total_z2) or total_z2 <= 0:
+        return
+    phase_precision = 1 / (2 * np.pi * np.sqrt(total_z2))
+
+    if truncation > ELL1_TRUNCATION_WARNING_FRACTION * phase_precision:
+        eccentricity = np.hypot(parameters["EPS1"], parameters["EPS2"])
+        warnings.warn(
+            f"Eccentricity {eccentricity:.3g} is large enough that the ELL1 "
+            f"expansion limits this fit: its truncation leaves {truncation:.2g} "
+            f"cycles against a phase precision of {phase_precision:.2g} cycles. "
+            "ELL1 is a small-eccentricity model; the unmodelled residual sits in "
+            "the third harmonic of the orbit, so it costs sensitivity rather "
+            "than biasing the recovered eccentricity. A full Keplerian model "
+            "(BT, DD) would be the right description here.",
+            stacklevel=2,
+        )
 
 
 def _collect_parameter_names(parameters, requested_parameter_names, likelihood_func):
@@ -440,6 +524,7 @@ def ell1fit(
     nbin = max(32, nharm * 8)
 
     requested_parameter_names = sorted(fit_parameters)
+    _reject_unfittable_parameters(requested_parameter_names)
     get_outroot = _make_outroot_getter(
         files,
         requested_parameter_names,
@@ -487,6 +572,10 @@ def ell1fit(
         nbin,
         tolerance,
     )
+
+    # Needs the folded profiles: how much eccentricity ELL1 can carry depends on
+    # the precision the data support, not on a fixed threshold.
+    _warn_on_eccentric_orbit(parameters, profile, nharm)
 
     # Must run before _prepare_fit_setup: it writes each file's real Phase_i
     # offset into parameters/parameters_with_unc, which assign_logpriors then

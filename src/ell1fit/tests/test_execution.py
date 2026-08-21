@@ -124,6 +124,22 @@ class TestExecution:
         # lands in the current directory.
         assert os.path.exists(f"out{label}_results.ecsv")
 
+    def test_fitting_pbdot_is_rejected(self):
+        """``-P PBDOT`` must fail loudly instead of sampling its own prior.
+
+        ``PBDOT`` reaches the computation only through PINT's binary-epoch
+        alignment; the phase model itself holds ``PB`` constant, so the
+        likelihood is flat in it. See
+        ``test_ell1fit.test_phases_are_flat_in_pbdot`` for the direct
+        demonstration.
+        """
+        cmdline = (
+            self.event_files + ["-p"] + self.param_files + ["-P", "F0,PBDOT", "--nsteps", "10"]
+        )
+
+        with pytest.raises(ValueError, match="PBDOT cannot be fitted"):
+            main_ell1fit(cmdline)
+
     @classmethod
     def teardown_class(cls):
         outs = glob.glob(os.path.join(datadir, "*A1_*TASC*"))

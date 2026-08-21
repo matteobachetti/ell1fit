@@ -1,6 +1,7 @@
 """Unit tests for the orbital kernels, phase conventions, and result I/O."""
 
 import os
+import re
 
 import pytest
 import numpy as np
@@ -161,9 +162,9 @@ def test_deorbit_is_correct_for_an_event_exactly_at_tasc():
     whether to keep going. With a plain sentinel of 0 that comparison was false
     on entry for an event at exactly TASC -- where the first, circular-only
     estimate is also exactly 0 -- so the loop was skipped and the returned time
-    was missing the whole EPS2 cos(2 phi) term. That term is at its maximum at
+    was missing the whole EPS1 cos(2 phi) term. That term is at its maximum at
     phi = 0, so the error was maximal precisely where it was silently ignored:
-    A1 * EPS2 / 2, here 2.3e-3 s, against a requested tolerance of 1e-8.
+    A1 * EPS1 / 2, here 1.7e-3 s, against a requested tolerance of 1e-8.
     """
     PB, A1, TASC = 218849.0, 22.215, 0.0
     EPS1, EPS2 = 1.5e-4, -2.1e-4
@@ -175,14 +176,19 @@ def test_deorbit_is_correct_for_an_event_exactly_at_tasc():
     # The returned emission time must satisfy the defining equation.
     te = out - TASC
     phase = omega * te
-    reconstructed = te + A1 * (
-        np.sin(phase) + EPS1 / 2 * np.sin(2 * phase) + EPS2 / 2 * np.cos(2 * phase)
-    )
+    reconstructed = te + A1 * _tempo_dre_over_x(phase, EPS1, EPS2)
     residual = np.abs(reconstructed + TASC - times)
     assert np.all(residual < 1e-8), f"deorbit did not solve its own equation: {residual}"
 
-    # Specifically at TASC the solution is not zero: it is -A1 * EPS2 / 2.
-    assert abs(out[0] - TASC) > 1e-6, "the EPS terms were never applied at TASC"
+    # Specifically at TASC the solution is not zero: to leading order it is
+    # +A1 * EPS1 / 2 (the o(e^2) terms shift it by a further 0.02% here). The
+    # converged value sits ~0.06% below that, because the
+    # circular sin term is no longer exactly zero once the EPS terms have
+    # moved the solution off TASC -- hence the loose tolerance on a check whose
+    # point is the sign and the order of magnitude, not the last digit.
+    assert out[0] - TASC == pytest.approx(A1 * EPS1 / 2, rel=1e-2), (
+        "the EPS terms were never applied at TASC"
+    )
 
 
 def test_deorbit_tolerance_actually_tightens_the_solution():
@@ -260,3 +266,176 @@ def test_mjd_to_sec_accepts_plain_floats_and_arrays():
     assert _mjd_to_sec(np.float64(56682.5), np.float64(56682.0)) == pytest.approx(43200.0)
     assert _mjd_to_sec(np.float64(56682.5), 56682.0) == pytest.approx(43200.0)
     assert np.allclose(_mjd_to_sec(np.array([56682.5, 56683.0]), 56682.0), [43200.0, 86400.0])
+
+
+def test_phases_are_flat_in_pbdot():
+    """The phase model must be provably independent of ``PBDOT``.
+
+    This is the fact that justifies rejecting ``-P PBDOT`` in
+    :func:`ell1fit.pipeline._reject_unfittable_parameters`: ``_calculate_phases``
+    passes a constant ``PB`` to the deorbiting kernel, so the likelihood has no
+    gradient in ``PBDOT`` and fitting it would return the prior.
+
+    If ``PBDOT`` ever enters the phase model for real, this test fails -- which
+    is the point. The guard must then be removed rather than left to reject a
+    parameter that has become fittable.
+    """
+    parameters = {
+        "PB": 30000.0,
+        "A1": 1.0,
+        "TASC": 57000.0,
+        "EPS1": 1e-4,
+        "EPS2": -2e-4,
+        "PBDOT": 0.0,
+        "PEPOCH_0": 57000.0,
+        "F0_0": 100.0,
+        "Phase_0": 0.0,
+    }
+    times = [np.linspace(0, 1e6, 1000)]
+
+    reference = _calculate_phases(times, parameters)[0]
+    for pbdot in (1e-12, 1e-10, 1e-8):
+        perturbed = _calculate_phases(times, dict(parameters, PBDOT=pbdot))[0]
+        assert np.array_equal(perturbed, reference), (
+            f"PBDOT={pbdot} changed the phases: it is no longer an inert parameter"
+        )
+
+
+def _kepler_delay_over_x(phi, e, om):
+    """Exact Keplerian Roemer delay divided by ``x``, ``TASC`` at the ascending node.
+
+    Solves ``M = E - e sin E`` by Newton iteration and evaluates
+    ``(r/a) sin(omega + nu) = sin(omega)(cos E - e)
+    + cos(omega) sqrt(1 - e^2) sin E``. No approximation in ``e``, and nothing
+    imported from the code under test.
+    """
+    M = phi - om
+    E = M.copy()
+    for _ in range(80):
+        E = E - (E - e * np.sin(E) - M) / (1 - e * np.cos(E))
+    return np.sin(om) * (np.cos(E) - e) + np.cos(om) * np.sqrt(1 - e**2) * np.sin(E)
+
+
+def test_pint_defines_eps1_as_e_sin_omega(tmp_path):
+    """Pin the convention on PINT's side of the boundary too.
+
+    The package reads ``EPS1``/``EPS2`` straight out of a PINT-parsed parfile,
+    so the delay above is only right if PINT means by them what the delay
+    assumes: ``EPS1 = e sin(omega)``, ``EPS2 = e cos(omega)``. PINT derives
+    ``ECC`` and ``OM`` from them, which states its convention without needing
+    TOAs or an ephemeris.
+    """
+    from pint.models import get_model
+
+    eps1, eps2 = 0.003, 0.004
+    source = open(os.path.join(os.path.dirname(__file__), "data", "events0.par")).read()
+    source = re.sub(r"^EPS1\s.*$", f"EPS1 {eps1}", source, flags=re.M)
+    source = re.sub(r"^EPS2\s.*$", f"EPS2 {eps2}", source, flags=re.M)
+    parfile = tmp_path / "eccentric.par"
+    parfile.write_text(source)
+
+    model = get_model(str(parfile))
+
+    assert float(model.ECC.value) == pytest.approx(np.hypot(eps1, eps2))
+    assert float(model.OM.value) == pytest.approx(np.degrees(np.arctan2(eps1, eps2)))
+
+
+def _delay_over_x(kernel, times, PB, A1, eps1, eps2):
+    """Roemer delay divided by ``A1``, without the ``times + delay`` round trip.
+
+    Evaluating at ``times = 0`` with ``TASC = -t`` gives the same phase while
+    keeping the result small, so subtracting ``times`` back off does not throw
+    away twelve digits to cancellation. Measured through the round trip the
+    kernels agree with their reference to 6.5e-13; measured this way, 1e-15.
+    """
+    return kernel(np.zeros_like(times), PB, A1, -times, eps1, eps2) / A1
+
+
+def _tempo_dre_over_x(phi, eps1, eps2):
+    """``dre / x`` transcribed from tempo's ``bnryell1.f``, first and second order."""
+    return (np.sin(phi) - 0.5 * (eps1 * np.cos(2 * phi) - eps2 * np.sin(2 * phi))) + (-1 / 8.0) * (
+        -2 * eps1 * eps2 * np.cos(phi)
+        + 6 * eps1 * eps2 * np.cos(3 * phi)
+        + 3 * eps1 * eps1 * np.sin(phi)
+        + 5 * eps2 * eps2 * np.sin(phi)
+        + 3 * eps1 * eps1 * np.sin(3 * phi)
+        - 3 * eps2 * eps2 * np.sin(3 * phi)
+    )
+
+
+@pytest.mark.parametrize("e,om", [(1e-3, 1.1), (1e-2, 0.3), (0.1, 2.7)])
+def test_delay_matches_the_tempo_expression(e, om):
+    """The o(e^2) kernel must reproduce ``bnryell1.f``'s ``dre`` exactly.
+
+    The kernel evaluates the 2Phi and 3Phi harmonics from ``sin(Phi)`` and
+    ``cos(Phi)`` through multiple-angle identities, so this also checks that the
+    rearrangement is exact rather than merely close.
+    """
+    PB, A1 = 218849.0, 22.215
+    times = np.linspace(0, PB, 4001, endpoint=False)
+    phi = 2 * np.pi * times / PB
+    eps1, eps2 = e * np.sin(om), e * np.cos(om)
+
+    got = _delay_over_x(add_ell1_orbit_numba, times, PB, A1, eps1, eps2)
+    assert np.max(np.abs(got - _tempo_dre_over_x(phi, eps1, eps2))) < 1e-14
+
+
+@pytest.mark.parametrize("om", [0.0, 0.7, 2.5, -1.3])
+def test_ell1_delay_matches_an_exact_keplerian_orbit(om):
+    """The modelled delay must track an exact Keplerian orbit to third order.
+
+    This pins two things at once: that ``EPS1``/``EPS2`` pair onto the harmonics
+    the way tempo defines them -- mispairing them rotates the orbit by 90 degrees
+    in ``omega`` and leaves a residual falling only as ``e`` -- and that the
+    Wex--Zhu o(e^2) block is present, without which the residual falls as
+    ``e**2``. Measured at omega = 1.1: 6.7e-10, 6.7e-07, 6.8e-04 for
+    e = 1e-3, 1e-2, 1e-1.
+    """
+    PB, A1 = 218849.0, 22.215
+    times = np.linspace(0, PB, 4001, endpoint=False)
+    phi = 2 * np.pi * times / PB
+
+    residuals = {}
+    for e in (1e-3, 1e-2, 1e-1):
+        eps1, eps2 = e * np.sin(om), e * np.cos(om)
+        exact = _kepler_delay_over_x(phi, e, om)
+        got = _delay_over_x(add_ell1_orbit_numba, times, PB, A1, eps1, eps2)
+        residual = got - exact
+        residual -= residual.mean()
+        residuals[e] = np.max(np.abs(residual))
+
+        # Dropping the o(e^2) block leaves ~0.77 e^2, and mispairing the
+        # parameters leaves ~0.7 e; both exceed this bound at every e.
+        assert residuals[e] < 2 * e**3, (
+            f"omega={om}, e={e}: residual {residuals[e]:.3e} is not third order"
+        )
+
+    for smaller, larger in ((1e-3, 1e-2), (1e-2, 1e-1)):
+        ratio = residuals[larger] / residuals[smaller]
+        assert ratio == pytest.approx(1000, rel=0.2), (
+            f"omega={om}: residual scales as e^{np.log10(ratio):.2f}, not e^3"
+        )
+
+
+def test_ell1_reduces_to_a_circular_orbit():
+    """With no eccentricity the higher-order kernel must be exactly circular."""
+    PB, A1, TASC = 218849.0, 22.215, 56682.0
+    times = np.linspace(56682.0, 56684.6, 3000)
+
+    assert np.array_equal(
+        add_ell1_orbit_numba(times, PB, A1 / 86400, TASC, 0.0, 0.0),
+        add_circular_orbit_numba(times, PB, A1 / 86400, TASC),
+    )
+
+
+@pytest.mark.parametrize("e", [1e-3, 1e-2, 5e-2])
+def test_deorbit_inverts_its_forward_model_at_higher_eccentricity(e):
+    """The iterative inverse must undo the closed-form forward model."""
+    PB, A1, TASC, om = 218849.0, 22.215, 0.0, 0.3
+    times = np.linspace(0, PB, 2001, endpoint=False)
+    eps1, eps2 = e * np.sin(om), e * np.cos(om)
+
+    orbited = add_ell1_orbit_numba(times, PB, A1, TASC, eps1, eps2)
+    recovered = simple_ell1_deorbit_numba(orbited, PB, A1, TASC, eps1, eps2, tolerance=1e-12)
+
+    assert np.max(np.abs(recovered - times)) < 1e-9

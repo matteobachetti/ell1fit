@@ -46,7 +46,7 @@ from ell1fit.phase_utils import folded_profile
 from ell1fit.posterior import _build_posterior_functions
 from stingray.pulse.pulsar import z_n_binned_events
 
-from .datagen import make_multi_epoch_dataset
+from .datagen import InjectedSolution, generate_epoch, make_multi_epoch_dataset
 from .helpers import build_pipeline_state
 
 EPOCH_OFFSETS = (0.0, 37.0)
@@ -65,7 +65,6 @@ def rich_dataset(tmp_path_factory):
         outdir,
         epoch_offsets=EPOCH_OFFSETS,
         n_events=5000,
-        duration=100_000.0,
         prefix="detect",
     )
 
@@ -85,7 +84,6 @@ def dataset(tmp_path_factory):
         outdir,
         epoch_offsets=EPOCH_OFFSETS,
         n_events=1500,
-        duration=60_000.0,
         offsets={"A1": 4e-3},
         uncertainties={"A1": 1e-2, "F0": 1e-8},
     )
@@ -236,3 +234,39 @@ def test_fit_improves_on_its_starting_point(dataset):
     # would satisfy the inequality above trivially.
     assert np.any(np.abs(fit_pars) > 1e-6), f"the optimizer did not move at all: {fit_pars!r}"
     assert fitted_parameters["A1"] != setup.parameters["A1"]
+
+
+@pytest.mark.parametrize("n_gtis,gti_duty", [(4, 0.6), (3, 0.5), (1, 1.0)])
+def test_generated_observations_span_a_full_orbit(n_gtis, gti_duty):
+    """The default synthetic observation must cover one whole orbital cycle.
+
+    ``A1`` sets the amplitude of a sinusoid in orbital phase and ``EPS1``/
+    ``EPS2`` the amplitudes of its second harmonic. Fitting them from an arc
+    rather than a cycle costs precision for nothing: measured at fixed total
+    counts, going from 0.46 to a full orbit improved ``sigma(EPS)`` by 1.7x and
+    took the asymmetry between ``sigma(EPS1)`` and ``sigma(EPS2)`` -- the
+    signature of sampling the ``sin`` and ``cos`` directions unequally -- from
+    8.3% to 0.9%.
+
+    The requirement is on the span *inside the good-time intervals*, not on the
+    wall-clock duration. The last GTI ends at ``((n - 1) + duty) / n`` of the
+    span, so a duration of exactly ``PB`` would leave the final tenth of the
+    orbit unsampled at the default GTI settings.
+    """
+    solution = InjectedSolution()
+    epoch = generate_epoch(
+        solution,
+        solution.pepoch_ref,
+        n_events=200,
+        n_gtis=n_gtis,
+        gti_duty=gti_duty,
+        rng=np.random.default_rng(1),
+    )
+
+    gtis = epoch["gtis_from_pepoch"]
+    span = gtis[-1][1] - gtis[0][0]
+
+    assert span == pytest.approx(solution.PB_sec, rel=1e-9), (
+        f"observations span {span / solution.PB_sec:.3f} orbits with "
+        f"n_gtis={n_gtis}, gti_duty={gti_duty}"
+    )
