@@ -22,6 +22,12 @@ it.
 import dataclasses
 
 
+__all__ = [
+    "FitSetup",
+    "ObservationSet",
+]
+
+
 @dataclasses.dataclass(frozen=True)
 class ObservationSet:
     """Everything read from disk: the data and the models describing it.

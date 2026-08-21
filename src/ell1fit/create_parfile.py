@@ -1,3 +1,26 @@
+"""Write fit results back out as a PINT parameter file.
+
+The pipeline reports every fitted parameter as a posterior summary in local
+coordinates -- ``d<par>_mean``, ``d<par>_initial``, ``d<par>_factor`` and
+percentiles. This module converts those back into physical values with
+uncertainties and folds them into a copy of the input timing model, which is
+what makes a fit usable as the ephemeris for the next one.
+
+Two conversions are easy to get wrong and are handled here:
+
+``PB``
+    Held in **seconds** throughout the fit, but written to parfiles in **days**.
+
+``Phase``
+    Not a PINT parameter at all. The per-file phase offset is expressed instead
+    as ``TZRMJD``, the absolute-phase reference epoch, via
+    ``TZRMJD = PEPOCH - Phase / F0``: a phase offset is a time offset of that
+    many rotations. The ``AbsPhase`` component is created if the input model
+    lacks one.
+
+Exposed as the ``ell1par`` command.
+"""
+
 import copy
 import os
 from astropy.table import Table
@@ -7,7 +30,41 @@ from .logging import configure_logging
 import logging
 
 
+__all__ = [
+    "create_new_parfile",
+    "main",
+    "update_model",
+]
+
+
 def update_model(model, value_dict, include_info=True):
+    """Fold fit results into a copy of a timing model.
+
+    Parameters
+    ----------
+    model : pint.models.TimingModel
+        The model to update. Not modified; a deep copy is returned.
+    value_dict : dict or astropy.table.Row
+        A result row from the pipeline, holding ``d<par>_mean``,
+        ``d<par>_initial``, ``d<par>_factor`` and the 16th/84th percentiles for
+        each fitted parameter. Parameters absent from it are left alone, so a
+        fit of two parameters updates exactly those two.
+    include_info : bool, optional
+        Whether to let PINT write its provenance header. Forced off on Windows,
+        where the call fails.
+
+    Returns
+    -------
+    pint.models.TimingModel
+        A new model carrying the fitted values, their uncertainties, and
+        ``frozen = False`` on everything that was fitted.
+
+    Notes
+    -----
+    Only ``BinaryELL1`` and ``Spindown`` parameters are considered, plus
+    ``Phase``. The uncertainty written is the larger of the two one-sigma
+    half-widths, since a parfile has room for only a symmetric error.
+    """
     if hasattr(value_dict, "colnames"):
         value_dict = dict((key, value_dict[key]) for key in value_dict.colnames)
     new_model = copy.deepcopy(model)
@@ -85,6 +142,27 @@ def update_model(model, value_dict, include_info=True):
 
 
 def create_new_parfile(fname, parfile, newfile=None, include_info=True):
+    """Write a new parfile from a result table and the model it started from.
+
+    Parameters
+    ----------
+    fname : str
+        Result table written by the pipeline. The **last** row is used, which is
+        the most recent fit -- :func:`ell1fit.results_io.safe_save` appends
+        rather than overwriting.
+    parfile : str
+        The timing model the fit started from.
+    newfile : str or None, optional
+        Output path. Defaults to the result table's name with a ``.par``
+        extension.
+    include_info : bool, optional
+        Whether to let PINT write its provenance header.
+
+    Returns
+    -------
+    str
+        The path written.
+    """
     model = get_model(parfile)
     row = Table.read(fname)[-1]
     new_model = update_model(model, row, include_info=include_info)
@@ -102,7 +180,7 @@ def main(args=None):
 
     configure_logging()
 
-    description = "Fit an ELL1 model and frequency derivatives to an X-ray " "pulsar observation."
+    description = "Fit an ELL1 model and frequency derivatives to an X-ray pulsar observation."
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("files", help="List of ecsv or hdf5 files produced by `ell1fit`", nargs="+")
 

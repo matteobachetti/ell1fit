@@ -30,6 +30,11 @@ from .phase_utils import _calculate_phases
 from .plotting import plot_style_context as _plot_style_context
 
 
+__all__ = [
+    "pf_weight_versus_energy",
+]
+
+
 def pf_weight_versus_energy(
     times, energies, parameters, nbin=32, nharm=1, tolerance=1e-8, plot_root_file_name=None
 ):

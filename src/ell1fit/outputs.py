@@ -18,6 +18,12 @@ from .likelihoods import rayleigh_as_likelihood
 from .results_io import _format_energy_string
 
 
+__all__ = [
+    "_get_outroots",
+    "_make_outroot_getter",
+]
+
+
 def _get_likelihood_suffix(likelihood_func):
     """Return output-name suffix for selected likelihood implementation."""
     if likelihood_func == rayleigh_as_likelihood:

@@ -14,6 +14,12 @@ from .phase_utils import phases_from_zero_to_one
 from .plotting import plot_style_context as _plot_style_context
 
 
+__all__ = [
+    "_compare_phaseograms",
+    "normalize_dyn_profile",
+]
+
+
 def normalize_dyn_profile(dynprof, norm):
     """Normalize a dynamical profile (e.g. a phaseogram)."""
     dynprof = np.array(dynprof, dtype=float)

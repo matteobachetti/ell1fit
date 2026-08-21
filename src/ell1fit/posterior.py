@@ -31,6 +31,13 @@ from .phase_utils import NonInvertibleOrbitError, _calculate_phases
 from .plotting import plot_style_context as _plot_style_context
 
 
+__all__ = [
+    "_build_posterior_functions",
+    "_trace_phase_0_likelihood",
+    "trace_likelihood_over_parameter",
+]
+
+
 def _trace_phase_0_likelihood(observations, setup, outroot):
     """Trace the likelihood around each file's Phase_i and move it to the peak.
 

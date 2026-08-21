@@ -131,8 +131,7 @@ def test_refinement_keeps_a1_near_the_truth(offset_setup):
     # Generous: several times the per-fit scatter, so only a genuine divergence
     # trips it.
     assert abs(refined.parameters["A1"] - truth) < 0.1, (
-        f"A1 diverged: started {started_at!r}, ended "
-        f"{refined.parameters['A1']!r}, truth {truth!r}"
+        f"A1 diverged: started {started_at!r}, ended {refined.parameters['A1']!r}, truth {truth!r}"
     )
 
 

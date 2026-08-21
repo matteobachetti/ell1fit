@@ -1,3 +1,24 @@
+"""Fit ELL1 binary and spin parameters to X-ray pulsar event data.
+
+The package is organised around one pipeline, :func:`ell1fit.pipeline.ell1fit`,
+with each stage in its own module -- see that module's docstring for the order
+they run in and why.
+
+Three command-line tools are installed:
+
+``ell1fit``
+    Run the fit. See :mod:`ell1fit.cli`.
+``ell1par``
+    Turn a result table back into a parameter file. See
+    :mod:`ell1fit.create_parfile`.
+``ell1updatebinary``
+    Copy one binary solution into other parameter files. See
+    :mod:`ell1fit.update_binary`.
+
+Nothing is re-exported here: import from the module that defines it, so that
+where a function lives stays obvious.
+"""
+
 try:
     from .version import version as __version__
 except ImportError:

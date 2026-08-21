@@ -1,7 +1,25 @@
+"""Console logging for the command-line tools.
+
+Deliberately inert on import. A library that reconfigures logging when imported
+takes that decision away from whatever application imported it, so the module
+level only registers a ``NullHandler`` on the package's own namespaced logger.
+:func:`configure_logging` attaches the coloured console handler, and only the
+CLI entry points call it.
+
+The handler it adds is tagged so that repeated calls do not stack up duplicate
+handlers, which would print every message several times.
+"""
+
 import sys
 import logging
 from colorama import Fore, Back, Style
 from typing import Optional, Dict
+
+
+__all__ = [
+    "ColoredFormatter",
+    "configure_logging",
+]
 
 
 class ColoredFormatter(logging.Formatter):

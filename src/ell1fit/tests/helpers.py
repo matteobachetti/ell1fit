@@ -1,6 +1,6 @@
 """Shared scaffolding for tests that need pipeline state, not just a CLI run.
 
-:func:`build_pipeline_state` performs the same sequence :func:`ell1fit.ell1fit`
+:func:`build_pipeline_state` performs the same sequence :func:`ell1fit.pipeline`
 does -- load models, load events, fold, build templates, assemble priors and
 scaling -- and hands back the two bundles the fitting machinery takes. Tests
 that need to call into ``point_estimate_fit`` or ``refine_templates_and_solution``

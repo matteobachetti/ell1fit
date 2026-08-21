@@ -1,3 +1,5 @@
+"""Unit tests for the orbital kernels, phase conventions, and result I/O."""
+
 import os
 
 import pytest
@@ -13,6 +15,7 @@ from ..results_io import safe_save
 @pytest.mark.parametrize("A1", [1, 10, 40])
 @pytest.mark.parametrize("PB", [0.3, 3, 30])
 def test_circular_orbit(PB, A1):
+    """Applying a circular orbital delay and removing it must be a round trip."""
     A1 /= 86400
     times = np.random.uniform(56000, 59000, 10)
     TASC = np.random.uniform(56000, 59000)
@@ -27,6 +30,11 @@ def test_circular_orbit(PB, A1):
 @pytest.mark.parametrize("E1", [0.0001, 0.1])
 @pytest.mark.parametrize("E2", [0.0001, 0.1])
 def test_ell1_orbit(PB, A1, E1, E2):
+    """Same round trip with the ELL1 eccentricity terms included.
+
+    The forward model is closed-form; the inverse is solved iteratively, so this
+    checks the iteration actually converges to the value it was given.
+    """
     A1 /= 86400
     times = np.random.uniform(56000, 59000, 10)
     TASC = np.random.uniform(56000, 59000)
@@ -37,6 +45,7 @@ def test_ell1_orbit(PB, A1, E1, E2):
 
 
 def test_safe_save():
+    """Results accumulate across runs, and a schema clash warns instead of losing data."""
     results = Table({"a": [2]})
     results_2 = Table({"a": ["3"]})
     output_file = "blabla.csv"

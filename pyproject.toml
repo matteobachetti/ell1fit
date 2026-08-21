@@ -65,7 +65,10 @@ write_to = "src/ell1fit/version.py"
 
 [tool.pytest.ini_options]
 testpaths = ["src/ell1fit", "docs"]
-addopts = "--doctest-rst"
+# --doctest-glob is what makes the examples in docs/*.rst run as tests. The
+# older --doctest-rst spelling is a silent no-op in current pytest-doctestplus,
+# so the documentation examples were never actually being executed.
+addopts = "--doctest-glob=*.rst"
 text_file_format = "rst"
 
 [tool.coverage.run]

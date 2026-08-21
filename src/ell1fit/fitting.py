@@ -26,6 +26,13 @@ from .posterior import _build_posterior_functions
 from .profile_plotting import _compare_phaseograms
 
 
+__all__ = [
+    "_bounds_in_local_coordinates",
+    "optimize_solution",
+    "point_estimate_fit",
+]
+
+
 def _plot_phaseogram_set(reference_phases, fitted_phases, times_from_pepoch, outroots, suffix=""):
     """Plot reference vs fitted phaseograms for each input file."""
     for i in range(len(times_from_pepoch)):

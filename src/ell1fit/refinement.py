@@ -67,6 +67,12 @@ from .templates import create_template_from_profile_harm, get_template_func
 #:
 #: A tenth of a sigma is small enough that a further pass cannot meaningfully
 #: change the answer, and large enough not to chase numerical noise.
+__all__ = [
+    "_profile_score",
+    "refine_templates_and_solution",
+]
+
+
 CONVERGENCE_TOLERANCE = 0.1 * TARGET_LOCAL_SIGMA
 
 

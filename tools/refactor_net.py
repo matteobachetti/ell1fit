@@ -71,10 +71,11 @@ SEED = 20260820
 SEC_PER_DAY = 86400.0
 
 #: Entries that legitimately change between two runs of identical code: the
-#: wall-clock stamp the pipeline records, and the input paths, which live in a
-#: fresh temporary directory each time. Comparing these would make every diff
-#: report a false difference.
-VOLATILE_PREFIXES = ("result::date", "result::fname_")
+#: wall-clock stamp the pipeline records, the input paths (a fresh temporary
+#: directory each time), and the package version, which setuptools_scm derives
+#: from the commit count and so changes with every commit. Comparing these would
+#: make every diff report a false difference.
+VOLATILE_PREFIXES = ("result::date", "result::fname_", "result::ell1fit_version")
 
 
 def _is_volatile(key):
@@ -343,8 +344,7 @@ def do_diff(args):
             continue
         if b.get("kind") == "array" and a.get("kind") == "array":
             detail = (
-                f"sha256 {b['sha256'][:12]} -> {a['sha256'][:12]}, "
-                f"sum {b['sum']} -> {a['sum']}"
+                f"sha256 {b['sha256'][:12]} -> {a['sha256'][:12]}, sum {b['sum']} -> {a['sum']}"
             )
         else:
             detail = f"{b.get('value')} -> {a.get('value')}"

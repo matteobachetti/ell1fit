@@ -18,6 +18,11 @@ from .phase_utils import _mjd_to_sec
 from .plotting import plot_style_context as _plot_style_context
 
 
+__all__ = [
+    "_load_events_for_all_files",
+]
+
+
 def _load_and_format_events(
     event_file,
     energy_range,

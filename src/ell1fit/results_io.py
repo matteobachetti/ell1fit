@@ -9,6 +9,15 @@ from astropy.table import Table, vstack, TableMergeError
 from .phase_utils import simple_freq_re
 
 
+__all__ = [
+    "_format_energy_string",
+    "look_for_list_of_strings_in_string",
+    "look_for_string_in_list_of_strings",
+    "safe_save",
+    "split_output_results",
+]
+
+
 def _format_energy_string(energy_range):
     """Format an energy-range suffix used in output filenames.
 

@@ -1,9 +1,28 @@
+"""Copy an ELL1 binary solution from one parameter file into others.
+
+Exposed as the ``ell1updatebinary`` command. The use case is a campaign where
+the orbit is measured once, from the best data available, and then needs to be
+carried into the per-observation parfiles without disturbing their own spin
+parameters -- each observation keeps its ``PEPOCH``, ``F0`` and ``F1`` while
+taking the shared orbit.
+
+``funcParameter`` entries are skipped: they are derived quantities that PINT
+computes from the others, so writing to them is meaningless. The binary epoch of
+the result is re-referenced to its own ``PEPOCH``.
+"""
+
 import copy
 import logging
 
 from pint.models import get_model
 from pint.models.parameter import funcParameter
 from .logging import configure_logging
+
+
+__all__ = [
+    "main",
+    "update_binary_model",
+]
 
 
 def update_binary_model(input_model, reference_model):

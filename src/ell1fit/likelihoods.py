@@ -5,6 +5,13 @@ from numba import njit
 from stingray.pulse.pulsar import z_n_events
 
 
+__all__ = [
+    "_pc_like",
+    "pletsch_clarke_likelihood",
+    "rayleigh_as_likelihood",
+]
+
+
 @njit()
 def _pc_like_weight(probs, weights):
     """Compute weighted Pletsch-Clarke log-likelihood contribution.
@@ -129,7 +136,7 @@ def rayleigh_as_likelihood(phases, template_func=None, weights=None):
     log-prior is legitimate and the sampled distribution behaves like a
     posterior.
 
-    :func:`ell1fit.ell1fit.ell1fit` warns when this is combined with options it
+    :func:`ell1fit.pipeline.ell1fit` warns when this is combined with options it
     cannot honour, rather than letting them be silently discarded.
 
     Parameters

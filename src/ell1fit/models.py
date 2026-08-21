@@ -29,6 +29,12 @@ import numpy as np
 from pint.models import get_model
 
 
+__all__ = [
+    "_build_parameters_from_models",
+    "_load_and_validate_models",
+]
+
+
 def _load_and_validate_models(parfiles):
     """Load PINT models, validate ELL1 constraints, and align binary epochs."""
     model = []

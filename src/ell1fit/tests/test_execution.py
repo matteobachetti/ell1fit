@@ -1,9 +1,29 @@
-import os
+"""End-to-end CLI smoke tests against the checked-in event files.
+
+These confirm the command-line tools run, produce the files they promise, and
+round-trip through ``ell1par``. They do not check the numbers -- that is
+``test_recovery.py``, which fits data with a known injected solution.
+
+A limitation worth knowing about
+--------------------------------
+``events0.par`` and ``events1.par`` are **byte-identical**: same ``PEPOCH``,
+same ``TASC``, same ``F0``. So although these tests pass two files, they do not
+exercise multi-epoch behaviour at all -- not the per-file ``F0_i``/``PEPOCH_i``
+bookkeeping, not the modulo-``PB`` aliasing of ``TASC``, not the reference-model
+epoch alignment. Every one of those is covered instead by the synthetic
+generator in :mod:`ell1fit.tests.datagen`, which builds genuinely distinct
+epochs. Replacing this data would mean regenerating the event files too, since
+the events were simulated from these exact models.
+"""
+
 import glob
-import pytest
+import os
+
 import numpy as np
+import pytest
 from astropy.table import Table
-from ell1fit.ell1fit import main as main_ell1fit
+
+from ell1fit.cli import main as main_ell1fit
 from ell1fit.create_parfile import main as main_ell1par
 
 curdir = os.path.abspath(os.path.dirname(__file__))
@@ -11,6 +31,8 @@ datadir = os.path.join(curdir, "data")
 
 
 class TestExecution:
+    """Run the shipped CLI tools end to end and check the products appear."""
+
     @classmethod
     def setup_class(cls):
         cls.event_files = sorted(glob.glob(os.path.join(datadir, "events[01].nc")))

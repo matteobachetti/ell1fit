@@ -21,6 +21,7 @@ from .helpers import build_pipeline_state
 
 @pytest.fixture(scope="module")
 def state(tmp_path_factory):
+    """Observations and fit setup for a deliberately hard two-epoch fit."""
     outdir = str(tmp_path_factory.mktemp("scaling"))
     # Deliberately a *hard* fit: enough events to have real structure, and a
     # parfile offset so the optimizer has somewhere to travel. On an easy

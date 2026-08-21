@@ -26,7 +26,7 @@ Matching the package: ``PB`` is handled in seconds internally but written to
 parfiles in days; ``A1`` is in light-seconds; ``TASC`` and ``PEPOCH`` are MJD;
 orbital phase is measured from ``TASC``; spin phase is measured from
 ``PEPOCH``; and the pulsed fraction is ``(max - min) / (max + min)`` of the
-profile, the same definition used in :mod:`ell1fit.ell1fit`.
+profile, the same definition used in :mod:`ell1fit.pipeline`.
 """
 
 import dataclasses

@@ -33,6 +33,16 @@ from .phase_utils import phases_around_zero, phases_from_zero_to_one
 from .plotting import plot_style_context as _plot_style_context
 
 
+__all__ = [
+    "UniformCubicTemplate",
+    "_evaluate_uniform_cubic_floored",
+    "_evaluate_uniform_cubic_floored_parallel",
+    "create_template_from_profile_harm",
+    "estimate_weighted_profile_std",
+    "get_template_func",
+]
+
+
 def create_template_from_profile_harm(
     profile,
     imagefile="template.png",

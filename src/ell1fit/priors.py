@@ -6,6 +6,11 @@ import numpy as np
 from scipy.stats import norm
 
 
+__all__ = [
+    "assign_logpriors",
+]
+
+
 def _flat_logprior(bound0, bound1):
     """Create a uniform log-prior function between two bounds.
 
@@ -19,6 +24,7 @@ def _flat_logprior(bound0, bound1):
     callable
         Function returning ``0`` inside bounds and ``-inf`` outside.
     """
+
     def func(x):
         if x < bound0 or x > bound1:
             return -np.inf
@@ -126,9 +132,7 @@ def assign_logpriors(fit_parameter_names, parameters_with_unc, obs_length=1):
             tasc_unc = parameters_with_unc["TASC"][1]
 
             if np.isnan(tasc_unc):
-                log_line += (
-                    "periodic uniform prior over one orbital cycle " f"(period={period:.6g} d)"
-                )
+                log_line += f"periodic uniform prior over one orbital cycle (period={period:.6g} d)"
                 logps.append(_periodic_uniform_logprior(tasc_center, period, half_width=period / 2))
             else:
                 log_line += (

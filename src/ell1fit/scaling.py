@@ -7,6 +7,14 @@ import numpy as np
 from .phase_utils import simple_freq_re
 
 
+__all__ = [
+    "estimate_uncertainties_from_model",
+    "get_factors",
+    "order_of_magnitude",
+    "precondition_factors",
+]
+
+
 def order_of_magnitude(value):
     """Return a scale factor one decade below ``abs(value)``.
 
@@ -50,8 +58,8 @@ def estimate_uncertainties_from_model(model, parameter_names, observation_length
     -----
     The implemented heuristics are:
 
-        - ``PB``: :math:`\sigma_{PB} \approx \frac{\sqrt{3}}{\pi}`
-            :math:`\frac{1}{2\pi F0}\frac{PB^2}{A1\,T_{obs}}`
+    - ``PB``: :math:`\sigma_{PB} \approx \frac{\sqrt{3}}{\pi}
+      \frac{1}{2\pi F0}\frac{PB^2}{A1\,T_{obs}}`
     - ``A1``: :math:`\sigma_{A1} \approx \frac{1}{2\pi F0}`
     - ``TASC``: :math:`\sigma_{TASC} \approx \frac{1}{2\pi F0}\frac{PB}{2\pi A1}`
     - ``F_k``: :math:`\sigma_{F_k} \approx \max(A1\,\Omega^{k+1}F0,\;10/T_{obs}^{k+1})`,
@@ -141,8 +149,10 @@ def precondition_factors(posterior_func, factors, n_parameters, target=TARGET_LO
     origin = np.zeros(n_parameters)
     base = posterior_func(origin)
     if not np.isfinite(base):
-        logging.warning("Cannot precondition parameter scales: posterior is not finite at the "
-                        "starting point. Keeping the original factors.")
+        logging.warning(
+            "Cannot precondition parameter scales: posterior is not finite at the "
+            "starting point. Keeping the original factors."
+        )
         return list(factors)
 
     rescaled = list(factors)
@@ -239,7 +249,7 @@ def get_factors(fit_parameter_names, model, observation_length, parameters_with_
                 f"(unc={unc}, local_jitter=1e-6)"
             )
         elif source.startswith("model"):
-            logging.info(f"Zoom factor for {par} from model: {zoom_factor} " f"(approx_unc={unc})")
+            logging.info(f"Zoom factor for {par} from model: {zoom_factor} (approx_unc={unc})")
         else:
             logging.info(f"Zoom factor for {par}: {zoom_factor} (default)")
 

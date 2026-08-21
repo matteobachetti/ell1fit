@@ -5,6 +5,11 @@ This module centralizes matplotlib rcParams used across CLI diagnostics.
 
 import matplotlib as mpl
 
+__all__ = [
+    "plot_style_context",
+]
+
+
 PLOT_RC_PARAMS = {
     "font.size": 7,
     "xtick.major.size": 0,
