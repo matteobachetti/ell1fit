@@ -102,6 +102,93 @@ the baseline: deriving the reference afterwards yields the refined solution, and
 the comparison becomes that solution plotted against itself — a diagnostic that
 looks perfect however badly the fit went.
 
+Orbital derivatives are propagated per epoch, not fitted
+--------------------------------------------------------
+
+The fit uses one binary: a single ``PB``, ``TASC``, ``A1``, ``EPS1`` and
+``EPS2``, shared by every file. But a solution is only valid at the epoch it is
+referenced to, and an orbital derivative carries it away from that epoch. For a
+long time the shared values were taken from one snapshot at the mean ``PEPOCH``
+and applied to every file regardless of when it was observed.
+
+The resulting phase error grows as :math:`\dot{P_b} \times \mathrm{baseline}^2`.
+Measured against the exact orbit count
+:math:`N(t) = x - \tfrac{1}{2}\dot{P_b}x^2`, with :math:`x = (t - T_{asc})/P_b`:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 20 30 30
+
+   * - :math:`\dot{P_b}`
+     - baseline
+     - one mean-epoch snapshot
+     - propagated per epoch
+   * - 1e-11
+     - 1 yr
+     - 2.9e-05 cycles
+     - 1.3e-09
+   * - 1e-10
+     - 10 yr
+     - 3.0e-02 cycles
+     - 7.5e-09
+   * - 1e-09
+     - 10 yr
+     - 3.0e-01 cycles
+     - 2.5e-07
+
+A fit resolves about 1e-3 cycles, so the snapshot is wrong by more than the
+measurement is worth over a multi-year baseline with a derivative in the range
+redbacks and black widows actually show.
+
+Each file therefore carries a **fixed** offset — ``PB_offset_i``,
+``TASC_offset_i``, ``A1_offset_i``, ``EPS1_offset_i``, ``EPS2_offset_i`` — added
+to the global value before phases are computed. Three things about them are
+deliberate.
+
+**They are constants, not parameters.** The offsets are second order
+(:math:`\Delta P_b = \dot{P_b}\,\Delta t`), so moving ``PB`` by its own
+uncertainty changes them negligibly. They can be computed once at load and never
+revisited inside the likelihood.
+
+**PINT computes them.** The propagation goes through the same
+``change_binary_epoch`` that aligns the models in the first place. Deriving it
+here would make agreement with PINT a tautology instead of a check, and would
+silently drop the parameterizations (``FB0``/``FB1``) and the other derivatives
+(``A1DOT``, ``EPS1DOT``, ``EPS2DOT``) that it already handles.
+
+**The** ``TASC`` **offset is the one that matters, and it is not obvious.**
+:func:`ell1fit.phase_utils._calculate_phases` brings ``TASC`` near each
+``PEPOCH`` by wrapping it modulo ``PB``, which re-adds :math:`n P_b` computed
+with the *trial* period — and that is right, because it is how a ``PB`` error
+grows into a phase offset across epochs, which is what makes ``PB`` measurable
+from multi-epoch data at all. What the wrap cannot express is the quadratic term
+the exact model accumulates, :math:`n^2 P_b \dot{P_b}/2`. ``TASC_offset``
+supplies exactly that residual.
+
+Correcting the period *without* it is the tempting half of this fix, and it
+accomplishes nothing: it flips the sign of the residual while leaving its
+magnitude alone. Measured at :math:`\dot{P_b}` = 1e-10 over three years, the
+period correction alone improves the error by **0.15%**, against a factor of
+**300,000** when both are applied.
+
+Parameter names share a namespace with result fields
+-----------------------------------------------------
+
+:func:`ell1fit.fitting.optimize_solution` merges the parameter dictionary into
+the results dictionary before writing the output table. The two therefore share
+one namespace, and a parameter whose name collides with a result field silently
+overwrites it — no error, no warning, just a wrong number in a column.
+
+This is not hypothetical. The epoch offsets above were first called ``dPB_i``,
+``dA1_i``, and so on, which reads naturally. But posterior percentiles are
+written as ``d<par>_<percentile>``, so ``dA1_1`` — intended as "the ``A1``
+offset for file 1" — landed on top of **the first percentile of the fitted**
+``A1``. ``tools/refactor_net.py`` caught it; nothing else would have.
+
+Hence the ``<PAR>_offset_<i>`` spelling, which cannot collide, and a test that
+asserts no parameter key ends in something a percentile field could produce. Any
+new per-file quantity should be checked the same way.
+
 Tests assert physics, not stored numbers
 -----------------------------------------
 
