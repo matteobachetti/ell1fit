@@ -102,6 +102,108 @@ the baseline: deriving the reference afterwards yields the refined solution, and
 the comparison becomes that solution plotted against itself — a diagnostic that
 looks perfect however badly the fit went.
 
+EPS1 pairs with cos 2Phi, EPS2 with sin 2Phi
+---------------------------------------------
+
+ELL1 replaces the eccentricity and the longitude of periastron, which are
+individually ill-defined for a nearly circular orbit, with the Laplace–Lagrange
+pair
+
+.. math::
+
+   \epsilon_1 = e \sin\omega, \qquad \epsilon_2 = e \cos\omega,
+
+and expands the Roemer delay to first order in :math:`e`:
+
+.. math::
+
+   \Delta_R(t) = x \left[ \sin\Phi
+                 + \frac{\epsilon_2}{2}\sin 2\Phi
+                 - \frac{\epsilon_1}{2}\cos 2\Phi \right].
+
+The parameterisation is due to Lange et al. (2001), *MNRAS* **326**, 274; the
+implementation of record is tempo's `bnryell1.f
+<https://github.com/nanograv/tempo/blob/master/src/bnryell1.f>`_, whose header
+states the two definitions above and credits Wex (1998). PINT is a faithful
+port of it.
+
+Note that the pairing is *asymmetric*: :math:`\epsilon_2` goes with
+:math:`\sin 2\Phi` and :math:`\epsilon_1` with :math:`-\cos 2\Phi`. Exchanging
+them is a first-order error, not a subtlety.
+
+This package got it wrong, and the way it got it wrong is worth recording. The
+old expression was
+
+.. math::
+
+   \Delta_R(t) = x \left[ \sin\Phi
+                 + \frac{\epsilon_1}{2}\sin 2\Phi
+                 + \frac{\epsilon_2}{2}\cos 2\Phi \right],
+
+which is not a random transposition of two labels. ``bnryell1.f`` computes both
+``dre``, the delay, and ``drep``, its derivative with respect to orbital phase.
+The old eccentric terms are **exactly half of** ``drep``\ 's — they agree to
+1.1e-16 — grafted onto :math:`\sin\Phi`. The halving is what made the result
+look plausible, since ``dre``\ 's eccentric terms carry a factor
+:math:`\tfrac{1}{2}` and ``drep``\ 's carry 1. Somebody read one line too far
+down the file.
+
+Two things then conspired to hide it for a long time.
+
+**Only** :math:`\omega` **moves.** Under the exchange,
+:math:`e = \sqrt{\epsilon_1^2 + \epsilon_2^2}` is invariant, so the eccentricity
+*magnitude* — the quantity anyone actually reports — comes out right. What
+rotates is :math:`\omega`, by exactly 90 degrees. Nothing looks obviously
+broken.
+
+**The generator shared the mistake.** :mod:`ell1fit.tests.datagen` is
+deliberately independent of ``phase_utils``, so that agreement between them is
+evidence rather than tautology — but its orbital delay had been written to match
+the package rather than the published model. Every recovery test therefore
+injected the wrong orbit, fitted it with the same wrong orbit, and passed. This
+is the general hazard, and it is worth stating in the abstract: **a generator
+that shares the model under test can only ever demonstrate self-consistency.**
+It catches implementation errors and is blind to convention errors.
+
+So the guard is a comparison against something neither implementation can
+influence: an exact Keplerian orbit, with Kepler's equation solved numerically
+and the delay evaluated as :math:`x\,(r/a)\sin(\omega + \nu)`. Because ELL1
+truncates at first order, the residual against an exact orbit must fall as
+:math:`e^2`; a mispairing leaves one that falls as :math:`e`. Measured:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 40 40
+
+   * - :math:`e`
+     - correct pairing
+     - exchanged pairing
+   * - 1e-4
+     - 9.0e-09
+     - 7.1e-05
+   * - 1e-3
+     - 9.0e-07
+     - 7.1e-04
+   * - 1e-2
+     - 9.0e-05
+     - 7.1e-03
+
+A hundredfold drop per decade against a tenfold one. ``test_ell1fit.py``
+asserts both the bound and the scaling exponent, over several values of
+:math:`\omega`, which is a statement no documentation can drift away from.
+
+The cost of the old convention, for scale: at :math:`e = 0.005` the delay was
+wrong by 0.0035\ :math:`\,x`, which for ``A1`` = 22.2 lt-s and ``F0`` = 7.5 Hz
+is 0.078 s, or 0.58 rotations.
+
+.. warning::
+
+   PINT's ``ELL1model.delayI`` docstring writes the delay as
+   ``a1*(sin(Phi)+eps1/2*sin(2*Phi)+eps1/2*cos(2*Phi))``. It names ``eps1``
+   twice, and it puts ``eps1`` on ``sin(2*Phi)`` where PINT's own computing path
+   puts ``eps2``. It is a stale comment on the inverse-timing expansion and
+   contradicts the code beneath it; do not read the model out of it.
+
 Orbital derivatives are propagated per epoch, not fitted
 --------------------------------------------------------
 
