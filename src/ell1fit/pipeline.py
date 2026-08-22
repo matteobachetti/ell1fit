@@ -339,7 +339,6 @@ def _build_profiles_and_weights(
             times_from_pepoch,
             energies,
             parameters,
-            nbin=32,
             nharm=1,
             tolerance=tolerance,
             plot_root_file_name=[get_outroot(i) + "_pf_weight_spectrum" for i in range(n_files)],

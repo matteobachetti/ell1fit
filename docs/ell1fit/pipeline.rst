@@ -60,15 +60,20 @@ zero when no derivative is set. See
 
 Events are folded into pulse profiles using the current solution. With
 ``--use-weight``, :mod:`ell1fit.weighting` additionally estimates a per-event
-weight from how the pulsed amplitude varies with energy: events are binned into
-energy quantiles, the :math:`Z_n^2` statistic gives the pulsed amplitude in
-each, and the resulting trend is interpolated and evaluated per event.
+weight from how the pulsed amplitude varies with energy. Each event's phase is
+projected onto the harmonic model of that observation's own pulse profile,
+which gives an unbiased per-event estimate of the local pulsed amplitude, and
+those estimates are fit against :math:`\log E` with a penalised cubic spline
+whose smoothing strength is chosen by generalised cross-validation. Nothing is
+binned in energy: energy bands hold wildly different numbers of counts, so any
+fixed binning either smears real structure where counts are plentiful or reports
+noise as signal where they are scarce.
 
 Weights are normalised into :math:`[0, 1]`, which the weighted likelihood
 requires — 1 means "trust this event's phase fully", 0 means "treat it as
-unmodulated background". The amplitude in each bin is floored at the level that
-noise alone would produce half the time, so a band with no detectable pulse
-contributes no spurious confidence.
+unmodulated background". Only the *shape* of the curve matters: the weighted
+profile and its noise level both scale linearly with the weights, so the peak
+normalisation is free to serve the :math:`[0, 1]` constraint alone.
 
 3. Building templates
 ---------------------
