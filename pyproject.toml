@@ -39,6 +39,12 @@ docs = [
     "sphinx",
     "sphinx-astropy",
 ]
+# For tools/sampler_bench.py only. ArviZ provides the rank-normalized ESS,
+# R-hat and Monte Carlo standard errors that referee the sampler comparisons;
+# nothing the package installs or imports at runtime needs it.
+bench = [
+    "arviz",
+]
 
 [project.scripts]
 ell1fit = "ell1fit.cli:main"
