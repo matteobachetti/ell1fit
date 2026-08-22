@@ -489,6 +489,18 @@ def run_emcee(problem, seed, steps, moves=None, jitter=1e-6, nwalkers=None):
     started = time.perf_counter()
     position = problem.start + rng.normal(0.0, jitter, size=(nwalkers, ndim))
     sampler = emcee.EnsembleSampler(nwalkers, ndim, problem.logpost, moves=moves)
+    # ``rng`` above seeds only the initial ball. The proposals come from
+    # somewhere else entirely: ``EnsembleSampler.__init__`` copies the *global*
+    # legacy numpy RNG into a private ``RandomState``, and nothing here sets
+    # that. Without this line ``--seed`` does not control the sampling, every
+    # process draws a different proposal stream, and no measurement can be
+    # reproduced -- measured before it was added, one seed gave ESS 861, 846 and
+    # 1096 on three invocations of the same command. It is invisible to an
+    # in-process check, because the sampler mutates its copy and leaves the
+    # global state untouched, so two same-seed runs in one process do agree.
+    # A different bit generator from ``rng`` (MT19937 against PCG64), so seeding
+    # both from ``seed`` does not couple the ball to the proposals.
+    sampler.random_state = np.random.RandomState(seed).get_state()
     setup_seconds = time.perf_counter() - started
 
     started = time.perf_counter()
