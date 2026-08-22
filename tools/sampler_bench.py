@@ -77,12 +77,12 @@ which a quantile comparison alone would catch.
 
 The benchmark problems
 ----------------------
-Three, because the answer depends on the size of the data. A single posterior
-call is already threaded by numba, and how much of the machine that leaves idle
-is what decides whether parallelising *across* walkers can win anything:
-measured on 10 cores, going from 1 thread to 8 speeds one phase computation up
-by 1.4x at 5000 events per file but 4.4x at 200000. A change benchmarked only at
-fixture scale can therefore be a win there and a loss in production.
+The answer depends on the size of the data. A single posterior call is already
+threaded by numba, and how much of the machine that leaves idle is what decides
+whether parallelising *across* walkers can win anything: measured on 10 cores,
+going from 1 thread to 8 speeds one phase computation up by 1.4x at 5000 events
+per file but 4.4x at 200000. A change benchmarked only at fixture scale can
+therefore be a win there and a loss in production.
 
 ``P1``
     Fixture scale: 2 epochs, 5000 events each, ``F0`` and ``A1`` free. Fast
@@ -95,6 +95,20 @@ fixture scale can therefore be a win there and a loss in production.
     ``A1``-``Phase`` ridge and the ``EPS`` directions are what a better move
     strategy or a gradient-based sampler is supposed to help with, and this is
     the problem that an evidence calculation would eventually run on.
+``P1W``
+    ``P1`` with ``--use-weight``. The other three are unweighted, which makes
+    them insensitive to the weighting machinery by construction -- useful as a
+    regression control, but it means none of them represents a real weighted
+    run. Weighting changes the posterior the sampler has to explore: every event
+    enters :func:`~ell1fit.likelihoods.pletsch_clarke_likelihood` scaled by a
+    number in ``[0, 1]``, which sharpens the peak without changing where it is.
+    Deliberately paired with ``P1`` -- same seed, same events, same free
+    parameters, so the two differ in exactly one thing and ``compare`` reads as
+    the effect of weighting rather than of anything else. The generator's
+    pulsed fraction rises with energy
+    (:func:`~ell1fit.tests.datagen.pulsed_fraction_at`), so there is a real
+    trend for the weights to find; on flat-spectrum data they would be fitting
+    noise and the comparison would measure nothing.
 """
 
 import argparse
@@ -144,6 +158,7 @@ class ProblemSpec:
     fit_parameters: tuple
     nharm: int = 2
     default_steps: int = 2000
+    use_weight: bool = False
 
 
 PROBLEMS = {
@@ -162,6 +177,15 @@ PROBLEMS = {
         epoch_offsets=(0.0, 37.0),
         fit_parameters=("F0", "A1"),
         default_steps=1000,
+    ),
+    "P1W": ProblemSpec(
+        name="P1W",
+        doc="P1's data and parameters, with energy weighting switched on",
+        n_events=5_000,
+        epoch_offsets=(0.0, 37.0),
+        fit_parameters=("F0", "A1"),
+        default_steps=4000,
+        use_weight=True,
     ),
     "P3": ProblemSpec(
         name="P3",
@@ -339,7 +363,7 @@ def build_problem(spec, verbose=False):
             None,
             spec.nharm,
             pletsch_clarke_likelihood,
-            False,
+            spec.use_weight,
             use_pi=False,
             general_outroot=os.path.join(workdir, "bench"),
         )
@@ -362,7 +386,7 @@ def build_problem(spec, verbose=False):
             model, ref_model, observation_length, ignore_uncertainties=False
         )
         profile, profile_weight, weights = _build_profiles_and_weights(
-            times, parameters, energies, len(files), get_outroot, False, nbin, 1e-8
+            times, parameters, energies, len(files), get_outroot, spec.use_weight, nbin, 1e-8
         )
         (
             template_func,
@@ -372,7 +396,7 @@ def build_problem(spec, verbose=False):
         ) = _prepare_templates_and_phase_priors(
             profile,
             profile_weight,
-            False,
+            spec.use_weight,
             spec.nharm,
             get_outroot,
             files,
@@ -389,7 +413,7 @@ def build_problem(spec, verbose=False):
             observation_length,
             model,
             template_funcs=template_func,
-            weights=None,
+            weights=weights if spec.use_weight else None,
             tolerance=1e-8,
         )
 
@@ -843,6 +867,7 @@ def do_list(_args):
             f"  {spec.name}  {spec.doc}\n"
             f"        {len(spec.epoch_offsets)} epochs, {spec.n_events} events each, "
             f"-P {','.join(sorted(spec.fit_parameters))}, "
+            f"{'weighted' if spec.use_weight else 'unweighted'}, "
             f"default {spec.default_steps} steps"
         )
     print("\nSamplers")
