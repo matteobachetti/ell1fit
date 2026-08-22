@@ -712,11 +712,21 @@ def _pooled_parameter(payload, index):
     """
     entries = [entry["parameters"][index] for entry in payload["repetitions"]]
     n = len(entries)
+
+    # Convert out of local coordinates. A change to the *scaling* -- which is
+    # exactly what some of the sampler work is -- redefines the local unit, and
+    # two runs summarised in their own local units would look wildly
+    # inconsistent for no physical reason. physical = local * factor + baseline,
+    # so widths and errors scale and only the quantiles take the offset.
+    factor = payload["factors"][index]
+    baseline = payload["baseline_values"][index]
+
     pooled = {}
     for key in ("sd", *[f"q{quantile:g}" for quantile in QUANTILES]):
-        pooled[key] = float(np.mean([entry[key] for entry in entries]))
+        offset = baseline if key.startswith("q") else 0.0
+        pooled[key] = float(np.mean([entry[key] for entry in entries]) * factor + offset)
         pooled[f"mcse_{key}"] = float(
-            np.sqrt(np.sum([entry[f"mcse_{key}"] ** 2 for entry in entries])) / n
+            abs(factor) * np.sqrt(np.sum([entry[f"mcse_{key}"] ** 2 for entry in entries])) / n
         )
     return pooled
 
@@ -772,7 +782,7 @@ def do_compare(args):
             f"  before: {before.get('machine')}\n  after:  {after.get('machine')}\n"
         )
 
-    print("Credible intervals (difference in combined MCSE units)")
+    print("Credible intervals in physical units (difference in combined MCSE units)")
     rows = _agreement_rows(before, after)
     for row in sorted(rows, key=lambda entry: -entry["sigmas"])[: args.top]:
         flag = "  <== DISAGREES" if row["sigmas"] > AGREEMENT_SIGMA_GATE else ""
