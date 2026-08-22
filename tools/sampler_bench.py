@@ -473,7 +473,37 @@ class _CountingPosterior:
         return self._func(position)
 
 
-def run_emcee(problem, seed, steps, moves=None, jitter=1e-6, nwalkers=None):
+def _moves_stretch():
+    """emcee's default: the affine-invariant stretch move alone."""
+    return None
+
+
+def _moves_de():
+    """Differential evolution: propose along the difference of two walkers."""
+    import emcee
+
+    return [(emcee.moves.DEMove(), 1.0)]
+
+
+def _moves_de_snooker():
+    """The recipe emcee's own documentation recommends for correlated targets."""
+    import emcee
+
+    return [(emcee.moves.DEMove(), 0.8), (emcee.moves.DESnookerMove(), 0.2)]
+
+
+# Named so a result file records *which* proposal produced it. The stretch move
+# is affine invariant, which is why no amount of per-parameter rescaling changed
+# its efficiency; a different move is a different proposal distribution, and is
+# not neutralised the same way.
+MOVES = {
+    "stretch": _moves_stretch,
+    "de": _moves_de,
+    "de-snooker": _moves_de_snooker,
+}
+
+
+def run_emcee(problem, seed, steps, moves="stretch", jitter=1e-6, nwalkers=None):
     """Run a bare ``emcee`` ensemble: no backend, no plots, no convergence loop.
 
     This is the object the sampler work iterates on. What a user actually pays
@@ -488,7 +518,9 @@ def run_emcee(problem, seed, steps, moves=None, jitter=1e-6, nwalkers=None):
 
     started = time.perf_counter()
     position = problem.start + rng.normal(0.0, jitter, size=(nwalkers, ndim))
-    sampler = emcee.EnsembleSampler(nwalkers, ndim, problem.logpost, moves=moves)
+    sampler = emcee.EnsembleSampler(
+        nwalkers, ndim, problem.logpost, moves=MOVES[moves]()
+    )
     # ``rng`` above seeds only the initial ball. The proposals come from
     # somewhere else entirely: ``EnsembleSampler.__init__`` copies the *global*
     # legacy numpy RNG into a private ``RandomState``, and nothing here sets
@@ -514,6 +546,7 @@ def run_emcee(problem, seed, steps, moves=None, jitter=1e-6, nwalkers=None):
         sample_seconds=sample_seconds,
         extra={
             "nwalkers": nwalkers,
+            "moves": moves,
             "acceptance_fraction": float(np.mean(sampler.acceptance_fraction)),
         },
     )
@@ -664,11 +697,15 @@ def do_run(args):
         f"  (built in {build_seconds:.1f} s)"
     )
 
+    # ``emcee-production`` runs the pipeline's own wrapper and has no move
+    # choice to make; it absorbs the keyword and ignores it.
+    sampler_kwargs = {"moves": args.moves}
+
     repetitions = []
     for index in range(args.seeds):
         seed = args.seed0 + index
         print(f"  {args.sampler} seed={seed} steps={steps} ...", end="", flush=True)
-        result = run_one(problem, args.sampler, seed=seed, steps=steps)
+        result = run_one(problem, args.sampler, seed=seed, steps=steps, **sampler_kwargs)
         flag = "" if result["converged"] else "  UNCONVERGED"
         print(
             f" {result['total_seconds']:7.1f} s"
@@ -683,6 +720,7 @@ def do_run(args):
         "problem": spec.name,
         "problem_doc": spec.doc,
         "sampler": args.sampler,
+        "moves": args.moves,
         "steps": steps,
         "parameter_names": problem.parameter_names,
         "factors": problem.factors,
@@ -720,7 +758,11 @@ def _median_field(payload, field):
 
 def _report_run(payload):
     """Print the headline rate, its factors, and the seed-to-seed spread."""
-    print(f"\n{payload['problem']} / {payload['sampler']}, {payload['steps']} steps")
+    moves = payload.get("moves", "stretch")
+    print(
+        f"\n{payload['problem']} / {payload['sampler']} / {moves}, "
+        f"{payload['steps']} steps"
+    )
     print(
         f"  ESS/s               {payload['ess_per_second_median']:10.2f}"
         f"   (seeds: {payload['ess_per_second_min']:.2f} - "
@@ -806,7 +848,11 @@ def do_compare(args):
             f"{before['problem']} against {after['problem']}"
         )
 
-    print(f"{before['sampler']} -> {after['sampler']} on {before['problem']}\n")
+    def label(payload):
+        moves = payload.get("moves", "stretch")
+        return f"{payload['sampler']}/{moves}"
+
+    print(f"{label(before)} -> {label(after)} on {before['problem']}\n")
 
     if before["parameter_names"] != after["parameter_names"]:
         raise SystemExit("Refusing to compare runs with different fitted parameters")
@@ -849,7 +895,7 @@ def do_compare(args):
     for payload in (before, after):
         status = "" if payload["all_converged"] else "  (UNCONVERGED)"
         print(
-            f"  {payload['sampler']:>18s}  {payload['ess_per_second_median']:9.2f} ESS/s"
+            f"  {label(payload):>22s}  {payload['ess_per_second_median']:9.2f} ESS/s"
             f"  +-{100 * _spread(payload):.0f}%{status}"
         )
 
@@ -885,6 +931,9 @@ def do_list(_args):
     print("\nSamplers")
     for name in SAMPLERS:
         print(f"  {name}")
+    print("\nMoves (emcee only)")
+    for name, factory in MOVES.items():
+        print(f"  {name:<12s}{factory.__doc__.splitlines()[0]}")
 
 
 def main(argv=None):
@@ -898,6 +947,12 @@ def main(argv=None):
     run = subparsers.add_parser("run", help="Benchmark one sampler on one problem")
     run.add_argument("--problem", choices=sorted(PROBLEMS), default="P1")
     run.add_argument("--sampler", choices=sorted(SAMPLERS), default="emcee")
+    run.add_argument(
+        "--moves",
+        choices=sorted(MOVES),
+        default="stretch",
+        help="emcee proposal (ignored by emcee-production)",
+    )
     run.add_argument("--steps", type=int, default=None, help="Chain length per walker")
     run.add_argument("--seeds", type=int, default=3, help="Independent repetitions")
     run.add_argument("--seed0", type=int, default=1000, help="First sampler seed")
