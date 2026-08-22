@@ -233,6 +233,77 @@ def _evaluate_uniform_cubic_floored_parallel(phases, coefficients, x0, dx, n_int
     return out
 
 
+@njit(fastmath=False)
+def _evaluate_uniform_cubic_mixture(phases, coefficients, x0, dx, n_intervals, weights, floor):
+    """Interpolate, form the weighted mixture, and clamp it, in one pass.
+
+    The weighted likelihood's per-event term is ``1 + w_i (T - 1)``, so that --
+    not the template -- is what has to stay positive before the log. Clamping
+    the template instead would be too strict: a correctly undiluted template can
+    dip below zero at the trough of a strong pulse while every mixture value is
+    still safely positive, because ``w_i <= 1``.
+
+    Weights are sanitized here too, so the caller needs no separate passes for
+    them; the whole weighted path stays a single traversal, which is the reason
+    this fused kernel exists at all.
+    """
+    out = np.empty(phases.size)
+    for i in range(phases.size):
+        phase = phases[i] - np.floor(phases[i])
+        j = int((phase - x0) / dx)
+        if j < 0:
+            j = 0
+        elif j >= n_intervals:
+            j = n_intervals - 1
+        u = phase - (x0 + j * dx)
+        value = coefficients[j, 0] + u * (
+            coefficients[j, 1] + u * (coefficients[j, 2] + u * coefficients[j, 3])
+        )
+        weight = weights[i]
+        if np.isnan(weight) or weight < 0.0:
+            weight = 0.0
+        elif weight > 1.0:
+            weight = 1.0
+        mixture = weight * value + (1.0 - weight)
+        if np.isnan(mixture) or mixture < floor:
+            mixture = floor
+        out[i] = mixture
+    return out
+
+
+@njit(fastmath=False, parallel=True)
+def _evaluate_uniform_cubic_mixture_parallel(
+    phases, coefficients, x0, dx, n_intervals, weights, floor
+):
+    """Multi-threaded twin of :func:`_evaluate_uniform_cubic_mixture`.
+
+    As with the other parallel kernel, each iteration writes one independent
+    output element, so the result is bitwise identical to the serial version.
+    """
+    out = np.empty(phases.size)
+    for i in prange(phases.size):
+        phase = phases[i] - np.floor(phases[i])
+        j = int((phase - x0) / dx)
+        if j < 0:
+            j = 0
+        elif j >= n_intervals:
+            j = n_intervals - 1
+        u = phase - (x0 + j * dx)
+        value = coefficients[j, 0] + u * (
+            coefficients[j, 1] + u * (coefficients[j, 2] + u * coefficients[j, 3])
+        )
+        weight = weights[i]
+        if np.isnan(weight) or weight < 0.0:
+            weight = 0.0
+        elif weight > 1.0:
+            weight = 1.0
+        mixture = weight * value + (1.0 - weight)
+        if np.isnan(mixture) or mixture < floor:
+            mixture = floor
+        out[i] = mixture
+    return out
+
+
 #: Event count above which threading the template evaluation pays for itself.
 #: Below it the thread launch overhead dominates and the parallel kernel is
 #: markedly *slower* -- measured at 0.35x for ten thousand events, against 2.6x
@@ -278,19 +349,32 @@ class UniformCubicTemplate:
         replaces.
         """
         phases = np.ascontiguousarray(phases, dtype=float)
-        kernel = (
-            _evaluate_uniform_cubic_floored_parallel
-            if phases.size >= PARALLEL_TEMPLATE_THRESHOLD
-            else _evaluate_uniform_cubic_floored
-        )
-        probs = kernel(phases, self.coefficients, self.x0, self.dx, self.n_intervals, floor)
-        if weights is None:
-            return float(np.sum(np.log(probs)))
+        threaded = phases.size >= PARALLEL_TEMPLATE_THRESHOLD
 
-        local_weights = np.ascontiguousarray(weights, dtype=float)
-        local_weights = np.nan_to_num(local_weights, nan=0.0, posinf=1.0, neginf=0.0)
-        local_weights = np.clip(local_weights, 0.0, 1.0)
-        return float(np.sum(np.log(local_weights * probs + (1.0 - local_weights))))
+        if weights is None:
+            kernel = (
+                _evaluate_uniform_cubic_floored_parallel
+                if threaded
+                else _evaluate_uniform_cubic_floored
+            )
+            terms = kernel(phases, self.coefficients, self.x0, self.dx, self.n_intervals, floor)
+        else:
+            kernel = (
+                _evaluate_uniform_cubic_mixture_parallel
+                if threaded
+                else _evaluate_uniform_cubic_mixture
+            )
+            terms = kernel(
+                phases,
+                self.coefficients,
+                self.x0,
+                self.dx,
+                self.n_intervals,
+                np.ascontiguousarray(weights, dtype=float),
+                floor,
+            )
+
+        return float(np.sum(np.log(terms)))
 
 
 def _template_spline_grid(template):

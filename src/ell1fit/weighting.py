@@ -1,4 +1,4 @@
-"""Energy-dependent event weighting for ell1fit.
+r"""Energy-dependent event weighting for ell1fit.
 
 Pulsed fraction usually varies with photon energy, so events in energy bands
 where the pulse is strong carry more timing information than events where it is
@@ -12,10 +12,16 @@ lie in ``[0, 1]``: a weight of 1 means "trust this event's phase fully", 0 means
 :func:`pf_weight_versus_energy` enforces that by scaling the peak amplitude to
 1, and falls back to uniform weights if the amplitude trend is degenerate.
 
-Only the *shape* of the weight curve matters. Both the weighted profile and its
-noise level scale linearly with the weights, so rescaling them all by a constant
-leaves the weighted statistic — and the fit — unchanged. That is why peak
-normalization is free to be chosen for the ``[0, 1]`` constraint alone.
+Only the *shape* of the weight curve matters, which is why peak normalization is
+free to be chosen for the ``[0, 1]`` constraint alone. For the weighted
+statistic this is immediate: the weighted profile and its noise level both scale
+linearly with the weights. For the *fit* it holds only because the template is
+undiluted before use. The likelihood's model for event ``i`` is
+``1 + w_i (T - 1)``, and the undiluted template's modulation is
+:math:`\sum w a / \sum w^2` — so under ``w -> s w`` the template modulation
+picks up a compensating ``1 / s`` and the product is unchanged. Without that
+compensation, rescaling the weights would rescale the fit's error bars.
+:func:`ell1fit.pipeline._prepare_templates_and_phase_priors` applies it.
 
 How the trend is measured
 -------------------------
