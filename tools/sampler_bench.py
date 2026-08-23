@@ -659,7 +659,14 @@ def run_emcee_production(problem, seed, steps, **_):
         chains=chains,
         setup_seconds=0.0,
         sample_seconds=sample_seconds,
-        extra={"nwalkers": chains.shape[0], "iterations": chains.shape[1]},
+        extra={
+            "nwalkers": chains.shape[0],
+            "iterations": chains.shape[1],
+            # Not ``args.moves``: this adapter runs the package's own sampler,
+            # which chooses its proposal itself. Recording the CLI value here
+            # would label the result with a flag that had no effect on it.
+            "moves": "package (ell1fit.mcmc_utils.default_moves)",
+        },
     )
 
 
@@ -789,7 +796,8 @@ def do_run(args):
         "problem": spec.name,
         "problem_doc": spec.doc,
         "sampler": args.sampler,
-        "moves": args.moves,
+        # What the run actually used, which is not always what was asked for.
+        "moves": repetitions[0]["extra"].get("moves", args.moves),
         "workers": args.workers,
         "steps": steps,
         "parameter_names": problem.parameter_names,
