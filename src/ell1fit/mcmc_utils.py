@@ -13,6 +13,7 @@ from .plotting import plot_style_context
 
 __all__ = [
     "calculate_result_array_from_samples",
+    "default_moves",
     "get_flat_samples",
     "plot_mcmc_results",
     "safe_run_sampler",
@@ -112,6 +113,32 @@ def plot_mcmc_results(
         fig.savefig(fname, dpi=300)
 
 
+def default_moves():
+    """The proposal mix this sampler uses, and why it is not emcee's default.
+
+    Differential evolution proposes along the difference between two other
+    walkers, so its steps line up with whatever direction the ensemble is
+    currently spread over. On a correlated posterior that is the ridge itself,
+    where the stretch move -- which only walks toward one other walker -- makes
+    far less use of the same information. The 0.8/0.2 mix with the snooker
+    variant is emcee's own recommendation for correlated targets.
+
+    Measured on three benchmark posteriors with
+    ``tools/sampler_bench.py``, three seeds each, effective samples **per
+    step**: 0.212 to 0.689 at fixture scale, 0.158 to 0.425 at production
+    scale, and 0.075 to 0.307 on a ten-parameter fit with eccentricity free.
+    The cost per step did not move -- both moves make exactly one posterior
+    evaluation per walker per step -- so the gain is the proposals, not
+    arithmetic. Credible intervals agreed with the stretch move's within the
+    Monte Carlo error on every parameter.
+
+    Acceptance runs lower than the stretch move's, around 0.32 against 0.57.
+    That is what a bolder proposal looks like and not a fault; it stays well
+    clear of the thresholds that report a struggling chain below.
+    """
+    return [(emcee.moves.DEMove(), 0.8), (emcee.moves.DESnookerMove(), 0.2)]
+
+
 def safe_run_sampler(
     func_to_maximize,
     starting_pars,
@@ -120,12 +147,23 @@ def safe_run_sampler(
     labels=None,
     corner_labels=None,
     n_autocorr=50,
+    moves=None,
 ):
     """Run emcee with checkpointing, restart support, and convergence checks.
 
     The chain is stored in an HDF5 backend (``outroot + '.h5'``). If a previous
     chain exists, sampling resumes from the stored state. Convergence is checked
     from the integrated autocorrelation time.
+
+    Parameters
+    ----------
+    moves : list or None, optional
+        emcee move specification. ``None`` selects :func:`default_moves`, which
+        is *not* emcee's own default -- pass ``emcee.moves.StretchMove()`` to
+        get that back. A resumed chain is sampled with whatever is passed now,
+        regardless of what produced the stored part; both target the same
+        posterior, but an autocorrelation time measured across the join
+        describes neither half.
 
     Returns
     -------
@@ -246,8 +284,13 @@ def safe_run_sampler(
         logging.info("Nothing to be done here")
         return result_dict
 
-    # Use emcee's default move configuration to avoid ad-hoc tuning constants.
-    sampler = emcee.EnsembleSampler(nwalkers, ndim, func_to_maximize, backend=backend)
+    sampler = emcee.EnsembleSampler(
+        nwalkers,
+        ndim,
+        func_to_maximize,
+        backend=backend,
+        moves=default_moves() if moves is None else moves,
+    )
 
     index = 0
     autocorr = np.empty(max_n)
