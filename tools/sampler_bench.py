@@ -209,6 +209,13 @@ class Problem:
     parameter_names: list
     factors: list
     baseline_values: list
+    #: The data and the fit description the posterior was built from. Carried
+    #: so a sampler that needs the model itself rather than a callable -- the
+    #: JAX rebuild behind ``--sampler nuts`` -- can have it without rebuilding
+    #: the problem a second time. Neither is picklable, so neither crosses into
+    #: a worker process; ``spec`` is what gets sent there.
+    observations: object = None
+    setup: object = None
 
     @property
     def ndim(self):
@@ -229,6 +236,15 @@ class SamplerRun:
     setup_seconds: float
     sample_seconds: float
     extra: dict = dataclasses.field(default_factory=dict)
+    #: Iterations actually performed per chain, when that differs from the
+    #: number returned. An ensemble hands back everything it did and leaves the
+    #: warm-up to the harness; NUTS adapts during a warm-up phase it does not
+    #: return, and charging it only for the draws it kept would credit it with
+    #: a rate it never achieved. ``None`` means the two are the same.
+    steps_taken: int = None
+    #: Warm-up fraction the harness should discard, when the sampler has
+    #: already discarded its own. ``None`` means :data:`DISCARD_FRACTION`.
+    discard_fraction: float = None
 
 
 def machine_configuration():
@@ -454,6 +470,8 @@ def build_problem(spec, verbose=False):
         parameter_names=list(setup.parameter_names),
         factors=[float(f) for f in setup.factors],
         baseline_values=[float(v) for v in setup.baseline_values],
+        observations=observations,
+        setup=setup,
     )
 
 
@@ -545,7 +563,7 @@ MOVES = {
 }
 
 
-def run_emcee(problem, seed, steps, moves="stretch", jitter=1e-6, nwalkers=None, workers=0):
+def run_emcee(problem, seed, steps, moves="stretch", jitter=1e-6, nwalkers=None, workers=0, **_):
     """Run a bare ``emcee`` ensemble: no backend, no plots, no convergence loop.
 
     This is the object the sampler work iterates on. What a user actually pays
@@ -670,9 +688,168 @@ def run_emcee_production(problem, seed, steps, **_):
     )
 
 
+def run_nuts(
+    problem,
+    seed,
+    steps,
+    chains=4,
+    target_accept=0.8,
+    max_tree_depth=10,
+    chain_method="sequential",
+    mass="curvature",
+    jitter=1e-6,
+    **_,
+):
+    """Run numpyro's NUTS against a JAX rebuild of the same posterior.
+
+    The other adapters here hand a sampler the very function the pipeline
+    evaluates. This one cannot: nothing in the numba path yields a gradient, so
+    ``tools/jax_posterior.py`` rebuilds the posterior out of JAX primitives and
+    NUTS samples *that*. The rebuild is a second expression of one model and
+    could drift from the first, so both checks in that module run here, before
+    any sampling, and their results are recorded with the run.
+
+    Two things are not comparable to an ensemble run without saying so:
+
+    - **A step is not a step.** One emcee iteration advances 32 walkers for 32
+      posterior evaluations. One NUTS iteration advances one chain and costs a
+      whole leapfrog trajectory, up to ``2**max_tree_depth`` gradient
+      evaluations. ESS/second is the honest headline; ESS per step is not.
+    - **A call is not a call.** ``posterior_calls`` is set to the total number
+      of leapfrog steps, so ``ess_per_posterior_call`` counts *gradient*
+      evaluations -- which cost more than the value-only evaluations the same
+      field counts for emcee. That is the comparison the mechanism lives in,
+      but it is a ratio between two different units of work.
+
+    The mass matrix is seeded rather than left to warm-up. In local coordinates
+    the preconditioning has already made every direction about
+    ``TARGET_LOCAL_SIGMA`` wide, so the posterior covariance is known up to
+    curvature that the factors already carry; handing NUTS that diagonal saves
+    it from rediscovering a number it was told. This is the step where the
+    preconditioning work can pay at all -- NUTS with a diagonal mass matrix is
+    not affine invariant, which is exactly why rescaling was a null result for
+    the stretch move and need not be one here.
+    """
+    if chain_method == "parallel":
+        # XLA exposes one CPU device by default, so ``parallel`` would have
+        # nothing to spread across. This asks for one per chain, which is the
+        # same bargain the emcee process pool makes: the posterior is threaded
+        # inside a single evaluation, but not well enough at this size to use
+        # ten cores, so the parallelism is better spent on whole chains. It
+        # has to be set before JAX initialises its backend, which is why the
+        # imports below are inside this function.
+        os.environ.setdefault("XLA_FLAGS", "")
+        os.environ["XLA_FLAGS"] = (
+            os.environ["XLA_FLAGS"] + f" --xla_force_host_platform_device_count={chains}"
+        ).strip()
+
+    import jax
+    import jax.numpy as jnp
+
+    import jax_posterior
+
+    jax_posterior.enable_x64()
+    from numpyro.infer import MCMC, NUTS
+
+    from ell1fit.scaling import TARGET_LOCAL_SIGMA
+
+    started = time.perf_counter()
+    logpost = jax_posterior.build_jax_logpost(problem.observations, problem.setup)
+    agreement = jax_posterior.check_against_numba(problem)
+    derivative = jax_posterior.check_gradient(problem)
+
+    def potential(position):
+        return -logpost(position)
+
+    rng = np.random.default_rng(seed)
+    start = problem.start + rng.normal(0.0, jitter, size=(chains, problem.ndim))
+
+    # Warm-up is half the budget, matching the fraction the harness discards
+    # from an ensemble chain. NUTS does not hand its warm-up back, so the run
+    # reports ``steps_taken`` and asks the harness not to discard a second time.
+    warmup = steps // 2
+    kept = steps - warmup
+
+    # ``identity`` is numpyro's own default and is kept as the control: it is
+    # what makes "seeding the mass matrix helps" a claim that can fail.
+    inverse_mass = (
+        None if mass == "identity" else np.full(problem.ndim, TARGET_LOCAL_SIGMA**2)
+    )
+    kernel = NUTS(
+        potential_fn=potential,
+        inverse_mass_matrix=inverse_mass,
+        target_accept_prob=target_accept,
+        max_tree_depth=max_tree_depth,
+    )
+    mcmc = MCMC(
+        kernel,
+        num_warmup=warmup,
+        num_samples=kept,
+        num_chains=chains,
+        chain_method=chain_method,
+        progress_bar=False,
+    )
+    setup_seconds = time.perf_counter() - started
+
+    started = time.perf_counter()
+    # Warm-up is run as its own phase rather than folded into ``run``, so that
+    # its trajectories can be counted. They are the majority of the leapfrog
+    # steps -- adaptation starts with a step size far from the one it settles
+    # on -- and leaving them out would divide the run's whole wall clock by a
+    # fraction of the work it paid for, making every per-call figure wrong in
+    # the flattering direction.
+    key = jax.random.PRNGKey(seed)
+    mcmc.warmup(
+        key,
+        init_params=jnp.asarray(start),
+        extra_fields=("num_steps", "diverging"),
+        collect_warmup=True,
+    )
+    warmup_fields = mcmc.get_extra_fields(group_by_chain=True)
+    mcmc.run(key, extra_fields=("num_steps", "diverging"))
+    samples = np.asarray(mcmc.get_samples(group_by_chain=True))
+    sample_seconds = time.perf_counter() - started
+
+    fields = mcmc.get_extra_fields(group_by_chain=True)
+    # One leapfrog step is one evaluation of the potential and its gradient.
+    def _total(field):
+        return int(np.sum(np.asarray(warmup_fields[field]))) + int(
+            np.sum(np.asarray(fields[field]))
+        )
+
+    leapfrog_steps = _total("num_steps")
+
+    return SamplerRun(
+        chains=samples,
+        setup_seconds=setup_seconds,
+        sample_seconds=sample_seconds,
+        steps_taken=steps,
+        discard_fraction=0.0,
+        extra={
+            "nchains": chains,
+            "warmup_steps": warmup,
+            "kept_steps": kept,
+            "target_accept": target_accept,
+            "chain_method": chain_method,
+            "jax_devices": len(jax.devices()),
+            "mass": mass,
+            "max_tree_depth": max_tree_depth,
+            "posterior_calls": leapfrog_steps,
+            "posterior_call_unit": "leapfrog step (value and gradient)",
+            "divergences": _total("diverging"),
+            "divergences_after_warmup": int(np.sum(np.asarray(fields["diverging"]))),
+            "leapfrog_steps_after_warmup": int(np.sum(np.asarray(fields["num_steps"]))),
+            "mean_leapfrog_steps": leapfrog_steps / (chains * steps),
+            "jax_agreement": agreement,
+            "jax_gradient_check": derivative,
+        },
+    )
+
+
 SAMPLERS = {
     "emcee": run_emcee,
     "emcee-production": run_emcee_production,
+    "nuts": run_nuts,
 }
 
 
@@ -734,10 +911,15 @@ def run_one(problem, sampler_name, seed, steps, **sampler_kwargs):
     counted = dataclasses.replace(problem, logpost=counter)
 
     run = SAMPLERS[sampler_name](counted, seed=seed, steps=steps, **sampler_kwargs)
-    summary = summarize_chains(run.chains)
+    summary = summarize_chains(
+        run.chains,
+        DISCARD_FRACTION if run.discard_fraction is None else run.discard_fraction,
+    )
 
     total_seconds = run.setup_seconds + run.sample_seconds
-    n_draws = summary["n_draws"]
+    # Rates are per iteration performed, not per draw returned; see
+    # ``SamplerRun.steps_taken``.
+    n_draws = summary["n_draws"] if run.steps_taken is None else run.steps_taken
     calls = run.extra.get("posterior_calls") or counter.calls
 
     summary.update(
@@ -775,7 +957,14 @@ def do_run(args):
 
     # ``emcee-production`` runs the pipeline's own wrapper and has no move
     # choice to make; it absorbs the keyword and ignores it.
-    sampler_kwargs = {"moves": args.moves, "workers": args.workers}
+    sampler_kwargs = {
+        "moves": args.moves,
+        "workers": args.workers,
+        "chains": args.chains,
+        "target_accept": args.target_accept,
+        "chain_method": args.chain_method,
+        "mass": args.mass,
+    }
 
     repetitions = []
     for index in range(args.seeds):
@@ -1039,6 +1228,30 @@ def main(argv=None):
         type=int,
         default=0,
         help="Evaluate walkers in a process pool of this size (0 = in-process)",
+    )
+    run.add_argument(
+        "--chains",
+        type=int,
+        default=4,
+        help="NUTS chains (ignored by the emcee samplers, which set their own walkers)",
+    )
+    run.add_argument(
+        "--target-accept",
+        type=float,
+        default=0.8,
+        help="NUTS target acceptance probability; raise it to trade speed for fewer divergences",
+    )
+    run.add_argument(
+        "--chain-method",
+        choices=("sequential", "vectorized", "parallel"),
+        default="sequential",
+        help="How NUTS runs its chains: one after another, vmapped together, or one per CPU device",
+    )
+    run.add_argument(
+        "--mass",
+        choices=("curvature", "identity"),
+        default="curvature",
+        help="NUTS initial inverse mass matrix: the preconditioned scale, or numpyro's default",
     )
     run.add_argument("--steps", type=int, default=None, help="Chain length per walker")
     run.add_argument("--seeds", type=int, default=3, help="Independent repetitions")

@@ -40,10 +40,15 @@ docs = [
     "sphinx-astropy",
 ]
 # For tools/sampler_bench.py only. ArviZ provides the rank-normalized ESS,
-# R-hat and Monte Carlo standard errors that referee the sampler comparisons;
-# nothing the package installs or imports at runtime needs it.
+# R-hat and Monte Carlo standard errors that referee the sampler comparisons.
+# JAX and numpyro back ``--sampler nuts``: nothing in the numba posterior
+# yields a gradient, so tools/jax_posterior.py rebuilds it in JAX for the
+# gradient sampler to use. Nothing the package installs or imports at runtime
+# needs any of them.
 bench = [
     "arviz",
+    "jax",
+    "numpyro",
 ]
 
 [project.scripts]
