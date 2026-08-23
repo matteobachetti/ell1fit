@@ -117,6 +117,7 @@ import dataclasses
 import io
 import json
 import logging
+import multiprocessing
 import os
 import shutil
 import statistics
@@ -473,6 +474,47 @@ class _CountingPosterior:
         return self._func(position)
 
 
+#: One built posterior per worker process. Filled by :func:`_init_worker`.
+_WORKER_PROBLEM = None
+
+
+def _init_worker(spec):
+    """Rebuild the posterior inside a worker process.
+
+    The obvious thing -- send the parent's ``func_to_maximize`` to the pool --
+    cannot be done: it is a closure over the observations and the fit setup, so
+    it is unpicklable, and macOS spawns rather than forks. Forking instead is
+    not the escape it looks like, because numba's thread pool has already been
+    started in the parent by the time a sampler runs, and forking a process with
+    live worker threads is unsupported.
+
+    So each worker builds the problem itself from the spec. It is deterministic
+    -- the dataset is cached and seeded, and the parent has already built it
+    once, so the workers read rather than generate -- and the pooled and
+    unpooled chains come out identical for the same seed, which is the check
+    that this reproduces the parent's posterior rather than something adjacent
+    to it.
+
+    The build costs a few seconds per worker and they run concurrently; it lands
+    in ``setup_seconds`` and therefore in the headline rate, which is the honest
+    place for it.
+    """
+    global _WORKER_PROBLEM
+
+    import numba
+
+    # Each worker gets one numba thread. Ten workers each spawning ten threads
+    # would oversubscribe the machine by 10x, and the point of the pool is to
+    # use the cores that a single call's threading leaves idle at fixture scale.
+    numba.set_num_threads(1)
+    _WORKER_PROBLEM = build_problem(spec)
+
+
+def _worker_logpost(position):
+    """Evaluate the worker's own copy of the posterior."""
+    return _WORKER_PROBLEM.logpost(position)
+
+
 def _moves_stretch():
     """emcee's default: the affine-invariant stretch move alone."""
     return None
@@ -503,7 +545,7 @@ MOVES = {
 }
 
 
-def run_emcee(problem, seed, steps, moves="stretch", jitter=1e-6, nwalkers=None):
+def run_emcee(problem, seed, steps, moves="stretch", jitter=1e-6, nwalkers=None, workers=0):
     """Run a bare ``emcee`` ensemble: no backend, no plots, no convergence loop.
 
     This is the object the sampler work iterates on. What a user actually pays
@@ -518,8 +560,20 @@ def run_emcee(problem, seed, steps, moves="stretch", jitter=1e-6, nwalkers=None)
 
     started = time.perf_counter()
     position = problem.start + rng.normal(0.0, jitter, size=(nwalkers, ndim))
+
+    pool = None
+    logpost = problem.logpost
+    if workers:
+        pool = multiprocessing.get_context("spawn").Pool(
+            processes=workers, initializer=_init_worker, initargs=(problem.spec,)
+        )
+        # The parent's counting wrapper cannot see calls made in a worker, so
+        # the function handed to the pool is the workers' own; the call count is
+        # reconstructed below from what the moves provably do.
+        logpost = _worker_logpost
+
     sampler = emcee.EnsembleSampler(
-        nwalkers, ndim, problem.logpost, moves=MOVES[moves]()
+        nwalkers, ndim, logpost, moves=MOVES[moves](), pool=pool
     )
     # ``rng`` above seeds only the initial ball. The proposals come from
     # somewhere else entirely: ``EnsembleSampler.__init__`` copies the *global*
@@ -536,7 +590,12 @@ def run_emcee(problem, seed, steps, moves="stretch", jitter=1e-6, nwalkers=None)
     setup_seconds = time.perf_counter() - started
 
     started = time.perf_counter()
-    sampler.run_mcmc(position, steps, progress=False)
+    try:
+        sampler.run_mcmc(position, steps, progress=False)
+    finally:
+        if pool is not None:
+            pool.terminate()
+            pool.join()
     sample_seconds = time.perf_counter() - started
 
     return SamplerRun(
@@ -547,6 +606,15 @@ def run_emcee(problem, seed, steps, moves="stretch", jitter=1e-6, nwalkers=None)
         extra={
             "nwalkers": nwalkers,
             "moves": moves,
+            "workers": workers,
+            # One evaluation per walker per step, plus one pass over the
+            # initial state. Confirmed against the counter, which reports
+            # exactly nwalkers * (steps + 1) on every problem and both move
+            # sets -- 128032 for 32 walkers and 4000 steps. Reconstructing it
+            # rather than approximating matters because
+            # ``ess_per_posterior_call`` is how a 32-walker ensemble will be
+            # compared against a NUTS run.
+            "posterior_calls": nwalkers * (steps + 1) if workers else None,
             "acceptance_fraction": float(np.mean(sampler.acceptance_fraction)),
         },
     )
@@ -663,6 +731,7 @@ def run_one(problem, sampler_name, seed, steps, **sampler_kwargs):
 
     total_seconds = run.setup_seconds + run.sample_seconds
     n_draws = summary["n_draws"]
+    calls = run.extra.get("posterior_calls") or counter.calls
 
     summary.update(
         {
@@ -670,12 +739,12 @@ def run_one(problem, sampler_name, seed, steps, **sampler_kwargs):
             "setup_seconds": run.setup_seconds,
             "sample_seconds": run.sample_seconds,
             "total_seconds": total_seconds,
-            "posterior_calls": counter.calls,
+            "posterior_calls": calls,
             "ess_per_second": summary["ess_min"] / total_seconds,
             "ess_per_step": summary["ess_min"] / n_draws,
             "steps_per_second": n_draws / total_seconds,
-            "ess_per_posterior_call": summary["ess_min"] / max(counter.calls, 1),
-            "microseconds_per_posterior_call": 1e6 * total_seconds / max(counter.calls, 1),
+            "ess_per_posterior_call": summary["ess_min"] / max(calls, 1),
+            "microseconds_per_posterior_call": 1e6 * total_seconds / max(calls, 1),
             "converged": summary["rhat_max"] < RHAT_GATE,
             "extra": run.extra,
         }
@@ -699,7 +768,7 @@ def do_run(args):
 
     # ``emcee-production`` runs the pipeline's own wrapper and has no move
     # choice to make; it absorbs the keyword and ignores it.
-    sampler_kwargs = {"moves": args.moves}
+    sampler_kwargs = {"moves": args.moves, "workers": args.workers}
 
     repetitions = []
     for index in range(args.seeds):
@@ -721,6 +790,7 @@ def do_run(args):
         "problem_doc": spec.doc,
         "sampler": args.sampler,
         "moves": args.moves,
+        "workers": args.workers,
         "steps": steps,
         "parameter_names": problem.parameter_names,
         "factors": problem.factors,
@@ -759,8 +829,10 @@ def _median_field(payload, field):
 def _report_run(payload):
     """Print the headline rate, its factors, and the seed-to-seed spread."""
     moves = payload.get("moves", "stretch")
+    workers = payload.get("workers", 0)
+    pool = f" / {workers} workers" if workers else ""
     print(
-        f"\n{payload['problem']} / {payload['sampler']} / {moves}, "
+        f"\n{payload['problem']} / {payload['sampler']} / {moves}{pool}, "
         f"{payload['steps']} steps"
     )
     print(
@@ -850,7 +922,8 @@ def do_compare(args):
 
     def label(payload):
         moves = payload.get("moves", "stretch")
-        return f"{payload['sampler']}/{moves}"
+        workers = payload.get("workers", 0)
+        return f"{payload['sampler']}/{moves}" + (f"/{workers}w" if workers else "")
 
     print(f"{label(before)} -> {label(after)} on {before['problem']}\n")
 
@@ -952,6 +1025,12 @@ def main(argv=None):
         choices=sorted(MOVES),
         default="stretch",
         help="emcee proposal (ignored by emcee-production)",
+    )
+    run.add_argument(
+        "--workers",
+        type=int,
+        default=0,
+        help="Evaluate walkers in a process pool of this size (0 = in-process)",
     )
     run.add_argument("--steps", type=int, default=None, help="Chain length per walker")
     run.add_argument("--seeds", type=int, default=3, help="Independent repetitions")
