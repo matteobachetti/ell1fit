@@ -157,6 +157,155 @@ realizations the log-posterior improved in 12 (mean +0.87 nats, maximum +5.7),
 and the RMS error on ``A1`` fell from :math:`7.2\times10^{-3}` to
 :math:`6.5\times10^{-3}`.
 
+Sampler efficiency
+------------------
+
+Optimizer reliability decides whether a fit lands on the right solution; how
+long the error bars take is a separate question, and it is measured separately.
+The figure of merit is **effective samples per second**, taking the *minimum*
+over parameters rather than the mean, so that a sampler stuck on one direction
+cannot average its way to a win. ``tools/sampler_bench.py`` produces it, over
+three fixed problems: ``P1`` (2×5,000 events, 5 parameters), ``P2`` (2×200,000,
+5), and ``P3`` (3×50,000, 10, with eccentricity free — a strongly correlated
+ridge). R-hat is reported as a gate, not as a score.
+
+Two changes have been measured, each against a controlled baseline on the same
+commit — reusing an older number would credit a change with someone else's win:
+
+.. list-table:: Effective samples per second, ``P1``
+   :header-rows: 1
+   :widths: 34 16 16 16
+
+   * - Change
+     - Before
+     - After
+     - Factor
+
+   * - Differential-evolution moves
+     - 8.39
+     - 31.98
+     - 3.8×
+   * - Whole chains in separate processes
+     - 37.3
+     - 69.5
+     - 1.9×
+
+Together with the threading-threshold fix these amount to roughly an order of
+magnitude on ``P1`` and on ``P3``, and about 4× on ``P2``, relative to where
+this work started.
+
+**Differential-evolution moves**, which propose along the vector between two
+walkers instead of stretching toward one, are the pipeline's default, supplied
+by :func:`ell1fit.mcmc_utils.default_moves`; passing
+``moves=emcee.moves.StretchMove()`` restores emcee's own. On ``P1`` this is 3.8×, and all of it is in
+effective samples *per step* (0.158 → 0.618) with the cost per step unchanged —
+the proposals are better, not cheaper. This matters because the ensemble is
+affine invariant: rescaling the parameters cannot help it, only a better
+proposal shape can.
+
+**Running whole chains in separate processes**, rather than threading inside a
+single likelihood call, is worth a further 1.9× on ``P1``. Each pooled run is
+bitwise identical to its unpooled twin, so this is pure hardware and the
+statistics are unchanged by construction. Match the worker count to
+``nwalkers / 2`` — emcee updates the ensemble in two halves, so 8 workers beat
+10 (six slots would idle in the second half) and 16 are far worse. Worker
+start-up is several seconds and lands inside the measured rate, so short runs
+pay for it. This is measured in the benchmark harness only; a pipeline run
+builds its posterior from user files, folding and template derivation, so
+workers would have to repeat the front half of the pipeline.
+
+Gradient-based sampling
+^^^^^^^^^^^^^^^^^^^^^^^
+
+An ensemble sampler asks only for the value of the log-posterior. NUTS also
+asks which way is uphill, and nothing in the compiled path yields a gradient, so
+``tools/jax_posterior.py`` rebuilds the log-posterior from JAX primitives for
+``tools/sampler_bench.py --sampler nuts``. **This is benchmark-side only; the
+pipeline samples with emcee.**
+
+.. list-table:: Ensemble against NUTS, four chains
+   :header-rows: 1
+   :widths: 14 18 18 18 16
+
+   * - Problem
+     - Sampler
+     - ESS/s
+     - ESS/step
+     - Worst R-hat
+
+   * - ``P1``
+     - emcee + DE, 8 processes
+     - 69.5
+     - 0.689
+     - 1.012
+   * - ``P1``
+     - NUTS
+     - **202.2**
+     - 2.191
+     - 1.0007
+   * - ``P3``
+     - emcee + DE, 8 processes
+     - 7.68
+     - 0.354
+     - 1.0066
+   * - ``P3``
+     - NUTS
+     - 2.47
+     - 0.811
+     - 1.0026
+
+**The two results should not be averaged.** On ``P1`` NUTS is 6.3× over what
+the pipeline delivers today, and it is the only configuration that reaches
+R-hat 1.001 there at all. On ``P3`` it is 0.32×, i.e. three times slower: the
+proposal is 2.6× better per posterior call, but on the ridge a gradient costs
+9.9 ms against a value call's 3.1 ms, and the arithmetic goes the wrong way.
+Gradient sampling is therefore a capability that pays where the data are small
+relative to the parameter count, not a general speed-up. Neither problem
+produced a post-warm-up divergence.
+
+One configuration detail is not optional: JAX exposes a single CPU device by
+default, so four chains queue on roughly one core. Giving XLA one device per
+chain is worth 3.7–4.3×, with the chains bitwise unchanged; the figures above
+assume it.
+
+Since a second implementation of the model can silently disagree with the
+first, three checks hold them together, and they divide the work deliberately:
+the JAX log-posterior is compared against the compiled one over a ball of one
+standard deviation (worst :math:`5.6\times10^{-7}` on ``P1``); the gradient is
+checked by differencing *the JAX function*, not the compiled one, whose own
+rounding would swamp the comparison; and the Hessians of the two are compared at
+the maximum. The residual :math:`10^{-6}` is last-bit rounding in the
+``fastmath`` deorbiting kernels, identified as such because it does not move
+when their tolerance is tightened by six orders of magnitude.
+
+That third check also settles a question the first two cannot. When two
+samplers disagree about the *width* of a posterior — here 4.6% on ``TASC``,
+which the harness flagged at 4σ — running either one longer converges on the
+answer only slowly. The Hessian is deterministic: the two implementations agree
+on the curvature to :math:`2\times10^{-6}`, which rules out a model difference,
+and measured against those widths the ensemble is narrow on 10 parameters out of
+10 while NUTS scatters evenly about them. The ensemble is still slightly
+under-dispersed after 16,000 steps at R-hat 1.0066.
+
+Sampler ideas tried and rejected
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+- **Seeding NUTS with the preconditioning factors as its diagonal mass matrix:
+  no effect, on either problem** (``P1`` 41.3 against 43.7 for the identity;
+  ``P3`` 2.45 against 2.43). The expectation was that this would pay precisely
+  because NUTS, unlike the ensemble, is *not* affine invariant. Warm-up
+  rediscovers the diagonal from the identity within its first thousand steps
+  regardless. ``--mass {curvature,identity}`` is kept so the claim stays
+  testable.
+- **Batching the likelihood over all walkers into one compiled call.** Costed
+  before being written, against a process pool: the ceiling was 2.4× on ``P1``
+  and 1.13× on ``P2``, below the pool everywhere, and it leaves the per-call
+  Python untouched.
+- **Vectorising the NUTS chains** (``--chain-method vectorized``) is *slower*
+  than running them one after another, 37.8 against 41.3 on ``P1``, because
+  chains mapped together all pay for the deepest trajectory.
+
+
 Reproducing these numbers
 -------------------------
 
@@ -165,3 +314,12 @@ The precision comparison needs an interpreter with genuine 80-bit
 anywhere. All of them use :mod:`ell1fit.tests.datagen` to generate data from a
 known solution, and ``tools/refactor_net.py`` records a bitwise snapshot of the
 pipeline's outputs, which is how "this change altered nothing" is verified.
+
+The sampler measurements come from ``tools/sampler_bench.py``, which needs
+``pip install -e .[bench]``. ``list`` names the problems, ``run --problem P1
+--sampler emcee -o before.json`` measures one, and ``compare before.json
+after.json`` reports the ratio together with the seed spread, declining to call
+a difference that falls inside it. Note that ``refactor_net.py`` cannot referee
+this work: its MCMC entries carry a few tenths of a standard deviation of chain
+noise at the step counts it uses, so only its deterministic entries mean
+anything here.
