@@ -38,6 +38,39 @@ simple_freq_re = re.compile(r"^d?F([0-9]+)")
 MAX_DEORBIT_ITERATIONS = 1000
 
 
+#: Event count above which the deorbiting loop is worth spreading over threads.
+#: Launching a numba parallel region is not free: measured on 10 cores with the
+#: ``workqueue`` threading layer it costs ~105 us before any work is done, and
+#: that is paid per call, whatever the array size. For the deorbit the crossing
+#: is here -- serial against parallel is 0.01x at one event, 0.12x at 100, 0.93x
+#: at 1000, 2.0x at 3000 and 6.6x at 200000.
+_DEORBIT_PARALLEL_MIN = 1000
+
+#: The same crossing for the phase polynomials, three orders of magnitude
+#: further out because they are memory-bound elementwise multiplies rather than
+#: an iteration: serial is 80x faster at 5000 events and 4.3x at 200000, and
+#: only starts to lose above roughly a million.
+_PHASE_PARALLEL_MIN = 1_000_000
+
+
+def _compile_variants(func, **flags):
+    """Compile one kernel body twice: threaded, and serial for small inputs.
+
+    numba turns ``prange`` into a plain ``range`` when ``parallel`` is off, so
+    both variants come from the same source and cannot drift apart. Verified
+    bitwise identical on the deorbit at every size from 1 to 200000 events --
+    ``fastmath`` reorders arithmetic, but it reorders it the same way in both.
+
+    Returns
+    -------
+    tuple of callable
+        ``(parallel, serial)``. Without numba both are the undecorated
+        function, and the size test below simply picks between two names for
+        the same thing.
+    """
+    return njit(parallel=True, **flags)(func), njit(**flags)(func)
+
+
 class NonInvertibleOrbitError(ValueError):
     """Raised when orbital parameters make arrival time non-invertible.
 
@@ -175,15 +208,8 @@ def phases_around_zero(phase):
     return ph
 
 
-@njit(fastmath=True, parallel=True)
-def simple_circular_deorbit_numba(
-    times, PB, A1, TASC, tolerance=1e-8, max_iter=MAX_DEORBIT_ITERATIONS
-):
-    """Iteratively remove circular-orbit delays from event times.
-
-    The iteration count is capped so that no input can make this loop run
-    forever; see :data:`MAX_DEORBIT_ITERATIONS` and :func:`orbit_is_invertible`.
-    """
+def _circular_deorbit(times, PB, A1, TASC, tolerance=1e-8, max_iter=MAX_DEORBIT_ITERATIONS):
+    """Body of :func:`simple_circular_deorbit_numba`; compiled both ways."""
     twopi = 2 * np.pi
     omega = twopi / PB
     out_times = np.empty_like(times)
@@ -202,6 +228,30 @@ def simple_circular_deorbit_numba(
             n_iter += 1
         out_times[i] += TASC
     return out_times
+
+
+_circular_deorbit_parallel, _circular_deorbit_serial = _compile_variants(
+    _circular_deorbit, fastmath=True
+)
+
+
+def simple_circular_deorbit_numba(
+    times, PB, A1, TASC, tolerance=1e-8, max_iter=MAX_DEORBIT_ITERATIONS
+):
+    """Iteratively remove circular-orbit delays from event times.
+
+    The iteration count is capped so that no input can make this loop run
+    forever; see :data:`MAX_DEORBIT_ITERATIONS` and :func:`orbit_is_invertible`.
+
+    Threads only above :data:`_DEORBIT_PARALLEL_MIN` events, below which
+    launching the parallel region costs more than the iteration it distributes.
+    """
+    kernel = (
+        _circular_deorbit_parallel
+        if times.size >= _DEORBIT_PARALLEL_MIN
+        else _circular_deorbit_serial
+    )
+    return kernel(times, PB, A1, TASC, tolerance, max_iter)
 
 
 def add_circular_orbit_numba(times, PB, A1, TASC):
@@ -267,8 +317,7 @@ def _ell1_shape(sin_phase, cos_phase, a1s, a1c, a2s, a2c, a3s, a3c):
     )
 
 
-@njit(fastmath=True, parallel=True)
-def simple_ell1_deorbit_numba(
+def _ell1_deorbit(
     times, PB, A1, TASC, EPS1, EPS2, tolerance=1e-8, max_iter=MAX_DEORBIT_ITERATIONS
 ):
     """Iteratively remove ELL1 orbital delays from event times.
@@ -312,6 +361,26 @@ def simple_ell1_deorbit_numba(
     return out_times
 
 
+_ell1_deorbit_parallel, _ell1_deorbit_serial = _compile_variants(_ell1_deorbit, fastmath=True)
+
+
+def simple_ell1_deorbit_numba(
+    times, PB, A1, TASC, EPS1, EPS2, tolerance=1e-8, max_iter=MAX_DEORBIT_ITERATIONS
+):
+    """Deorbit event times, threading only when there are enough of them.
+
+    See :func:`_ell1_deorbit` for the model and the iteration, and
+    :data:`_DEORBIT_PARALLEL_MIN` for where the two variants cross. The single
+    reference time that :func:`_calculate_phases` deorbits alongside each file's
+    events is the case this exists for: one element through the parallel kernel
+    cost 111 us, a hundred times what the arithmetic needs.
+    """
+    kernel = (
+        _ell1_deorbit_parallel if times.size >= _DEORBIT_PARALLEL_MIN else _ell1_deorbit_serial
+    )
+    return kernel(times, PB, A1, TASC, EPS1, EPS2, tolerance, max_iter)
+
+
 def add_ell1_orbit_numba(times, PB, A1, TASC, EPS1, EPS2):
     """Apply ELL1 orbital delays to times (forward model).
 
@@ -341,7 +410,6 @@ def _sec_to_mjd(met, mjdref):
     return met / 86400 + mjdref
 
 
-@njit(parallel=True)
 def _fast_phase_fdot(ts, mean_f, mean_fdot):
     """Spin phase from frequency and its first derivative.
 
@@ -356,7 +424,6 @@ def _fast_phase_fdot(ts, mean_f, mean_fdot):
 ONE_SIXTH = 1 / 6
 
 
-@njit(parallel=True)
 def _fast_phase_fddot(ts, mean_f, mean_fdot, mean_fddot):
     """Spin phase from frequency and its first two derivatives."""
     tssq = ts * ts
@@ -364,14 +431,12 @@ def _fast_phase_fddot(ts, mean_f, mean_fdot, mean_fddot):
     return phases
 
 
-@njit(parallel=True)
 def _fast_phase(ts, mean_f):
     """Spin phase from frequency alone, for a model with no derivatives."""
     phases = ts * mean_f
     return phases
 
 
-@njit(parallel=True)
 def _fast_phase_generic(times, frequency_derivatives):
     """Spin phase from an arbitrary number of frequency derivatives.
 
@@ -402,21 +467,40 @@ def _fast_phase_generic(times, frequency_derivatives):
     return ph
 
 
+_fast_phase_parallel, _fast_phase_serial = _compile_variants(_fast_phase)
+_fast_phase_fdot_parallel, _fast_phase_fdot_serial = _compile_variants(_fast_phase_fdot)
+_fast_phase_fddot_parallel, _fast_phase_fddot_serial = _compile_variants(_fast_phase_fddot)
+_fast_phase_generic_parallel, _fast_phase_generic_serial = _compile_variants(_fast_phase_generic)
+
+
 def fast_phase(times, frequency_derivatives):
-    """Calculate pulse phase from the frequency and its derivatives."""
+    """Calculate pulse phase from the frequency and its derivatives.
+
+    Dispatches on how many derivatives there are, and on how many times: these
+    are elementwise polynomials, so threading them repays its launch cost only
+    for very long files -- see :data:`_PHASE_PARALLEL_MIN`. The reference time
+    each file is folded against is a single element, and used to cost 108 us of
+    a 1.2 ms posterior evaluation.
+    """
+    threaded = times.size >= _PHASE_PARALLEL_MIN
+
     if len(frequency_derivatives) == 1:
-        return _fast_phase(times, frequency_derivatives[0])
+        kernel = _fast_phase_parallel if threaded else _fast_phase_serial
+        return kernel(times, frequency_derivatives[0])
     if len(frequency_derivatives) == 2:
-        return _fast_phase_fdot(times, frequency_derivatives[0], frequency_derivatives[1])
+        kernel = _fast_phase_fdot_parallel if threaded else _fast_phase_fdot_serial
+        return kernel(times, frequency_derivatives[0], frequency_derivatives[1])
     if len(frequency_derivatives) == 3:
-        return _fast_phase_fddot(
+        kernel = _fast_phase_fddot_parallel if threaded else _fast_phase_fddot_serial
+        return kernel(
             times,
             frequency_derivatives[0],
             frequency_derivatives[1],
             frequency_derivatives[2],
         )
 
-    return _fast_phase_generic(times, np.array(frequency_derivatives))
+    kernel = _fast_phase_generic_parallel if threaded else _fast_phase_generic_serial
+    return kernel(times, np.array(frequency_derivatives))
 
 
 def _calculate_phases(times_from_pepoch, parameters, tolerance=1e-8):
