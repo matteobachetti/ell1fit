@@ -328,9 +328,10 @@ unnormalised factors — harmless for MCMC, fatal for an integral. Every prior
 useful confirmation that nothing else was left open.
 
 **The unit-cube transform, not the log-prior, is what** :math:`\log Z`
-**integrates against.** ``tools/prior_transform.py`` builds it by inverting each
-prior's own CDF, so :math:`\log Z` is already the evidence under a normalised
-prior and no correction is ever applied afterwards. It is checked three ways: a
+**integrates against.** :mod:`ell1fit.prior_transform` builds it by inverting
+each prior's own CDF, so :math:`\log Z` is already the evidence under a
+normalised prior and no correction is ever applied afterwards. It is checked
+three ways: a
 constant likelihood must integrate to :math:`\log Z = 0`, measured
 :math:`-0.0037 \pm 0.0075`; each transform must be proportional to
 ``exp(logprior)`` as the package itself computes it; and a likelihood made
@@ -454,3 +455,13 @@ The evidence runs use the same harness: ``run --problem E1 --sampler nested
 --nlive 4000 --workers 8 --seeds 5 -o E1.json``, then ``bayes E1.json
 E0.json`` for the Bayes factor. ``bayes`` quotes the seed scatter, warns when
 any run failed the shortfall check, and reads ``Jeffreys`` off the result.
+
+Both ``--sampler nuts`` and ``--sampler nested`` are also available on the
+``ell1fit`` CLI itself, needing ``pip install ell1fit[nuts]`` or
+``ell1fit[nested]`` respectively. A Bayes factor from the CLI needs no
+orchestration beyond running it twice, with and without the eccentricity
+parameters in ``-P``, and subtracting the two runs' ``log_evidence`` fields --
+the harness's ``bayes`` subcommand exists to add the seed-scatter uncertainty
+on top, not because the subtraction itself needs machinery. The CLI's nested
+run is single-process, unlike the harness's pooled one, so it is slower at the
+same ``--nlive``.

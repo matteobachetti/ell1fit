@@ -136,6 +136,8 @@ def optimize_solution(
     outroots=("out",),
     reference_phases=None,
     sampler="emcee",
+    nlive=1000,
+    dlogz=0.1,
 ):
     """Optimize and sample pulsar timing parameters for multiple event files.
 
@@ -154,8 +156,16 @@ def optimize_solution(
         Which posterior-exploration backend to run. ``"emcee"`` (the default)
         is :func:`safe_run_sampler`, unchanged from before this parameter
         existed. ``"nuts"`` is :func:`ell1fit.nuts_sampling.run_nuts`, needing
-        ``pip install ell1fit[nuts]``. ``"nested"`` needs
-        ``pip install ell1fit[nested]`` and is not wired in yet.
+        ``pip install ell1fit[nuts]``. ``"nested"`` is
+        :func:`ell1fit.nested_sampling.run_nested`, needing
+        ``pip install ell1fit[nested]`` -- it is the only one of the three
+        that reports ``log_evidence``, which is what an eccentricity Bayes
+        factor needs and neither of the other two can give.
+    nlive, dlogz : optional
+        Only consulted when ``sampler="nested"``. Nested sampling can miss a
+        narrow mode entirely and still report a confident, wrong evidence, so
+        ``nlive`` matters more than it looks like it should -- see
+        :data:`ell1fit.nested_sampling.PEAK_SHORTFALL_GATE`.
     reference_phases : list of np.ndarray or None, optional
         Phases to draw in the left-hand panel of the comparison phaseograms --
         the "before" of a before-and-after. Pass the phases of the solution the
@@ -250,10 +260,22 @@ def optimize_solution(
             labels=["d" + par for par in fit_parameter_names],
             corner_labels=corner_labels,
         )
-    else:
-        raise NotImplementedError(
-            f"sampler={sampler!r} is not wired into the pipeline yet; only 'emcee' and 'nuts' are."
+    elif sampler == "nested":
+        from .nested_sampling import run_nested
+
+        results = run_nested(
+            observations,
+            setup,
+            func_to_maximize,
+            fit_pars,
+            outroot=outroots[-1],
+            labels=["d" + par for par in fit_parameter_names],
+            corner_labels=corner_labels,
+            nlive=nlive,
+            dlogz=dlogz,
         )
+    else:
+        raise NotImplementedError(f"sampler={sampler!r} is not a known sampler.")
 
     results.update(parameters)
     results = _augment_results_with_fit_metadata(

@@ -464,6 +464,8 @@ def ell1fit(
     ignore_uncertainties=False,
     template_iterations=1,
     sampler="emcee",
+    nlive=1000,
+    dlogz=0.1,
 ):
     """Fit spin and ELL1 orbital parameters from one or more event files.
 
@@ -517,6 +519,9 @@ def ell1fit(
         :mod:`ell1fit.refinement`.
     sampler : {"emcee", "nuts", "nested"}, optional
         Posterior-exploration backend -- see
+        :func:`ell1fit.fitting.optimize_solution`.
+    nlive, dlogz : optional
+        Only consulted when ``sampler="nested"`` -- see
         :func:`ell1fit.fitting.optimize_solution`.
 
     Returns
@@ -690,6 +695,8 @@ def ell1fit(
         outroots=outroots,
         reference_phases=reference_phases,
         sampler=sampler,
+        nlive=nlive,
+        dlogz=dlogz,
     )
     results["template_iterations"] = template_iterations
     results["template_passes_run"] = len(refinement_history)

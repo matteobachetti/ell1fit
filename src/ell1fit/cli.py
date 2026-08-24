@@ -119,8 +119,25 @@ def main(args=None):
         help=(
             "Posterior-exploration backend. 'emcee' (default) is always available. "
             "'nuts' and 'nested' need extra dependencies: pip install ell1fit[nuts] "
-            "or ell1fit[nested]."
+            "or ell1fit[nested]. Only 'nested' produces log_evidence, which is what "
+            "a model-comparison Bayes factor needs."
         ),
+    )
+    parser.add_argument(
+        "--nlive",
+        type=int,
+        default=1000,
+        help=(
+            "Live points for --sampler nested. Ignored otherwise. Nested sampling "
+            "can miss a narrow mode and still report a confident, wrong evidence, "
+            "so raise this well past the default on anything but a small fit."
+        ),
+    )
+    parser.add_argument(
+        "--dlogz",
+        type=float,
+        default=0.1,
+        help="Evidence-remaining stopping criterion for --sampler nested. Ignored otherwise.",
     )
 
     args = parser.parse_args(args)
@@ -147,6 +164,8 @@ def main(args=None):
         ignore_uncertainties=args.ignore_uncertainties,
         template_iterations=args.template_iterations,
         sampler=args.sampler,
+        nlive=args.nlive,
+        dlogz=args.dlogz,
     )
 
 

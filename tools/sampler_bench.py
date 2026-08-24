@@ -959,67 +959,31 @@ def run_nuts(
 def split_loglikelihood(problem):
     """Separate the log-likelihood from the log-prior.
 
-    Every other sampler here takes ``logprior + loglikelihood`` together, because
-    an MCMC only ever looks at differences of it. Nested sampling cannot: it
-    draws from the prior through :mod:`prior_transform` and integrates the
-    likelihood against it, so handing it the posterior would count the prior
-    twice -- and would count the *unnormalised* version of it at that, since
-    ``ell1fit.priors._flat_logprior`` returns 0 rather than ``-log(width)``.
-
-    Subtracting is deliberate rather than rebuilding the likelihood from
-    :func:`ell1fit.likelihoods.pletsch_clarke_likelihood` directly. The
-    subtraction reuses the package's own composition, including its handling of
-    a non-invertible orbit, so there is no second copy of that logic to drift.
-    It costs one extra log-prior evaluation per call -- tens of microseconds
-    against hundreds -- which is the right side of the trade when the
-    alternative risks integrating a likelihood the package would not recognise.
+    Thin wrapper around :func:`ell1fit.nested_sampling.split_loglikelihood`,
+    which the production ``--sampler nested`` path also calls -- one copy of
+    the composition, so there is nothing here that can drift from it.
     """
-    from ell1fit.posterior import _build_posterior_functions
+    from ell1fit.nested_sampling import split_loglikelihood as _split
 
-    logprior, _, _ = _build_posterior_functions(problem.observations, problem.setup)
-    logpost = problem.logpost
-
-    def loglikelihood(position):
-        prior = logprior(position)
-        if not np.isfinite(prior):
-            # Outside the prior's support the likelihood is never consulted, and
-            # ``-inf - -inf`` would be a NaN that dynesty cannot interpret.
-            return -np.inf
-        posterior = logpost(position)
-        if not np.isfinite(posterior):
-            # A non-invertible orbit, which the posterior rejects outright.
-            return -np.inf
-        return posterior - prior
-
-    return loglikelihood, logprior
+    return _split(problem.observations, problem.setup, problem.logpost)
 
 
 def check_loglikelihood_split(problem, loglikelihood, logprior, n_probes=32, seed=90212):
     """Confirm the split recomposes into the posterior it came from.
 
-    Probes are drawn from the prior itself rather than around the peak: that is
-    where nested sampling spends most of its evaluations, and it is the region a
-    check centred on the MAP would never visit.
+    Thin wrapper around :func:`ell1fit.nested_sampling.check_loglikelihood_split`.
     """
-    import prior_transform
+    from ell1fit.nested_sampling import check_loglikelihood_split as _check
 
-    transform, _ = prior_transform.build_prior_transform(problem.setup, check=False)
-    rng = np.random.default_rng(seed)
-    worst = 0.0
-    compared = 0
-    for _ in range(n_probes):
-        position = transform(rng.random(problem.ndim))
-        recomposed = loglikelihood(position) + logprior(position)
-        reference = problem.logpost(position)
-        if not np.isfinite(reference):
-            continue
-        compared += 1
-        worst = max(worst, abs(recomposed - reference))
-    if compared == 0:
-        raise AssertionError("Every probe drawn from the prior had an infinite posterior")
-    if worst > 1e-9:
-        raise AssertionError(f"Log-likelihood split does not recompose: worst {worst:.3e}")
-    return {"probes_compared": compared, "worst_recomposition_error": worst}
+    return _check(
+        problem.setup,
+        problem.start,
+        problem.logpost,
+        loglikelihood,
+        logprior,
+        n_probes=n_probes,
+        seed=seed,
+    )
 
 
 #: Built once per worker, lazily, from :data:`_WORKER_PROBLEM`.
@@ -1070,7 +1034,7 @@ def run_nested(
     import dynesty
     from dynesty.utils import resample_equal
 
-    import prior_transform
+    from ell1fit import prior_transform
 
     started = time.perf_counter()
     transform, omitted_log_normalisation = prior_transform.build_prior_transform(problem.setup)
