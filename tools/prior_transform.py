@@ -37,7 +37,7 @@ CHECK_GRID = np.linspace(1e-4, 1 - 1e-4, 401)
 def _prior_parameters(func):
     """Read a prior closure's constants by name.
 
-    The same trick :mod:`jax_posterior` uses, and carrying the same caveat: it
+    The same trick :mod:`ell1fit.nuts_sampling` uses, and carrying the same caveat: it
     is only as stable as the free-variable names in :mod:`ell1fit.priors`,
     which is why every transform built here is then checked numerically against
     the prior it claims to invert.

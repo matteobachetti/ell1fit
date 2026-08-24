@@ -39,14 +39,25 @@ docs = [
     "sphinx",
     "sphinx-astropy",
 ]
+# Nothing the base package installs or imports at runtime needs jax, numpyro,
+# dynesty, or arviz -- every import of them is lazy, gated behind the CLI flag
+# or tool that actually needs one.
+#
+# ``ell1fit --sampler nuts`` backs its gradient on JAX/numpyro: nothing in the
+# numba posterior yields a gradient, so ell1fit.nuts_sampling rebuilds it in
+# JAX. ``--sampler nested`` backs on dynesty, for the evidence rather than the
+# speed -- an eccentricity Bayes factor needs log Z, which neither an ensemble
+# nor NUTS produces.
+nuts = [
+    "jax",
+    "numpyro",
+]
+nested = [
+    "dynesty",
+]
 # For tools/sampler_bench.py only. ArviZ provides the rank-normalized ESS,
-# R-hat and Monte Carlo standard errors that referee the sampler comparisons.
-# JAX and numpyro back ``--sampler nuts``: nothing in the numba posterior
-# yields a gradient, so tools/jax_posterior.py rebuilds it in JAX for the
-# gradient sampler to use. dynesty backs ``--sampler nested``, which is there for
-# the evidence rather than for speed -- an eccentricity Bayes factor needs log Z,
-# and neither an ensemble nor NUTS produces one. Nothing the package installs or
-# imports at runtime needs any of them.
+# R-hat and Monte Carlo standard errors that referee the sampler comparisons;
+# the rest duplicate the two extras above so the harness installs in one shot.
 bench = [
     "arviz",
     "dynesty",

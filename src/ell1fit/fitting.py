@@ -142,8 +142,7 @@ def optimize_solution(
     Workflow:
     1. Build a posterior from priors + profile likelihood.
     2. Optionally run deterministic minimization for a starting point.
-    3. Run MCMC with :func:`safe_run_sampler` (or another backend -- see
-       ``sampler``).
+    3. Run MCMC with :func:`safe_run_sampler`, or another backend -- see ``sampler``.
     4. Produce diagnostic phaseogram comparisons and return summary fields.
 
     Parameters are handled in local coordinates: for each fitted parameter,
@@ -154,9 +153,9 @@ def optimize_solution(
     sampler : {"emcee", "nuts", "nested"}, optional
         Which posterior-exploration backend to run. ``"emcee"`` (the default)
         is :func:`safe_run_sampler`, unchanged from before this parameter
-        existed. ``"nuts"`` and ``"nested"`` need their own optional
-        dependencies (``pip install ell1fit[nuts]`` / ``ell1fit[nested]``) and
-        are not wired in yet.
+        existed. ``"nuts"`` is :func:`ell1fit.nuts_sampling.run_nuts`, needing
+        ``pip install ell1fit[nuts]``. ``"nested"`` needs
+        ``pip install ell1fit[nested]`` and is not wired in yet.
     reference_phases : list of np.ndarray or None, optional
         Phases to draw in the left-hand panel of the comparison phaseograms --
         the "before" of a before-and-after. Pass the phases of the solution the
@@ -239,9 +238,21 @@ def optimize_solution(
             labels=["d" + par for par in fit_parameter_names],
             corner_labels=corner_labels,
         )
+    elif sampler == "nuts":
+        from .nuts_sampling import run_nuts
+
+        results = run_nuts(
+            observations,
+            setup,
+            func_to_maximize,
+            fit_pars,
+            outroot=outroots[-1],
+            labels=["d" + par for par in fit_parameter_names],
+            corner_labels=corner_labels,
+        )
     else:
         raise NotImplementedError(
-            f"sampler={sampler!r} is not wired into the pipeline yet; only 'emcee' is."
+            f"sampler={sampler!r} is not wired into the pipeline yet; only 'emcee' and 'nuts' are."
         )
 
     results.update(parameters)

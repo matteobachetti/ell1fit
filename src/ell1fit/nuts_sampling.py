@@ -6,8 +6,14 @@ Why this exists
 the right shape for a sampler that only ever asks for values -- emcee -- but
 NUTS asks for *gradients*, and nothing in the numba path can supply them. This
 module rebuilds the same posterior out of JAX primitives so that
-``jax.grad`` works on it, and ``tools/sampler_bench.py`` can put a gradient
-sampler on the same footing as the ensemble ones.
+``jax.grad`` works on it. :func:`run_nuts` is what ``--sampler nuts`` calls;
+``tools/sampler_bench.py`` puts the same rebuild through its own adapter so a
+gradient sampler can be measured on the same footing as the ensemble ones.
+
+Nothing here is imported at package load time -- every function that needs
+``jax`` or ``numpyro`` imports them lazily, so the base ``ell1fit`` install
+does not require either. ``run_nuts`` raises a clear ``ImportError`` pointing
+at ``pip install ell1fit[nuts]`` if they are missing.
 
 It is a **reimplementation, not a wrapper**, and that is the risk it carries:
 two expressions of one model can drift apart silently. Two things hold them
@@ -15,7 +21,7 @@ together. :func:`check_against_numba` compares the two log-posteriors at fixed
 probe positions, and :func:`check_gradient` compares this module's analytic
 gradient against finite differences of the *numba* posterior -- so the gradient
 is checked against the original implementation rather than against itself.
-Both are run by ``sampler_bench.py`` before any NUTS run, and both are cheap.
+:func:`run_nuts` runs both before sampling, and both are cheap.
 
 What is deliberately different
 ------------------------------
@@ -259,7 +265,7 @@ def _translate_prior(jnp, func, probe_values):
     else:
         raise NotImplementedError(
             f"No JAX translation for log-prior {qualname!r}. Add one in "
-            "tools/jax_posterior.py rather than letting the sampler run "
+            "ell1fit/nuts_sampling.py rather than letting the sampler run "
             "against a prior it does not implement."
         )
 
@@ -295,7 +301,7 @@ def build_jax_logpost(observations, setup, jit=True):
     import jax.numpy as jnp
     from jax import lax
 
-    from ell1fit.templates import UniformCubicTemplate
+    from .templates import UniformCubicTemplate
 
     parameters = setup.parameters
     names = list(setup.parameter_names)
@@ -405,7 +411,7 @@ def build_jax_logpost(observations, setup, jit=True):
     return jax.jit(logpost) if jit else logpost
 
 
-def check_against_numba(problem, n_probes=24, jitter=None, seed=90210):
+def check_against_numba(observations, setup, start, logpost, n_probes=24, jitter=None, seed=90210):
     """Check the JAX rebuild reproduces the numba posterior it stands in for.
 
     Probes at the starting point and at ``n_probes`` positions jittered around
@@ -413,6 +419,12 @@ def check_against_numba(problem, n_probes=24, jitter=None, seed=90210):
     order one -- in local coordinates one unit is a million sigma, so a probe
     ball of radius one lands outside every prior and would compare two ways of
     saying ``-inf``.
+
+    Parameters
+    ----------
+    logpost : callable
+        The numba posterior being stood in for -- ``func_to_maximize`` from
+        :func:`ell1fit.posterior._build_posterior_functions`.
 
     Returns
     -------
@@ -432,17 +444,16 @@ def check_against_numba(problem, n_probes=24, jitter=None, seed=90210):
     iteration's tolerance does not move it, which is what identifies it as
     rounding rather than an unconverged loop.
     """
-    from ell1fit.scaling import TARGET_LOCAL_SIGMA
+    from .scaling import TARGET_LOCAL_SIGMA
 
     if jitter is None:
         jitter = TARGET_LOCAL_SIGMA
+    ndim = len(start)
     rng = np.random.default_rng(seed)
-    probes = np.vstack(
-        [problem.start, problem.start + jitter * rng.normal(size=(n_probes, problem.ndim))]
-    )
+    probes = np.vstack([start, start + jitter * rng.normal(size=(n_probes, ndim))])
 
-    logpost_jax = build_jax_logpost(problem.observations, problem.setup)
-    reference = np.array([float(problem.logpost(p)) for p in probes])
+    logpost_jax = build_jax_logpost(observations, setup)
+    reference = np.array([float(logpost(p)) for p in probes])
     rebuilt = np.array([float(logpost_jax(p)) for p in probes])
     return {
         "n_probes": int(probes.shape[0]),
@@ -451,7 +462,7 @@ def check_against_numba(problem, n_probes=24, jitter=None, seed=90210):
     }
 
 
-def check_gradient(problem, n_probes=4, jitter=None, seed=90211):
+def check_gradient(observations, setup, start, n_probes=4, jitter=None, seed=90211):
     """Check ``jax.grad`` of the rebuilt posterior against central differences.
 
     Differenced against **this module's own** log-posterior rather than the
@@ -466,16 +477,15 @@ def check_gradient(problem, n_probes=4, jitter=None, seed=90211):
     """
     import jax
 
-    from ell1fit.scaling import TARGET_LOCAL_SIGMA
+    from .scaling import TARGET_LOCAL_SIGMA
 
     if jitter is None:
         jitter = TARGET_LOCAL_SIGMA
+    ndim = len(start)
     rng = np.random.default_rng(seed)
-    probes = np.vstack(
-        [problem.start, problem.start + jitter * rng.normal(size=(n_probes, problem.ndim))]
-    )
+    probes = np.vstack([start, start + jitter * rng.normal(size=(n_probes, ndim))])
 
-    logpost_jax = build_jax_logpost(problem.observations, problem.setup)
+    logpost_jax = build_jax_logpost(observations, setup)
     gradient = jax.jit(jax.grad(logpost_jax))
     step = 0.01 * jitter
 
@@ -483,11 +493,151 @@ def check_gradient(problem, n_probes=4, jitter=None, seed=90211):
     for probe in probes:
         analytic = np.asarray(gradient(probe))
         differenced = np.empty_like(analytic)
-        for k in range(problem.ndim):
+        for k in range(ndim):
             ahead, behind = probe.copy(), probe.copy()
             ahead[k] += step
             behind[k] -= step
             differenced[k] = (float(logpost_jax(ahead)) - float(logpost_jax(behind))) / (2 * step)
         floor = 1e-6 * np.max(np.abs(analytic))
-        worst = max(worst, np.max(np.abs(analytic - differenced) / np.maximum(np.abs(differenced), floor)))
+        worst = max(
+            worst, np.max(np.abs(analytic - differenced) / np.maximum(np.abs(differenced), floor))
+        )
     return {"n_probes": int(probes.shape[0]), "worst_relative_difference": float(worst)}
+
+
+def run_nuts(
+    observations,
+    setup,
+    func_to_maximize,
+    starting_pars,
+    outroot="chain_results",
+    labels=None,
+    corner_labels=None,
+    draws=4000,
+    chains=4,
+    target_accept=0.8,
+    max_tree_depth=10,
+    rhat_gate=1.01,
+    seed=None,
+):
+    """Run NUTS (numpyro) against the JAX rebuild, and summarize like emcee.
+
+    The production counterpart of :func:`ell1fit.mcmc_utils.safe_run_sampler`,
+    called when ``optimize_solution(..., sampler="nuts")``. Two things it does
+    *not* do, both worth knowing before reaching for it:
+
+    - **No checkpointing.** ``safe_run_sampler`` resumes from an HDF5 backend
+      because an ensemble chain can need hundreds of thousands of steps.
+      NUTS needs far fewer -- 202 ESS/s against 69.5 on the benchmark's small
+      problem -- so a single run is the v1 design; there is no equivalent of
+      ``outroot + '.h5'`` here yet.
+    - **No adaptive re-run.** ``safe_run_sampler`` keeps sampling until its
+      autocorrelation-based convergence check passes or ``max_n`` is spent.
+      This runs exactly ``draws`` per chain, once, and reports whatever R-hat
+      that reached -- logged as a warning, not retried, if it is above
+      ``rhat_gate``.
+
+    ``draws`` is total per chain, split evenly between warm-up and kept
+    samples -- the same convention ``tools/sampler_bench.py`` uses, and not
+    the same quantity as ``--nsteps`` (which sizes the emcee ensemble and is
+    tuned for its much larger calls-per-effective-sample).
+
+    Before sampling, :func:`check_against_numba` and :func:`check_gradient`
+    verify this JAX rebuild against the numba posterior it stands in for;
+    their results are logged and returned as ``jax_agreement`` /
+    ``jax_gradient_check`` so a silent drift between the two implementations
+    is visible in the output rather than only in a log file.
+
+    Returns
+    -------
+    dict
+        Same shape as :func:`ell1fit.mcmc_utils.calculate_result_array_from_samples`
+        (``label_p`` percentiles, ``date``, ``nsamples``), plus ``rhat_max``,
+        ``divergences``, and the two verification results above.
+    """
+    import logging
+
+    try:
+        import jax
+        import jax.numpy as jnp
+        from numpyro.diagnostics import summary
+        from numpyro.infer import MCMC, NUTS
+    except ImportError as exc:
+        raise ImportError(
+            "sampler='nuts' needs jax and numpyro: pip install ell1fit[nuts]"
+        ) from exc
+
+    from .mcmc_utils import plot_mcmc_results
+
+    starting_pars = np.asarray(starting_pars)
+    ndim = len(starting_pars)
+    if labels is None:
+        labels = list(map(r"$\theta_{{{0}}}$".format, range(1, ndim + 1)))
+
+    enable_x64()
+    agreement = check_against_numba(observations, setup, starting_pars, func_to_maximize)
+    derivative = check_gradient(observations, setup, starting_pars)
+    logging.info(f"JAX/numba agreement check: {agreement}")
+    logging.info(f"JAX gradient check: {derivative}")
+
+    logpost = build_jax_logpost(observations, setup)
+
+    def potential(position):
+        return -logpost(position)
+
+    seed = np.random.default_rng().integers(2**31) if seed is None else seed
+    rng = np.random.default_rng(seed)
+    start = starting_pars + rng.normal(0.0, 1e-6, size=(chains, ndim))
+
+    warmup = draws // 2
+    kept = draws - warmup
+    kernel = NUTS(
+        potential_fn=potential,
+        target_accept_prob=target_accept,
+        max_tree_depth=max_tree_depth,
+    )
+    mcmc = MCMC(
+        kernel,
+        num_warmup=warmup,
+        num_samples=kept,
+        num_chains=chains,
+        chain_method="sequential",
+        progress_bar=False,
+    )
+    key = jax.random.PRNGKey(seed)
+    mcmc.run(key, init_params=jnp.asarray(start), extra_fields=("diverging",))
+    chain_samples = np.asarray(mcmc.get_samples(group_by_chain=True))
+    diverging = np.asarray(mcmc.get_extra_fields()["diverging"])
+
+    rhat = summary(chain_samples)["Param:0"]["r_hat"]
+    rhat_max = float(np.max(rhat))
+    if rhat_max >= rhat_gate:
+        logging.warning(
+            f"NUTS R-hat {rhat_max:.4f} did not clear the gate ({rhat_gate}) after "
+            f"{draws} draws on {chains} chains; the posterior below may be under-sampled."
+        )
+
+    flat_samples = chain_samples.reshape(-1, ndim)
+    result_dict = {}
+    percs = [1, 10, 16, 50, 84, 90, 99]
+    for i in range(ndim):
+        mcmc_percentiles = np.percentile(flat_samples[:, i], percs)
+        for i_p, p in enumerate(percs):
+            result_dict[labels[i] + f"_{p:g}"] = mcmc_percentiles[i_p]
+
+    from astropy.time import Time
+
+    result_dict["date"] = Time.now().mjd
+    result_dict["nsamples"] = flat_samples.shape[0]
+    result_dict["rhat_max"] = rhat_max
+    result_dict["divergences"] = int(np.sum(diverging))
+    result_dict["jax_agreement"] = agreement
+    result_dict["jax_gradient_check"] = derivative
+
+    plot_mcmc_results(
+        flat_samples=flat_samples,
+        labels=corner_labels or labels,
+        fname=outroot + "_corner.jpg",
+    )
+
+    return result_dict

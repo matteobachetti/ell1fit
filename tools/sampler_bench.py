@@ -813,8 +813,8 @@ def run_nuts(
 
     The other adapters here hand a sampler the very function the pipeline
     evaluates. This one cannot: nothing in the numba path yields a gradient, so
-    ``tools/jax_posterior.py`` rebuilds the posterior out of JAX primitives and
-    NUTS samples *that*. The rebuild is a second expression of one model and
+    :mod:`ell1fit.nuts_sampling` rebuilds the posterior out of JAX primitives
+    and NUTS samples *that*. The rebuild is a second expression of one model and
     could drift from the first, so both checks in that module run here, before
     any sampling, and their results are recorded with the run.
 
@@ -855,17 +855,19 @@ def run_nuts(
     import jax
     import jax.numpy as jnp
 
-    import jax_posterior
+    from ell1fit import nuts_sampling
 
-    jax_posterior.enable_x64()
+    nuts_sampling.enable_x64()
     from numpyro.infer import MCMC, NUTS
 
     from ell1fit.scaling import TARGET_LOCAL_SIGMA
 
     started = time.perf_counter()
-    logpost = jax_posterior.build_jax_logpost(problem.observations, problem.setup)
-    agreement = jax_posterior.check_against_numba(problem)
-    derivative = jax_posterior.check_gradient(problem)
+    logpost = nuts_sampling.build_jax_logpost(problem.observations, problem.setup)
+    agreement = nuts_sampling.check_against_numba(
+        problem.observations, problem.setup, problem.start, problem.logpost
+    )
+    derivative = nuts_sampling.check_gradient(problem.observations, problem.setup, problem.start)
 
     def potential(position):
         return -logpost(position)

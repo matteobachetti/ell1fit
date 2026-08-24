@@ -219,9 +219,10 @@ Gradient-based sampling
 
 An ensemble sampler asks only for the value of the log-posterior. NUTS also
 asks which way is uphill, and nothing in the compiled path yields a gradient, so
-``tools/jax_posterior.py`` rebuilds the log-posterior from JAX primitives for
-``tools/sampler_bench.py --sampler nuts``. **This is benchmark-side only; the
-pipeline samples with emcee.**
+:mod:`ell1fit.nuts_sampling` rebuilds the log-posterior from JAX primitives.
+Both ``ell1fit --sampler nuts`` and ``tools/sampler_bench.py --sampler nuts``
+use the same rebuild; the CLI needs ``pip install ell1fit[nuts]`` for it,
+since the base install does not pull in JAX or numpyro.
 
 .. list-table:: Ensemble against NUTS, four chains
    :header-rows: 1
