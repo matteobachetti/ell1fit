@@ -43,10 +43,13 @@ docs = [
 # R-hat and Monte Carlo standard errors that referee the sampler comparisons.
 # JAX and numpyro back ``--sampler nuts``: nothing in the numba posterior
 # yields a gradient, so tools/jax_posterior.py rebuilds it in JAX for the
-# gradient sampler to use. Nothing the package installs or imports at runtime
-# needs any of them.
+# gradient sampler to use. dynesty backs ``--sampler nested``, which is there for
+# the evidence rather than for speed -- an eccentricity Bayes factor needs log Z,
+# and neither an ensemble nor NUTS produces one. Nothing the package installs or
+# imports at runtime needs any of them.
 bench = [
     "arviz",
+    "dynesty",
     "jax",
     "numpyro",
 ]

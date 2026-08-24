@@ -117,6 +117,7 @@ import dataclasses
 import io
 import json
 import logging
+import math
 import multiprocessing
 import os
 import shutil
@@ -136,6 +137,11 @@ RHAT_GATE = 1.01
 #: has to mean the same thing for every sampler; the discarded time is still
 #: charged to the run.
 DISCARD_FRACTION = 0.5
+
+#: How far a nested run's best log-likelihood may fall short of the optimizer's
+#: before its evidence is declared untrustworthy, in nats. A converged run gets
+#: within a fraction of a nat; a run that missed the mode is short by tens.
+PEAK_SHORTFALL_GATE = 1.0
 
 #: Quantiles summarised for the credible-interval agreement check.
 QUANTILES = (0.16, 0.5, 0.84)
@@ -160,6 +166,15 @@ class ProblemSpec:
     nharm: int = 2
     default_steps: int = 2000
     use_weight: bool = False
+    #: Whether the *injected* solution has a non-zero eccentricity. This changes
+    #: the events, so it is part of the dataset's cache key.
+    injected_eccentricity: bool = True
+    #: Whether the *parfile* claims that eccentricity. Setting this ``False``
+    #: rewrites ``EPS1``/``EPS2`` to zero without touching the data, which is
+    #: what lets an eccentric-orbit hypothesis and a circular one be compared on
+    #: the same events, from the same starting model, differing in nothing but
+    #: which parameters are free.
+    parfile_eccentricity: bool = True
 
 
 PROBLEMS = {
@@ -197,6 +212,63 @@ PROBLEMS = {
         default_steps=4000,
     ),
 }
+
+
+#: The eccentricity-detection experiment, as four evidences forming two Bayes
+#: factors. ``E*`` are fitted to data generated *with* eccentricity and ``C*`` to
+#: data generated without it; ``*1`` frees ``EPS1``/``EPS2`` and ``*0`` holds the
+#: orbit circular. ``log Z(E1) - log Z(E0)`` is the detection, and
+#: ``log Z(C1) - log Z(C0)`` is the control that says whether it is calibrated:
+#: a Bayes factor that finds eccentricity in circular data is measuring the
+#: machinery, not the orbit.
+#:
+#: Every one of the four writes ``EPS1 = EPS2 = 0`` into its parfile, so all four
+#: start from the same circular model and the eccentric ones have to find the
+#: signal in the data. 3 x 5000 events puts the injected eccentricity at 11.9
+#: sigma by the curvature at the peak -- a firm detection, and an order of
+#: magnitude cheaper per likelihood call than P3, which matters when the run
+#: takes 10^5 to 10^6 of them.
+_EVIDENCE = dict(
+    n_events=5_000,
+    epoch_offsets=(0.0, 37.0, 91.0),
+    parfile_eccentricity=False,
+    default_steps=0,
+)
+_ECCENTRIC_PARAMETERS = ("A1", "EPS1", "EPS2", "F0", "TASC")
+_CIRCULAR_PARAMETERS = ("A1", "F0", "TASC")
+
+PROBLEMS.update(
+    {
+        "E1": ProblemSpec(
+            name="E1",
+            doc="evidence: eccentric data, eccentric model (EPS1/EPS2 free)",
+            fit_parameters=_ECCENTRIC_PARAMETERS,
+            injected_eccentricity=True,
+            **_EVIDENCE,
+        ),
+        "E0": ProblemSpec(
+            name="E0",
+            doc="evidence: eccentric data, circular model (EPS1/EPS2 held at 0)",
+            fit_parameters=_CIRCULAR_PARAMETERS,
+            injected_eccentricity=True,
+            **_EVIDENCE,
+        ),
+        "C1": ProblemSpec(
+            name="C1",
+            doc="control: circular data, eccentric model (EPS1/EPS2 free)",
+            fit_parameters=_ECCENTRIC_PARAMETERS,
+            injected_eccentricity=False,
+            **_EVIDENCE,
+        ),
+        "C0": ProblemSpec(
+            name="C0",
+            doc="control: circular data, circular model (EPS1/EPS2 held at 0)",
+            fit_parameters=_CIRCULAR_PARAMETERS,
+            injected_eccentricity=False,
+            **_EVIDENCE,
+        ),
+    }
+)
 
 
 @dataclasses.dataclass
@@ -272,10 +344,14 @@ def machine_configuration():
 
 def _cache_dir(spec):
     """Directory holding the generated event and parameter files for a problem."""
+    # The injected eccentricity changes the events and so belongs in the key;
+    # the parfile's eccentricity does not, because it is rewritten at build time
+    # and both models are meant to read the same cached dataset.
+    orbit = "ecc" if spec.injected_eccentricity else "circ"
     return os.path.join(
         tempfile.gettempdir(),
         "ell1fit_sampler_bench",
-        f"{spec.name}_{spec.n_events}_{len(spec.epoch_offsets)}_{DATA_SEED}",
+        f"{spec.name}_{spec.n_events}_{len(spec.epoch_offsets)}_{orbit}_{DATA_SEED}",
     )
 
 
@@ -286,7 +362,9 @@ def _ensure_dataset(spec):
     the same dataset. Regenerating 200k events per epoch on every repetition
     would otherwise dominate the measurement's own runtime.
     """
-    from ell1fit.tests.datagen import make_multi_epoch_dataset
+    import dataclasses as _dataclasses
+
+    from ell1fit.tests.datagen import InjectedSolution, make_multi_epoch_dataset
 
     directory = _cache_dir(spec)
     marker = os.path.join(directory, "COMPLETE")
@@ -296,8 +374,12 @@ def _ensure_dataset(spec):
 
     shutil.rmtree(directory, ignore_errors=True)
     os.makedirs(directory, exist_ok=True)
+    solution = InjectedSolution()
+    if not spec.injected_eccentricity:
+        solution = _dataclasses.replace(solution, EPS1=0.0, EPS2=0.0)
     dataset = make_multi_epoch_dataset(
         directory,
+        solution=solution,
         epoch_offsets=spec.epoch_offsets,
         n_events=spec.n_events,
         seed=DATA_SEED,
@@ -309,6 +391,33 @@ def _ensure_dataset(spec):
     with open(marker, "w") as handle:
         json.dump(payload, handle)
     return payload
+
+
+def _circularize_parfiles(parfiles, directory):
+    """Copy parfiles into ``directory`` with ``EPS1``/``EPS2`` set to zero.
+
+    The circular hypothesis is "the orbit has no eccentricity", so its model has
+    to *say* zero, not hold whatever the parfile happened to record. Rewriting a
+    copy rather than generating a second dataset is deliberate: the eccentric and
+    circular models then run against byte-identical event files, and the only
+    difference between the two evidences is the model.
+    """
+    rewritten = []
+    for index, source in enumerate(parfiles):
+        with open(source) as handle:
+            lines = handle.readlines()
+        out = []
+        for line in lines:
+            if line.split()[:1] and line.split()[0] in ("EPS1", "EPS2"):
+                name = line.split()[0]
+                out.append(f"{name:<20} 0\n")
+            else:
+                out.append(line)
+        target = os.path.join(directory, f"circular_{index}.par")
+        with open(target, "w") as handle:
+            handle.writelines(out)
+        rewritten.append(target)
+    return rewritten
 
 
 def _centre_phases(observations, setup):
@@ -371,6 +480,8 @@ def build_problem(spec, verbose=False):
 
     workdir = tempfile.mkdtemp(prefix="sampler_bench_build_")
     try:
+        if not spec.parfile_eccentricity:
+            parfiles = _circularize_parfiles(parfiles, workdir)
         model, pepoch, ref_model = _load_and_validate_models(parfiles)
         nbin = max(32, spec.nharm * 8)
         requested = sorted(spec.fit_parameters)
@@ -590,9 +701,7 @@ def run_emcee(problem, seed, steps, moves="stretch", jitter=1e-6, nwalkers=None,
         # reconstructed below from what the moves provably do.
         logpost = _worker_logpost
 
-    sampler = emcee.EnsembleSampler(
-        nwalkers, ndim, logpost, moves=MOVES[moves](), pool=pool
-    )
+    sampler = emcee.EnsembleSampler(nwalkers, ndim, logpost, moves=MOVES[moves](), pool=pool)
     # ``rng`` above seeds only the initial ball. The proposals come from
     # somewhere else entirely: ``EnsembleSampler.__init__`` copies the *global*
     # legacy numpy RNG into a private ``RandomState``, and nothing here sets
@@ -772,9 +881,7 @@ def run_nuts(
 
     # ``identity`` is numpyro's own default and is kept as the control: it is
     # what makes "seeding the mass matrix helps" a claim that can fail.
-    inverse_mass = (
-        None if mass == "identity" else np.full(problem.ndim, TARGET_LOCAL_SIGMA**2)
-    )
+    inverse_mass = None if mass == "identity" else np.full(problem.ndim, TARGET_LOCAL_SIGMA**2)
     kernel = NUTS(
         potential_fn=potential,
         inverse_mass_matrix=inverse_mass,
@@ -811,6 +918,7 @@ def run_nuts(
     sample_seconds = time.perf_counter() - started
 
     fields = mcmc.get_extra_fields(group_by_chain=True)
+
     # One leapfrog step is one evaluation of the potential and its gradient.
     def _total(field):
         return int(np.sum(np.asarray(warmup_fields[field]))) + int(
@@ -846,10 +954,225 @@ def run_nuts(
     )
 
 
+def split_loglikelihood(problem):
+    """Separate the log-likelihood from the log-prior.
+
+    Every other sampler here takes ``logprior + loglikelihood`` together, because
+    an MCMC only ever looks at differences of it. Nested sampling cannot: it
+    draws from the prior through :mod:`prior_transform` and integrates the
+    likelihood against it, so handing it the posterior would count the prior
+    twice -- and would count the *unnormalised* version of it at that, since
+    ``ell1fit.priors._flat_logprior`` returns 0 rather than ``-log(width)``.
+
+    Subtracting is deliberate rather than rebuilding the likelihood from
+    :func:`ell1fit.likelihoods.pletsch_clarke_likelihood` directly. The
+    subtraction reuses the package's own composition, including its handling of
+    a non-invertible orbit, so there is no second copy of that logic to drift.
+    It costs one extra log-prior evaluation per call -- tens of microseconds
+    against hundreds -- which is the right side of the trade when the
+    alternative risks integrating a likelihood the package would not recognise.
+    """
+    from ell1fit.posterior import _build_posterior_functions
+
+    logprior, _, _ = _build_posterior_functions(problem.observations, problem.setup)
+    logpost = problem.logpost
+
+    def loglikelihood(position):
+        prior = logprior(position)
+        if not np.isfinite(prior):
+            # Outside the prior's support the likelihood is never consulted, and
+            # ``-inf - -inf`` would be a NaN that dynesty cannot interpret.
+            return -np.inf
+        posterior = logpost(position)
+        if not np.isfinite(posterior):
+            # A non-invertible orbit, which the posterior rejects outright.
+            return -np.inf
+        return posterior - prior
+
+    return loglikelihood, logprior
+
+
+def check_loglikelihood_split(problem, loglikelihood, logprior, n_probes=32, seed=90212):
+    """Confirm the split recomposes into the posterior it came from.
+
+    Probes are drawn from the prior itself rather than around the peak: that is
+    where nested sampling spends most of its evaluations, and it is the region a
+    check centred on the MAP would never visit.
+    """
+    import prior_transform
+
+    transform, _ = prior_transform.build_prior_transform(problem.setup, check=False)
+    rng = np.random.default_rng(seed)
+    worst = 0.0
+    compared = 0
+    for _ in range(n_probes):
+        position = transform(rng.random(problem.ndim))
+        recomposed = loglikelihood(position) + logprior(position)
+        reference = problem.logpost(position)
+        if not np.isfinite(reference):
+            continue
+        compared += 1
+        worst = max(worst, abs(recomposed - reference))
+    if compared == 0:
+        raise AssertionError("Every probe drawn from the prior had an infinite posterior")
+    if worst > 1e-9:
+        raise AssertionError(f"Log-likelihood split does not recompose: worst {worst:.3e}")
+    return {"probes_compared": compared, "worst_recomposition_error": worst}
+
+
+#: Built once per worker, lazily, from :data:`_WORKER_PROBLEM`.
+_WORKER_LOGLIKELIHOOD = None
+
+
+def _worker_loglikelihood(position):
+    """Evaluate the worker's own log-likelihood, prior removed."""
+    global _WORKER_LOGLIKELIHOOD
+
+    if _WORKER_LOGLIKELIHOOD is None:
+        _WORKER_LOGLIKELIHOOD = split_loglikelihood(_WORKER_PROBLEM)[0]
+    return _WORKER_LOGLIKELIHOOD(position)
+
+
+def run_nested(
+    problem,
+    seed,
+    steps=None,
+    nlive=1000,
+    dlogz=0.1,
+    workers=0,
+    bound="multi",
+    nested_sample="auto",
+    maxcall=None,
+    **_,
+):
+    """Run ``dynesty`` nested sampling, for the evidence.
+
+    Not a speed play, and it should not be read as one: nested sampling exists
+    here because ``log Z`` is what an eccentricity *detection* needs and neither
+    an ensemble nor NUTS produces it. It will lose on every rate in the table.
+
+    Two numbers in the output mean something different from everywhere else:
+
+    **A step is an iteration, not a draw.** Nested sampling removes one live
+    point per iteration and runs until the remaining prior volume cannot hold
+    enough evidence to matter, so ``steps`` is ignored and ``--nlive``/``--dlogz``
+    set the work instead.
+
+    **The returned samples are resampled to the number the weights support.**
+    Nested sampling produces importance-weighted draws; resampling them to equal
+    weight does not create information. So the chain handed back is exactly as
+    long as the Kish effective sample size of those weights, which keeps
+    ``ess_per_second`` an honest number to put next to an ensemble's rather than
+    one inflated by however many weighted draws happened to be stored.
+    """
+    import dynesty
+    from dynesty.utils import resample_equal
+
+    import prior_transform
+
+    started = time.perf_counter()
+    transform, omitted_log_normalisation = prior_transform.build_prior_transform(problem.setup)
+    loglikelihood, logprior = split_loglikelihood(problem)
+    split_check = check_loglikelihood_split(problem, loglikelihood, logprior)
+    problem_loglikelihood_at_start = float(loglikelihood(problem.start))
+
+    pool = None
+    if workers:
+        pool = multiprocessing.get_context("spawn").Pool(
+            processes=workers, initializer=_init_worker, initargs=(problem.spec,)
+        )
+        loglikelihood = _worker_loglikelihood
+
+    sampler = dynesty.NestedSampler(
+        loglikelihood,
+        transform,
+        problem.ndim,
+        nlive=nlive,
+        bound=bound,
+        sample=nested_sample,
+        rstate=np.random.default_rng(seed),
+        pool=pool,
+        queue_size=workers if workers else None,
+        # The transform is microseconds of numpy; shipping cube points to a
+        # worker to run it there costs more than running it here.
+        use_pool={"prior_transform": False} if workers else None,
+    )
+    setup_seconds = time.perf_counter() - started
+
+    started = time.perf_counter()
+    try:
+        sampler.run_nested(print_progress=False, dlogz=dlogz, maxcall=maxcall)
+        results = sampler.results
+    finally:
+        if pool is not None:
+            pool.terminate()
+            pool.join()
+    sample_seconds = time.perf_counter() - started
+
+    # The guard that matters. Nested sampling can miss a narrow mode entirely and
+    # still return a tidy error bar: at nlive=200 on E1 this run reached a best
+    # log-likelihood of -13.9 against the 98.7 the optimizer had already found,
+    # and reported log Z = -32.0 +- 0.30 -- wrong by 99 nats, with nothing in
+    # dynesty's own diagnostics to say so. The optimizer's MAP is a free lower
+    # bound on where the peak is, so checking against it turns that silent
+    # failure into a loud one. Exceeding it is fine and expected: the MAP
+    # maximises the posterior, and this is the likelihood alone.
+    peak_shortfall = float(problem_loglikelihood_at_start - np.max(results.logl))
+
+    weights = np.exp(results.logwt - results.logz[-1])
+    weights = weights / weights.sum()
+    kish = float(1.0 / np.sum(weights**2))
+    draws = resample_equal(results.samples, weights, rstate=np.random.default_rng(seed + 1))[
+        : max(int(kish), 2)
+    ]
+
+    return SamplerRun(
+        # One chain: nested sampling is not a Markov chain, and splitting these
+        # draws into several would produce an R-hat that describes the resampling
+        # rather than any convergence. ``log_evidence_err`` is the diagnostic
+        # that matters here, and ``information_nats`` says how hard the run was.
+        chains=draws[np.newaxis, :, :],
+        setup_seconds=setup_seconds,
+        sample_seconds=sample_seconds,
+        steps_taken=int(results.niter),
+        discard_fraction=0.0,
+        extra={
+            # dynesty stops when the evidence still sitting in the unexplored
+            # prior volume falls below ``dlogz``; reaching that is this
+            # sampler's equivalent of an R-hat gate.
+            "converged": bool(results.logzerr[-1] < 1.0 and peak_shortfall < PEAK_SHORTFALL_GATE),
+            #: How far the best likelihood the run reached fell short of the
+            #: optimizer's. Positive means the run missed the mode.
+            "peak_shortfall": peak_shortfall,
+            "map_loglikelihood": problem_loglikelihood_at_start,
+            "log_evidence": float(results.logz[-1]),
+            "log_evidence_err": float(results.logzerr[-1]),
+            "information_nats": float(results.information[-1]),
+            "kish_effective_samples": kish,
+            "weighted_draws": int(results.samples.shape[0]),
+            "nlive": nlive,
+            "dlogz": dlogz,
+            "bound": bound,
+            "nested_sample": nested_sample,
+            "workers": workers,
+            "posterior_calls": int(np.sum(results.ncall)),
+            # How far the package's log-prior *function* is from being a
+            # density. Diagnostic only: the transform already normalises the
+            # prior, so ``log_evidence`` needs no correction for it. Recorded
+            # because the gap is otherwise invisible, and because it differs
+            # between models -- a circular fit has no ``EPS`` uniforms and
+            # reports zero where an eccentric one reports ``2 log 2``.
+            "omitted_log_normalisation": omitted_log_normalisation,
+            "loglikelihood_split_check": split_check,
+        },
+    )
+
+
 SAMPLERS = {
     "emcee": run_emcee,
     "emcee-production": run_emcee_production,
     "nuts": run_nuts,
+    "nested": run_nested,
 }
 
 
@@ -934,7 +1257,11 @@ def run_one(problem, sampler_name, seed, steps, **sampler_kwargs):
             "steps_per_second": n_draws / total_seconds,
             "ess_per_posterior_call": summary["ess_min"] / max(calls, 1),
             "microseconds_per_posterior_call": 1e6 * total_seconds / max(calls, 1),
-            "converged": summary["rhat_max"] < RHAT_GATE,
+            # R-hat is the gate for anything that runs a Markov chain. Nested
+            # sampling does not, and says so by putting its own verdict in
+            # ``extra``; without this the harness would read the resulting NaN
+            # as a failure and label a perfectly good evidence UNCONVERGED.
+            "converged": run.extra.get("converged", summary["rhat_max"] < RHAT_GATE),
             "extra": run.extra,
         }
     )
@@ -964,6 +1291,10 @@ def do_run(args):
         "target_accept": args.target_accept,
         "chain_method": args.chain_method,
         "mass": args.mass,
+        "nlive": args.nlive,
+        "dlogz": args.dlogz,
+        "bound": args.bound,
+        "nested_sample": args.nested_sample,
     }
 
     repetitions = []
@@ -996,6 +1327,8 @@ def do_run(args):
         "python": sys.version.split()[0],
         "machine": machine_configuration(),
         "repetitions": repetitions,
+        "log_evidence": _median_extra(repetitions, "log_evidence"),
+        "log_evidence_err": _median_extra(repetitions, "log_evidence_err"),
         "ess_per_second_median": statistics.median(rates),
         "ess_per_second_min": min(rates),
         "ess_per_second_max": max(rates),
@@ -1023,15 +1356,29 @@ def _median_field(payload, field):
     return statistics.median(entry[field] for entry in payload["repetitions"])
 
 
+def _median_extra(repetitions, field):
+    """Median of one per-repetition ``extra`` entry, or ``None`` if absent."""
+    values = [
+        entry["extra"][field] for entry in repetitions if entry["extra"].get(field) is not None
+    ]
+    return statistics.median(values) if values else None
+
+
 def _report_run(payload):
     """Print the headline rate, its factors, and the seed-to-seed spread."""
+    # The move set belongs to the ensemble samplers; printing "stretch" beside a
+    # NUTS or nested run labels it with a proposal it never used.
     moves = payload.get("moves", "stretch")
+    detail = f" / {moves}" if payload["sampler"].startswith("emcee") else ""
     workers = payload.get("workers", 0)
     pool = f" / {workers} workers" if workers else ""
-    print(
-        f"\n{payload['problem']} / {payload['sampler']} / {moves}{pool}, "
-        f"{payload['steps']} steps"
-    )
+    steps = payload["steps"]
+    if steps:
+        effort = f"{steps} steps"
+    else:
+        nlive = int(_median_extra(payload["repetitions"], "nlive") or 0)
+        effort = f"{nlive} live points"
+    print(f"\n{payload['problem']} / {payload['sampler']}{detail}{pool}, {effort}")
     print(
         f"  ESS/s               {payload['ess_per_second_median']:10.2f}"
         f"   (seeds: {payload['ess_per_second_min']:.2f} - "
@@ -1043,8 +1390,25 @@ def _report_run(payload):
     print(
         f"  us/posterior call   {_median_field(payload, 'microseconds_per_posterior_call'):10.1f}"
     )
-    print(f"  worst R-hat         {_median_field(payload, 'rhat_max'):10.4f}")
-    if not payload["all_converged"]:
+    rhat = _median_field(payload, "rhat_max")
+    print(f"  worst R-hat         {'       n/a' if np.isnan(rhat) else format(rhat, '10.4f')}")
+    if payload.get("log_evidence") is not None:
+        # The headline for a nested run. Printed after the rates rather than
+        # instead of them, because the rates are still the honest cost of it.
+        error = payload.get("log_evidence_err") or float("nan")
+        print(f"  log Z               {payload['log_evidence']:10.4f}  +- {error:.4f}")
+        information = _median_extra(payload["repetitions"], "information_nats")
+        print(f"  information         {information:10.2f} nats")
+        shortfall = _median_extra(payload["repetitions"], "peak_shortfall")
+        if shortfall is not None:
+            note = "" if shortfall < PEAK_SHORTFALL_GATE else "   MISSED THE MODE"
+            print(f"  peak shortfall      {shortfall:10.3f} nats{note}")
+        print(
+            "  unnormalised prior  "
+            f"{_median_extra(payload['repetitions'], 'omitted_log_normalisation'):10.4f}"
+            "   (diagnostic; log Z is already normalised)"
+        )
+    elif not payload["all_converged"]:
         print("  NOT CONVERGED: the rate above is not interpretable.")
 
 
@@ -1187,6 +1551,94 @@ def do_compare(args):
         print(f"  VERDICT: {direction}, {ratio:.2f}x, beyond the seed spread.")
 
 
+def do_bayes(args):
+    """Report the Bayes factor between two nested-sampling result files.
+
+    The uncertainty quoted here is the **scatter across seeds**, not the error
+    dynesty reports. On the eight-parameter problems the two agree; on the
+    ten-parameter ones dynesty's estimate is roughly forty times too small,
+    because ``sqrt(H / nlive)`` assumes the constrained prior is being sampled
+    perfectly and on a correlated ten-dimensional ridge it is not. Two seeds of
+    the same configuration differed by 4.2 nats where dynesty quoted 0.10.
+    Believing that 0.10 would be the same mistake as believing an ESS
+    improvement that lies inside the seed spread.
+    """
+    payloads = []
+    for path in (args.numerator, args.denominator):
+        with open(path) as handle:
+            payload = json.load(handle)
+        if payload["sampler"] != "nested":
+            raise SystemExit(f"{path} is a {payload['sampler']} run; a Bayes factor needs log Z")
+        payloads.append(payload)
+
+    summaries = []
+    for payload in payloads:
+        values = [entry["extra"]["log_evidence"] for entry in payload["repetitions"]]
+        shortfalls = [entry["extra"]["peak_shortfall"] for entry in payload["repetitions"]]
+        quoted = statistics.median(
+            entry["extra"]["log_evidence_err"] for entry in payload["repetitions"]
+        )
+        mean = statistics.fmean(values)
+        # With one seed there is no scatter to measure and dynesty's estimate is
+        # all there is -- which the caller should treat as a lower bound.
+        scatter = statistics.stdev(values) / math.sqrt(len(values)) if len(values) > 1 else None
+        summaries.append(
+            {
+                "payload": payload,
+                "mean": mean,
+                "quoted": quoted,
+                "scatter": scatter,
+                "seeds": len(values),
+                "values": values,
+                "worst_shortfall": max(shortfalls),
+            }
+        )
+        print(
+            f"{payload['problem']:>4s}  log Z = {mean:+9.3f}"
+            f"   over {len(values)} seed(s): " + ", ".join(f"{v:.2f}" for v in values)
+        )
+        print(
+            f"      dynesty says +-{quoted:.3f}; "
+            + (
+                f"the seeds say +-{scatter:.3f}"
+                if scatter is not None
+                else "one seed, so no independent check"
+            )
+        )
+        if summaries[-1]["worst_shortfall"] >= PEAK_SHORTFALL_GATE:
+            print(
+                f"      MISSED THE MODE by {summaries[-1]['worst_shortfall']:.1f} nats: "
+                "this evidence is a lower bound on the wrong integral, not a result."
+            )
+
+    top, bottom = summaries
+    log_bf = top["mean"] - bottom["mean"]
+    errors = [
+        entry["scatter"] if entry["scatter"] is not None else entry["quoted"] for entry in summaries
+    ]
+    error = math.hypot(*errors)
+    print(
+        f"\nln BF ({top['payload']['problem']} over {bottom['payload']['problem']})"
+        f" = {log_bf:+.2f} +- {error:.2f}"
+    )
+    # Jeffreys' scale, in nats rather than the more usual base 10.
+    strength = (
+        "not worth more than a bare mention"
+        if abs(log_bf) < 1.15
+        else "substantial"
+        if abs(log_bf) < 2.3
+        else "strong"
+        if abs(log_bf) < 4.6
+        else "decisive"
+    )
+    favoured = top if log_bf > 0 else bottom
+    print(f"  {strength}, favouring {favoured['payload']['problem']}")
+    if abs(log_bf) < 3 * error:
+        print(
+            "  ...but that is inside three times the seed scatter. Add seeds before believing it."
+        )
+
+
 def do_list(_args):
     """Print the available problems and samplers."""
     print("Problems")
@@ -1253,11 +1705,42 @@ def main(argv=None):
         default="curvature",
         help="NUTS initial inverse mass matrix: the preconditioned scale, or numpyro's default",
     )
+    run.add_argument(
+        "--nlive",
+        type=int,
+        default=1000,
+        help="Nested sampling live points; the run costs roughly nlive * information iterations",
+    )
+    run.add_argument(
+        "--dlogz",
+        type=float,
+        default=0.1,
+        help="Nested sampling stopping criterion: remaining evidence, in nats",
+    )
+    run.add_argument(
+        "--bound",
+        default="multi",
+        choices=("none", "single", "multi", "balls", "cubes"),
+        help="Nested sampling bounding distribution",
+    )
+    run.add_argument(
+        "--nested-sample",
+        default="auto",
+        choices=("auto", "unif", "rwalk", "slice", "rslice"),
+        help="How nested sampling draws a replacement point inside the bound",
+    )
     run.add_argument("--steps", type=int, default=None, help="Chain length per walker")
     run.add_argument("--seeds", type=int, default=3, help="Independent repetitions")
     run.add_argument("--seed0", type=int, default=1000, help="First sampler seed")
     run.add_argument("-o", "--out", default=None, help="Result file to write")
     run.set_defaults(func=do_run)
+
+    bayes = subparsers.add_parser(
+        "bayes", help="Bayes factor between two nested-sampling result files"
+    )
+    bayes.add_argument("numerator", help="Result file for the model on top of the ratio")
+    bayes.add_argument("denominator", help="Result file for the model underneath")
+    bayes.set_defaults(func=do_bayes)
 
     compare = subparsers.add_parser("compare", help="Compare two result files")
     compare.add_argument("before")
