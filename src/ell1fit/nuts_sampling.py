@@ -505,6 +505,33 @@ def check_gradient(observations, setup, start, n_probes=4, jitter=None, seed=902
     return {"n_probes": int(probes.shape[0]), "worst_relative_difference": float(worst)}
 
 
+def _load_nuts_checkpoint(path):
+    """Load a NUTS checkpoint if one exists, else ``None``."""
+    import os
+    import pickle
+
+    if not os.path.exists(path):
+        return None
+    with open(path, "rb") as f:
+        return pickle.load(f)
+
+
+def _save_nuts_checkpoint(path, checkpoint):
+    """Write a NUTS checkpoint atomically.
+
+    Written to a temporary file and renamed into place, so a process killed
+    mid-write leaves either the old checkpoint or the new one, never a
+    truncated pickle that the next resume attempt would fail to load.
+    """
+    import os
+    import pickle
+
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "wb") as f:
+        pickle.dump(checkpoint, f)
+    os.replace(tmp_path, path)
+
+
 def run_nuts(
     observations,
     setup,
@@ -518,35 +545,47 @@ def run_nuts(
     target_accept=0.8,
     max_tree_depth=10,
     rhat_gate=1.01,
+    checkpoint_every=1000,
     seed=None,
 ):
     """Run NUTS (numpyro) against the JAX rebuild, and summarize like emcee.
 
     The production counterpart of :func:`ell1fit.mcmc_utils.safe_run_sampler`,
-    called when ``optimize_solution(..., sampler="nuts")``. Two things it does
-    *not* do, both worth knowing before reaching for it:
-
-    - **No checkpointing.** ``safe_run_sampler`` resumes from an HDF5 backend
-      because an ensemble chain can need hundreds of thousands of steps.
-      NUTS needs far fewer -- 202 ESS/s against 69.5 on the benchmark's small
-      problem -- so a single run is the v1 design; there is no equivalent of
-      ``outroot + '.h5'`` here yet.
-    - **No adaptive re-run.** ``safe_run_sampler`` keeps sampling until its
-      autocorrelation-based convergence check passes or ``max_n`` is spent.
-      This runs exactly ``draws`` per chain, once, and reports whatever R-hat
-      that reached -- logged as a warning, not retried, if it is above
-      ``rhat_gate``.
+    called when ``optimize_solution(..., sampler="nuts")``.
 
     ``draws`` is total per chain, split evenly between warm-up and kept
     samples -- the same convention ``tools/sampler_bench.py`` uses, and not
     the same quantity as ``--nsteps`` (which sizes the emcee ensemble and is
     tuned for its much larger calls-per-effective-sample).
 
+    **Checkpointing covers the kept-sample phase only, not warm-up.** Warm-up
+    tunes the step size and mass matrix together as one run; a truncated
+    adaptation is not a meaningful thing to resume from, so it always runs to
+    completion uninterrupted. After that, kept samples are drawn in batches of
+    ``checkpoint_every`` and the running state -- samples so far, divergences,
+    and numpyro's own ``last_state`` (step size, mass matrix, RNG key) -- is
+    pickled to ``outroot + '_nuts_checkpoint.pkl'`` after each batch. A run
+    resumed from that file continues the chain exactly where it left off
+    rather than re-adapting: ``post_warmup_state`` carries the tuned kernel
+    state forward, so a batch after resume costs the same as one that never
+    stopped. If the file already holds ``draws`` or more kept samples, nothing
+    is resampled -- the stored summary is reused directly, mirroring
+    ``safe_run_sampler``'s own "nothing to be done" branch.
+
+    **No adaptive re-run.** ``safe_run_sampler`` keeps sampling until its
+    autocorrelation-based convergence check passes. This runs exactly
+    ``draws`` per chain and reports whatever R-hat that reached -- logged as a
+    warning, not retried, if it is above ``rhat_gate``. Raising ``draws`` and
+    letting the checkpoint carry the extra work is the way to push past a
+    failed gate; nothing in this function tests it for you.
+
     Before sampling, :func:`check_against_numba` and :func:`check_gradient`
     verify this JAX rebuild against the numba posterior it stands in for;
     their results are logged and returned as ``jax_agreement`` /
     ``jax_gradient_check`` so a silent drift between the two implementations
-    is visible in the output rather than only in a log file.
+    is visible in the output rather than only in a log file. Skipped on
+    resume from a checkpoint that already has enough kept samples, since
+    nothing new is being sampled to verify.
 
     Returns
     -------
@@ -575,39 +614,120 @@ def run_nuts(
         labels = list(map(r"$\theta_{{{0}}}$".format, range(1, ndim + 1)))
 
     enable_x64()
-    agreement = check_against_numba(observations, setup, starting_pars, func_to_maximize)
-    derivative = check_gradient(observations, setup, starting_pars)
-    logging.info(f"JAX/numba agreement check: {agreement}")
-    logging.info(f"JAX gradient check: {derivative}")
-
-    logpost = build_jax_logpost(observations, setup)
-
-    def potential(position):
-        return -logpost(position)
-
-    seed = np.random.default_rng().integers(2**31) if seed is None else seed
-    rng = np.random.default_rng(seed)
-    start = starting_pars + rng.normal(0.0, 1e-6, size=(chains, ndim))
 
     warmup = draws // 2
     kept = draws - warmup
-    kernel = NUTS(
-        potential_fn=potential,
-        target_accept_prob=target_accept,
-        max_tree_depth=max_tree_depth,
-    )
-    mcmc = MCMC(
-        kernel,
-        num_warmup=warmup,
-        num_samples=kept,
-        num_chains=chains,
-        chain_method="sequential",
-        progress_bar=False,
-    )
-    key = jax.random.PRNGKey(seed)
-    mcmc.run(key, init_params=jnp.asarray(start), extra_fields=("diverging",))
-    chain_samples = np.asarray(mcmc.get_samples(group_by_chain=True))
-    diverging = np.asarray(mcmc.get_extra_fields()["diverging"])
+    checkpoint_path = outroot + "_nuts_checkpoint.pkl"
+    checkpoint = _load_nuts_checkpoint(checkpoint_path)
+
+    if checkpoint is not None and checkpoint["kept_done"] >= kept:
+        logging.info(
+            f"NUTS checkpoint {checkpoint_path} already has "
+            f"{checkpoint['kept_done']} >= {kept} kept draws; reusing it."
+        )
+        chain_samples = checkpoint["chain_samples"]
+        diverging = checkpoint["diverging"]
+        agreement = checkpoint["jax_agreement"]
+        derivative = checkpoint["jax_gradient_check"]
+    else:
+        agreement = check_against_numba(observations, setup, starting_pars, func_to_maximize)
+        derivative = check_gradient(observations, setup, starting_pars)
+        logging.info(f"JAX/numba agreement check: {agreement}")
+        logging.info(f"JAX gradient check: {derivative}")
+
+        logpost = build_jax_logpost(observations, setup)
+
+        def potential(position):
+            return -logpost(position)
+
+        kernel = NUTS(
+            potential_fn=potential,
+            target_accept_prob=target_accept,
+            max_tree_depth=max_tree_depth,
+        )
+
+        if checkpoint is None:
+            seed = np.random.default_rng().integers(2**31) if seed is None else seed
+            rng = np.random.default_rng(seed)
+            start = starting_pars + rng.normal(0.0, 1e-6, size=(chains, ndim))
+
+            first_batch = min(checkpoint_every, kept)
+            mcmc = MCMC(
+                kernel,
+                num_warmup=warmup,
+                num_samples=first_batch,
+                num_chains=chains,
+                chain_method="sequential",
+                progress_bar=False,
+            )
+            key = jax.random.PRNGKey(seed)
+            mcmc.run(key, init_params=jnp.asarray(start), extra_fields=("diverging",))
+            chain_samples = np.asarray(mcmc.get_samples(group_by_chain=True))
+            diverging = np.asarray(mcmc.get_extra_fields()["diverging"])
+            kept_done = first_batch
+            last_state = mcmc.last_state
+        else:
+            chain_samples = checkpoint["chain_samples"]
+            diverging = checkpoint["diverging"]
+            kept_done = checkpoint["kept_done"]
+            last_state = checkpoint["last_state"]
+
+        logging.info(f"NUTS kept samples so far: {kept_done}/{kept}")
+        _save_nuts_checkpoint(
+            checkpoint_path,
+            {
+                "kept_done": kept_done,
+                "chain_samples": chain_samples,
+                "diverging": diverging,
+                "last_state": last_state,
+                "jax_agreement": agreement,
+                "jax_gradient_check": derivative,
+            },
+        )
+
+        while kept_done < kept:
+            batch = min(checkpoint_every, kept - kept_done)
+            mcmc = MCMC(
+                kernel,
+                num_warmup=0,
+                num_samples=batch,
+                num_chains=chains,
+                chain_method="sequential",
+                progress_bar=False,
+            )
+            mcmc.post_warmup_state = last_state
+            # A NUTS kernel built in this call has never sampled, so numpyro
+            # requires *some* init_params to compile its sample function --
+            # even on a resume, where post_warmup_state means the value here
+            # is computed and then discarded in favour of the resumed state.
+            # Verified: an init_params filled with 1000.0 still resumes from
+            # last_state.z, not from 1000.0. The last kept position keeps the
+            # placeholder harmless rather than proving the point adversarially.
+            placeholder_init = jnp.asarray(chain_samples[:, -1, :])
+            mcmc.run(
+                mcmc.post_warmup_state.rng_key,
+                init_params=placeholder_init,
+                extra_fields=("diverging",),
+            )
+            new_samples = np.asarray(mcmc.get_samples(group_by_chain=True))
+            new_diverging = np.asarray(mcmc.get_extra_fields()["diverging"])
+            chain_samples = np.concatenate([chain_samples, new_samples], axis=1)
+            diverging = np.concatenate([diverging, new_diverging])
+            kept_done += batch
+            last_state = mcmc.last_state
+
+            logging.info(f"NUTS kept samples so far: {kept_done}/{kept}")
+            _save_nuts_checkpoint(
+                checkpoint_path,
+                {
+                    "kept_done": kept_done,
+                    "chain_samples": chain_samples,
+                    "diverging": diverging,
+                    "last_state": last_state,
+                    "jax_agreement": agreement,
+                    "jax_gradient_check": derivative,
+                },
+            )
 
     rhat = summary(chain_samples)["Param:0"]["r_hat"]
     rhat_max = float(np.max(rhat))
