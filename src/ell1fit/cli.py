@@ -111,6 +111,17 @@ def main(args=None):
         ),
     )
     parser.add_argument("--ignore-uncertainties", action="store_true", default=False)
+    parser.add_argument(
+        "--sampler",
+        type=str,
+        choices=["emcee", "nuts", "nested"],
+        default="emcee",
+        help=(
+            "Posterior-exploration backend. 'emcee' (default) is always available. "
+            "'nuts' and 'nested' need extra dependencies: pip install ell1fit[nuts] "
+            "or ell1fit[nested]."
+        ),
+    )
 
     args = parser.parse_args(args)
     files = args.files
@@ -135,6 +146,7 @@ def main(args=None):
         use_pi=args.use_pi,
         ignore_uncertainties=args.ignore_uncertainties,
         template_iterations=args.template_iterations,
+        sampler=args.sampler,
     )
 
 

@@ -135,13 +135,15 @@ def optimize_solution(
     minimize_first=False,
     outroots=("out",),
     reference_phases=None,
+    sampler="emcee",
 ):
     """Optimize and sample pulsar timing parameters for multiple event files.
 
     Workflow:
     1. Build a posterior from priors + profile likelihood.
     2. Optionally run deterministic minimization for a starting point.
-    3. Run MCMC with :func:`safe_run_sampler`.
+    3. Run MCMC with :func:`safe_run_sampler` (or another backend -- see
+       ``sampler``).
     4. Produce diagnostic phaseogram comparisons and return summary fields.
 
     Parameters are handled in local coordinates: for each fitted parameter,
@@ -149,6 +151,12 @@ def optimize_solution(
 
     Parameters
     ----------
+    sampler : {"emcee", "nuts", "nested"}, optional
+        Which posterior-exploration backend to run. ``"emcee"`` (the default)
+        is :func:`safe_run_sampler`, unchanged from before this parameter
+        existed. ``"nuts"`` and ``"nested"`` need their own optional
+        dependencies (``pip install ell1fit[nuts]`` / ``ell1fit[nested]``) and
+        are not wired in yet.
     reference_phases : list of np.ndarray or None, optional
         Phases to draw in the left-hand panel of the comparison phaseograms --
         the "before" of a before-and-after. Pass the phases of the solution the
@@ -222,14 +230,19 @@ def optimize_solution(
     corner_labels = [
         "d" + par + f"{np.log10(fac):+g}" for (par, fac) in zip(fit_parameter_names, factors)
     ]
-    results = safe_run_sampler(
-        func_to_maximize,
-        fit_pars,
-        max_n=nsteps,
-        outroot=outroots[-1],
-        labels=["d" + par for par in fit_parameter_names],
-        corner_labels=corner_labels,
-    )
+    if sampler == "emcee":
+        results = safe_run_sampler(
+            func_to_maximize,
+            fit_pars,
+            max_n=nsteps,
+            outroot=outroots[-1],
+            labels=["d" + par for par in fit_parameter_names],
+            corner_labels=corner_labels,
+        )
+    else:
+        raise NotImplementedError(
+            f"sampler={sampler!r} is not wired into the pipeline yet; only 'emcee' is."
+        )
 
     results.update(parameters)
     results = _augment_results_with_fit_metadata(

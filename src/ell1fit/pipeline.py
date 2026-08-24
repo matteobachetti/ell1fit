@@ -463,6 +463,7 @@ def ell1fit(
     use_pi=False,
     ignore_uncertainties=False,
     template_iterations=1,
+    sampler="emcee",
 ):
     """Fit spin and ELL1 orbital parameters from one or more event files.
 
@@ -514,6 +515,9 @@ def ell1fit(
         that. ``1`` (the default) disables refinement entirely and is
         bit-identical to not having the feature. See
         :mod:`ell1fit.refinement`.
+    sampler : {"emcee", "nuts", "nested"}, optional
+        Posterior-exploration backend -- see
+        :func:`ell1fit.fitting.optimize_solution`.
 
     Returns
     -------
@@ -685,6 +689,7 @@ def ell1fit(
         minimize_first=minimize_first,
         outroots=outroots,
         reference_phases=reference_phases,
+        sampler=sampler,
     )
     results["template_iterations"] = template_iterations
     results["template_passes_run"] = len(refinement_history)
