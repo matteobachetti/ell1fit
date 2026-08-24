@@ -317,9 +317,7 @@ def _ell1_shape(sin_phase, cos_phase, a1s, a1c, a2s, a2c, a3s, a3c):
     )
 
 
-def _ell1_deorbit(
-    times, PB, A1, TASC, EPS1, EPS2, tolerance=1e-8, max_iter=MAX_DEORBIT_ITERATIONS
-):
+def _ell1_deorbit(times, PB, A1, TASC, EPS1, EPS2, tolerance=1e-8, max_iter=MAX_DEORBIT_ITERATIONS):
     """Iteratively remove ELL1 orbital delays from event times.
 
     Solves ``t_emit = t_obs - delay(t_emit)`` by fixed-point iteration, with the
@@ -375,9 +373,7 @@ def simple_ell1_deorbit_numba(
     events is the case this exists for: one element through the parallel kernel
     cost 111 us, a hundred times what the arithmetic needs.
     """
-    kernel = (
-        _ell1_deorbit_parallel if times.size >= _DEORBIT_PARALLEL_MIN else _ell1_deorbit_serial
-    )
+    kernel = _ell1_deorbit_parallel if times.size >= _DEORBIT_PARALLEL_MIN else _ell1_deorbit_serial
     return kernel(times, PB, A1, TASC, EPS1, EPS2, tolerance, max_iter)
 
 
