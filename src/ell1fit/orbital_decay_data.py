@@ -41,7 +41,6 @@ from pint.models import get_model
 from .models import ORBITAL_DERIVATIVES, _load_and_validate_models, _orbital_epoch_offsets
 from .orbital_decay_model import spurious_tasc_from_pbdot_mismatch
 
-
 __all__ = [
     "EpochOrbit",
     "OrbitalModelCompatibilityError",
@@ -99,7 +98,11 @@ def retrieve_value_and_error(row, par, multiply_by=1.0):
     :func:`ell1fit.create_parfile.update_model` reads on the ``.par``-writing
     side. Returns ``(None, None)`` if ``par`` was not fitted in this row.
     """
-    if f"d{par}_mean" not in row.colnames if hasattr(row, "colnames") else f"d{par}_mean" not in row:
+    if (
+        f"d{par}_mean" not in row.colnames
+        if hasattr(row, "colnames")
+        else f"d{par}_mean" not in row
+    ):
         return None, None
     mean = row[f"d{par}_mean"]
     initial = row[f"d{par}_initial"]
@@ -305,10 +308,10 @@ def check_compatibility(epochs, tolerance=1e-9, pbdot_impact_fraction=1.0):
         Hard-abort, listing every offending file and its actual-vs-predicted
         (or actual-vs-reference) values.
     """
+    logging.info("Checking orbital model compatibility across %d epochs", len(epochs))
     if len(epochs) < 2:
         raise OrbitalModelCompatibilityError(
-            "Need at least 2 input files to fit an orbital-decay model, got "
-            f"{len(epochs)}."
+            "Need at least 2 input files to fit an orbital-decay model, got " f"{len(epochs)}."
         )
 
     model_list, pepoch_list, ref_model = _build_models(epochs)
@@ -412,6 +415,7 @@ def build_reference_model(epochs, reference_epoch=None):
         ``check_compatibility`` passed at the default tolerance, so the mean
         is for robustness, not because file-to-file weighting matters here).
     """
+    logging.info("Building reference model at epoch %s", reference_epoch or "mean(PEPOCH)")
     model_list, pepoch_list, ref_model = _build_models(epochs)
 
     if reference_epoch is None:
