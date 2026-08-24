@@ -69,6 +69,7 @@ bench = [
 ell1fit = "ell1fit.cli:main"
 ell1par = "ell1fit.create_parfile:main"
 ell1updatebinary = "ell1fit.update_binary:main"
+ell1decay = "ell1fit.orbital_decay:main"
 
 [project.urls]
 Homepage = "http://github.com/matteobachetti/ell1fit"

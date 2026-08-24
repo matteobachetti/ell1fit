@@ -15,6 +15,7 @@ __all__ = [
     "calculate_result_array_from_samples",
     "default_moves",
     "get_flat_samples",
+    "plot_mcmc_comparison",
     "plot_mcmc_results",
     "safe_run_sampler",
 ]
@@ -110,6 +111,62 @@ def plot_mcmc_results(
 
     with plot_style_context():
         fig = corner.corner(flat_samples, labels=labels, quantiles=[0.16, 0.5, 0.84], **plot_kwargs)
+        fig.savefig(fname, dpi=300)
+
+
+def plot_mcmc_comparison(samples_list, labels_list, names, fname, colors=None, **corner_kwargs):
+    """Overlay two or more posteriors on their shared parameter subspace.
+
+    Built for comparing nested models that share a prefix of parameters (e.g.
+    ell1decay's M0/M1 delta_tasc fits, which share ``beta[0..2]`` and differ
+    only in whether ``beta[3]`` exists): each sample set is restricted to the
+    labels common to every set (order taken from ``labels_list[0]``), then
+    overlaid on one figure via ``corner``'s own documented two-dataset pattern
+    -- call ``corner.corner`` once per set, reusing the returned ``fig``.
+
+    Parameters
+    ----------
+    samples_list : list of array-like
+        One flat-samples array per model, shape ``(nsamples_i, ndim_i)``.
+    labels_list : list of list of str
+        That model's parameter labels, same order as its samples' columns.
+    names : list of str
+        Legend entry per model (e.g. ``["M0", "M1"]``).
+    colors : list of str or None
+        One color per model. Defaults to matplotlib's own color cycle.
+    """
+    import matplotlib.lines
+
+    shared_labels = [
+        label for label in labels_list[0] if all(label in labels for labels in labels_list)
+    ]
+    if not shared_labels:
+        raise ValueError("No parameter labels are shared across every sample set")
+
+    if colors is None:
+        colors = [f"C{i}" for i in range(len(samples_list))]
+
+    with plot_style_context():
+        fig = None
+        for i, (samples, labels) in enumerate(zip(samples_list, labels_list)):
+            columns = [labels.index(label) for label in shared_labels]
+            sub_samples = np.asarray(samples)[:, columns]
+            fig = corner.corner(
+                sub_samples,
+                labels=shared_labels,
+                color=colors[i % len(colors)],
+                fig=fig,
+                quantiles=[0.16, 0.5, 0.84] if i == 0 else None,
+                **corner_kwargs,
+            )
+        fig.legend(
+            handles=[
+                matplotlib.lines.Line2D([], [], color=colors[i % len(colors)], label=names[i])
+                for i in range(len(names))
+            ],
+            loc="upper right",
+            frameon=False,
+        )
         fig.savefig(fname, dpi=300)
 
 
