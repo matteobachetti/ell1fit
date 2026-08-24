@@ -111,6 +111,45 @@ def main(args=None):
         ),
     )
     parser.add_argument("--ignore-uncertainties", action="store_true", default=False)
+    parser.add_argument(
+        "--sampler",
+        type=str,
+        choices=["emcee", "nuts", "nested"],
+        default="emcee",
+        help=(
+            "Posterior-exploration backend. 'emcee' (default) is always available. "
+            "'nuts' and 'nested' need extra dependencies: pip install ell1fit[nuts] "
+            "or ell1fit[nested]. Only 'nested' produces log_evidence, which is what "
+            "a model-comparison Bayes factor needs."
+        ),
+    )
+    parser.add_argument(
+        "--nlive",
+        type=int,
+        default=1000,
+        help=(
+            "Live points for --sampler nested. Ignored otherwise. Nested sampling "
+            "can miss a narrow mode and still report a confident, wrong evidence, "
+            "so raise this well past the default on anything but a small fit."
+        ),
+    )
+    parser.add_argument(
+        "--dlogz",
+        type=float,
+        default=0.1,
+        help="Evidence-remaining stopping criterion for --sampler nested. Ignored otherwise.",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=0,
+        help=(
+            "Worker processes for --sampler nested. Ignored otherwise. 0 (the "
+            "default) runs single-process; the prior transform always does, "
+            "regardless of this setting -- only likelihood evaluations spread "
+            "across workers."
+        ),
+    )
 
     args = parser.parse_args(args)
     files = args.files
@@ -135,6 +174,10 @@ def main(args=None):
         use_pi=args.use_pi,
         ignore_uncertainties=args.ignore_uncertainties,
         template_iterations=args.template_iterations,
+        sampler=args.sampler,
+        nlive=args.nlive,
+        dlogz=args.dlogz,
+        workers=args.workers,
     )
 
 

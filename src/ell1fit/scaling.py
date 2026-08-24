@@ -106,6 +106,60 @@ def estimate_uncertainties_from_model(model, parameter_names, observation_length
 TARGET_LOCAL_SIGMA = 1e-6
 
 
+#: A drop smaller than this is rounding noise rather than curvature.
+_MEASURABLE_DROP = 1e-3
+
+
+def _curvature_drop(posterior_func, base, n_parameters, index, step):
+    """Measure how far the log-posterior curves away over ``step``, without its slope.
+
+    The quantity returned is ``0.5 * (step / sigma) ** 2``: what the posterior
+    would fall by at ``step`` if the starting point were the peak. Taking the
+    plain one-sided fall instead is what the earlier implementation did, and it
+    is only the same thing when the starting point *is* the peak. Off the peak
+    by ``d``, the one-sided fall is dominated by the linear term and the scale
+    it implies collapses roughly as ``sigma / d`` -- measured on a two-epoch
+    fixture, ``Phase_i`` sits 0.33 and 0.25 sigma off the peak (it is centred on
+    a grid whose cells are a full sigma wide) and its scale came out **14x too
+    small**, while ``A1`` and ``F0``, which start at the peak because the
+    parfile is exact, came out right. Displacing those two deliberately
+    reproduces the same collapse: 0.39x at 0.3 sigma, 0.22x at 1 sigma, 0.13x at
+    3 sigma. The symmetric form below returns 1.00x at every one of those
+    offsets.
+
+    Returns
+    -------
+    float or None
+        ``None`` when a hard prior bound blocks the measurement at this step,
+        which tells the caller to try a smaller one.
+    """
+
+    def at(offset):
+        probe = np.zeros(n_parameters)
+        probe[index] = offset
+        return posterior_func(probe)
+
+    up = at(step)
+    down = at(-step)
+    if np.isfinite(up) and np.isfinite(down):
+        # f(0) - (f(s) + f(-s))/2 = -h s^2 / 2 for f = f0 + g x + h x^2 / 2:
+        # the linear term cancels identically, whatever g is.
+        return base - 0.5 * (up + down)
+
+    # One side is outside a hard-bounded prior (``EPS`` is confined to +-1,
+    # ``A1`` to twice its value), so the symmetric stencil is unavailable.
+    # Three points on the feasible side remove the linear term just as exactly:
+    # f(0) - 2 f(s) + f(2s) = h s^2. Only the reach is worse, which matters
+    # solely for a parameter starting near a bound.
+    forward, sign = (up, 1.0) if np.isfinite(up) else (down, -1.0)
+    if not np.isfinite(forward):
+        return None
+    far = at(2.0 * sign * step)
+    if not np.isfinite(far):
+        return None
+    return -0.5 * (base - 2.0 * forward + far)
+
+
 def precondition_factors(posterior_func, factors, n_parameters, target=TARGET_LOCAL_SIGMA):
     """Rescale parameter factors so every direction has a comparable local scale.
 
@@ -127,7 +181,10 @@ def precondition_factors(posterior_func, factors, n_parameters, target=TARGET_LO
 
     The scale is measured from the posterior itself rather than derived
     per-parameter, so it needs no formula for each new parameter type and adapts
-    to the actual data.
+    to the actual data. It is measured as a *curvature*, by
+    :func:`_curvature_drop`, and not as the fall in the log-posterior over one
+    step -- see that function for why the difference is worth several extra
+    evaluations, and for what it cost when it was not.
 
     Parameters
     ----------
@@ -157,20 +214,28 @@ def precondition_factors(posterior_func, factors, n_parameters, target=TARGET_LO
 
     rescaled = list(factors)
     for i in range(n_parameters):
-        # Step outward until the log-posterior falls by enough to measure a
-        # curvature that is not just rounding noise.
         step = target
-        drop = 0.0
+
+        # Shrink until the geometry can be measured at all: a hard prior bound
+        # nearer than the step blocks both stencils.
         for _ in range(60):
-            probe = np.zeros(n_parameters)
-            probe[i] = step
-            value = posterior_func(probe)
-            if np.isfinite(value):
-                drop = base - value
-                if drop > 1e-3:
-                    break
+            if _curvature_drop(posterior_func, base, n_parameters, i, step) is not None:
+                break
+            step *= 0.5
+
+        # Then step outward until the posterior curves by enough to be more
+        # than rounding noise, stopping if growing runs into a bound.
+        drop = None
+        for _ in range(60):
+            measured = _curvature_drop(posterior_func, base, n_parameters, i, step)
+            if measured is None:
+                break
+            if measured > _MEASURABLE_DROP:
+                drop = measured
+                break
             step *= 2.0
-        if drop <= 1e-3:
+
+        if drop is None:
             logging.debug(f"Parameter {i} has no measurable curvature; keeping its factor")
             continue
 

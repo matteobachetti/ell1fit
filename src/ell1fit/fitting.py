@@ -135,13 +135,17 @@ def optimize_solution(
     minimize_first=False,
     outroots=("out",),
     reference_phases=None,
+    sampler="emcee",
+    nlive=1000,
+    dlogz=0.1,
+    workers=0,
 ):
     """Optimize and sample pulsar timing parameters for multiple event files.
 
     Workflow:
     1. Build a posterior from priors + profile likelihood.
     2. Optionally run deterministic minimization for a starting point.
-    3. Run MCMC with :func:`safe_run_sampler`.
+    3. Run MCMC with :func:`safe_run_sampler`, or another backend -- see ``sampler``.
     4. Produce diagnostic phaseogram comparisons and return summary fields.
 
     Parameters are handled in local coordinates: for each fitted parameter,
@@ -149,6 +153,22 @@ def optimize_solution(
 
     Parameters
     ----------
+    sampler : {"emcee", "nuts", "nested"}, optional
+        Which posterior-exploration backend to run. ``"emcee"`` (the default)
+        is :func:`safe_run_sampler`, unchanged from before this parameter
+        existed. ``"nuts"`` is :func:`ell1fit.nuts_sampling.run_nuts`, needing
+        ``pip install ell1fit[nuts]``. ``"nested"`` is
+        :func:`ell1fit.nested_sampling.run_nested`, needing
+        ``pip install ell1fit[nested]`` -- it is the only one of the three
+        that reports ``log_evidence``, which is what an eccentricity Bayes
+        factor needs and neither of the other two can give.
+    nlive, dlogz, workers : optional
+        Only consulted when ``sampler="nested"``. Nested sampling can miss a
+        narrow mode entirely and still report a confident, wrong evidence, so
+        ``nlive`` matters more than it looks like it should -- see
+        :data:`ell1fit.nested_sampling.PEAK_SHORTFALL_GATE`. ``workers`` -- see
+        :func:`ell1fit.nested_sampling.run_nested` -- spreads likelihood
+        evaluations across processes; ``0`` (the default) runs single-process.
     reference_phases : list of np.ndarray or None, optional
         Phases to draw in the left-hand panel of the comparison phaseograms --
         the "before" of a before-and-after. Pass the phases of the solution the
@@ -222,14 +242,44 @@ def optimize_solution(
     corner_labels = [
         "d" + par + f"{np.log10(fac):+g}" for (par, fac) in zip(fit_parameter_names, factors)
     ]
-    results = safe_run_sampler(
-        func_to_maximize,
-        fit_pars,
-        max_n=nsteps,
-        outroot=outroots[-1],
-        labels=["d" + par for par in fit_parameter_names],
-        corner_labels=corner_labels,
-    )
+    if sampler == "emcee":
+        results = safe_run_sampler(
+            func_to_maximize,
+            fit_pars,
+            max_n=nsteps,
+            outroot=outroots[-1],
+            labels=["d" + par for par in fit_parameter_names],
+            corner_labels=corner_labels,
+        )
+    elif sampler == "nuts":
+        from .nuts_sampling import run_nuts
+
+        results = run_nuts(
+            observations,
+            setup,
+            func_to_maximize,
+            fit_pars,
+            outroot=outroots[-1],
+            labels=["d" + par for par in fit_parameter_names],
+            corner_labels=corner_labels,
+        )
+    elif sampler == "nested":
+        from .nested_sampling import run_nested
+
+        results = run_nested(
+            observations,
+            setup,
+            func_to_maximize,
+            fit_pars,
+            outroot=outroots[-1],
+            labels=["d" + par for par in fit_parameter_names],
+            corner_labels=corner_labels,
+            nlive=nlive,
+            dlogz=dlogz,
+            workers=workers,
+        )
+    else:
+        raise NotImplementedError(f"sampler={sampler!r} is not a known sampler.")
 
     results.update(parameters)
     results = _augment_results_with_fit_metadata(

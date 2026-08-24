@@ -13,35 +13,17 @@ __all__ = [
 
 
 @njit()
-def _pc_like_weight(probs, weights):
-    """Compute weighted Pletsch-Clarke log-likelihood contribution.
+def _pc_like(terms):
+    """Sum the logs of the per-event likelihood terms.
+
+    Unweighted, each term is the template density at that event's phase.
+    Weighted, it is the mixture ``1 + w_i (T - 1)``, formed by the caller. Both
+    must already be floored positive.
 
     Parameters
     ----------
-    probs : np.ndarray
-        Template probabilities at event phases.
-    weights : np.ndarray
-        Per-event weights in [0, 1].
-
-    Returns
-    -------
-    float
-        Summed weighted log-likelihood.
-    """
-    like = 0.0
-    for i in range(probs.size):
-        like += np.log(weights[i] * probs[i] + (1 - weights[i]))
-    return like
-
-
-@njit()
-def _pc_like(probs):
-    """Compute unweighted Pletsch-Clarke log-likelihood contribution.
-
-    Parameters
-    ----------
-    probs : np.ndarray
-        Template probabilities at event phases.
+    terms : np.ndarray
+        Per-event likelihood terms, strictly positive.
 
     Returns
     -------
@@ -49,8 +31,8 @@ def _pc_like(probs):
         Summed log-likelihood.
     """
     like = 0.0
-    for i in range(probs.size):
-        like += np.log(probs[i])
+    for i in range(terms.size):
+        like += np.log(terms[i])
     return like
 
 
@@ -82,15 +64,18 @@ def pletsch_clarke_likelihood(phases, template_func, weights=None):
     probs = template_func(phases)
     probs = np.asarray(probs, dtype=float)
     probs = np.nan_to_num(probs, nan=1e-12, posinf=1e12, neginf=1e-12)
-    probs = np.clip(probs, 1e-12, None)
 
     if weights is None:
-        return _pc_like(probs)
+        return _pc_like(np.clip(probs, 1e-12, None))
 
     local_weights = np.asarray(weights, dtype=float)
     local_weights = np.nan_to_num(local_weights, nan=0.0, posinf=1.0, neginf=0.0)
     local_weights = np.clip(local_weights, 0.0, 1.0)
-    return _pc_like_weight(probs, local_weights)
+    # The log's argument is the weighted mixture, not the template. Flooring the
+    # template instead would be too strict: a correctly undiluted template can
+    # dip below zero at the trough of a strong pulse while every event's
+    # 1 + w_i (T - 1) is still comfortably positive, since w_i <= 1.
+    return _pc_like(np.clip(local_weights * probs + (1 - local_weights), 1e-12, None))
 
 
 def rayleigh_as_likelihood(phases, template_func=None, weights=None):

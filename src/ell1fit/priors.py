@@ -11,27 +11,57 @@ __all__ = [
 ]
 
 
-def _flat_logprior(bound0, bound1):
-    """Create a uniform log-prior function between two bounds.
+class _FlatLogPrior:
+    """Uniform log-prior between two bounds.
 
-    The returned function carries its ``(bound0, bound1)`` as a
-    ``phys_bounds`` attribute, so callers that need a hard search-space
-    bound (e.g. a bounded local optimizer) can find it without having to
-    re-derive or duplicate the bound rules used to build each prior.
+    A class rather than the closure this used to be: ``ell1fit.nuts_sampling``
+    and ``ell1fit.prior_transform`` both need to read ``bound0``/``bound1``
+    back out to rebuild this prior as a JAX expression or a unit-cube
+    transform, and a production nested-sampling pool needs the whole prior
+    list -- and hence ``FitSetup`` -- to survive a pickle to a worker
+    process. Both are attributes on an ordinary object; neither is available
+    on a closure without reading its cell contents by free-variable name,
+    and no closure pickles at all.
 
-    Returns
-    -------
-    callable
-        Function returning ``0`` inside bounds and ``-inf`` outside.
+    Carries its ``(bound0, bound1)`` as a ``phys_bounds`` attribute too, so
+    callers that need a hard search-space bound (e.g. a bounded local
+    optimizer) can find it without re-deriving or duplicating the bound rules
+    used to build each prior.
     """
 
-    def func(x):
-        if x < bound0 or x > bound1:
+    def __init__(self, bound0, bound1):
+        self.bound0 = bound0
+        self.bound1 = bound1
+        self.phys_bounds = (bound0, bound1)
+
+    def __call__(self, x):
+        if x < self.bound0 or x > self.bound1:
             return -np.inf
         return 0
 
-    func.phys_bounds = (bound0, bound1)
-    return func
+
+def _flat_logprior(bound0, bound1):
+    """Create a uniform log-prior between two bounds. See :class:`_FlatLogPrior`."""
+    return _FlatLogPrior(bound0, bound1)
+
+
+class _PeriodicUniformLogPrior:
+    """Periodic uniform log-prior around a center value.
+
+    See :class:`_FlatLogPrior` for why this is a class rather than a closure.
+    """
+
+    def __init__(self, center, period, half_width):
+        self.center = center
+        self.period = period
+        self.half_width = half_width
+        self.phys_bounds = (center - 0.5 * period, center + 0.5 * period)
+
+    def __call__(self, x):
+        dx = ((x - self.center + 0.5 * self.period) % self.period) - 0.5 * self.period
+        if np.abs(dx) > self.half_width:
+            return -np.inf
+        return 0
 
 
 def _periodic_uniform_logprior(center, period, half_width=None):
@@ -54,15 +84,26 @@ def _periodic_uniform_logprior(center, period, half_width=None):
     """
     if half_width is None:
         half_width = period / 2
+    return _PeriodicUniformLogPrior(center, period, half_width)
 
-    def func(x):
-        dx = ((x - center + 0.5 * period) % period) - 0.5 * period
-        if np.abs(dx) > half_width:
-            return -np.inf
-        return 0
 
-    func.phys_bounds = (center - 0.5 * period, center + 0.5 * period)
-    return func
+class _PeriodicNormalLogPrior:
+    """Periodic Gaussian log-prior around a center value.
+
+    See :class:`_FlatLogPrior` for why this is a class rather than a closure.
+    """
+
+    def __init__(self, center, sigma, period):
+        self.center = center
+        self.sigma = sigma
+        self.period = period
+        self.norm_const = -0.5 * np.log(2 * np.pi) - np.log(sigma)
+        # Periodic, so one period around the centre covers every distinct value.
+        self.phys_bounds = (center - 0.5 * period, center + 0.5 * period)
+
+    def __call__(self, x):
+        dx = ((x - self.center + 0.5 * self.period) % self.period) - 0.5 * self.period
+        return self.norm_const - 0.5 * (dx / self.sigma) ** 2
 
 
 def _periodic_normal_logprior(center, sigma, period):
@@ -85,16 +126,7 @@ def _periodic_normal_logprior(center, sigma, period):
     sigma = np.abs(sigma)
     if sigma == 0 or not np.isfinite(sigma):
         return _periodic_uniform_logprior(center, period)
-
-    norm_const = -0.5 * np.log(2 * np.pi) - np.log(sigma)
-
-    def func(x):
-        dx = ((x - center + 0.5 * period) % period) - 0.5 * period
-        return norm_const - 0.5 * (dx / sigma) ** 2
-
-    # Periodic, so one period around the centre covers every distinct value.
-    func.phys_bounds = (center - 0.5 * period, center + 0.5 * period)
-    return func
+    return _PeriodicNormalLogPrior(center, sigma, period)
 
 
 def assign_logpriors(fit_parameter_names, parameters_with_unc, obs_length=1):

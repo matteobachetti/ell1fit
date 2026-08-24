@@ -188,3 +188,73 @@ def test_order_of_magnitude_is_one_decade_below():
     assert order_of_magnitude(-1234.0) == pytest.approx(100.0)
     assert order_of_magnitude(1.0) == pytest.approx(0.1)
     assert order_of_magnitude(0.05) == pytest.approx(0.01)
+
+
+#: Width of the analytic Gaussian used by the curvature tests, in local units.
+ANALYTIC_SIGMA = 4e-5
+
+
+def _analytic_gaussian(peak=0.0, upper_bound=np.inf, lower_bound=-np.inf):
+    """A one-dimensional Gaussian log-posterior with known width and optional walls."""
+
+    def logpost(pars):
+        x = float(np.asarray(pars, dtype=float)[0])
+        if x > upper_bound or x < lower_bound:
+            return -np.inf
+        return -0.5 * ((x - peak) / ANALYTIC_SIGMA) ** 2
+
+    return logpost
+
+
+@pytest.mark.parametrize("offset_sigmas", [0.0, 0.3, -0.3, 1.0, -1.0, 3.0, -3.0])
+def test_preconditioning_measures_width_not_slope(offset_sigmas):
+    """The measured scale must not depend on where the starting point sits.
+
+    A starting point away from the peak is the normal case, not a pathology:
+    ``Phase_i`` is centred on a grid whose cells are a full sigma wide, and any
+    real parfile starts somewhere near the answer rather than on it. The scale
+    that matters is how wide the posterior is, which does not move when the
+    starting point does.
+
+    An analytic Gaussian rather than a fitted posterior, so the right answer is
+    known exactly and the assertion needs no tolerance for noise. Both signs of
+    the offset are covered because the one-sided fall this replaced errs in
+    opposite directions either way: probing away from the peak it returns 0.20x
+    at 0.3 sigma, 0.11x at 1 sigma and 0.064x at 3 sigma, and probing toward it
+    2.0x, 1.6x and 4.0x. Only the centred case, which is the one that never
+    happens in practice, comes out right. So this fails loudly if the symmetric
+    stencil is ever taken back out.
+    """
+    (factor,) = precondition_factors(
+        _analytic_gaussian(peak=offset_sigmas * ANALYTIC_SIGMA), [1.0], 1
+    )
+    assert factor == pytest.approx(ANALYTIC_SIGMA / TARGET_LOCAL_SIGMA, rel=1e-6)
+
+
+@pytest.mark.parametrize("bound_sigmas", [0.03, 0.2, 1.0])
+def test_preconditioning_measures_width_against_a_hard_prior_bound(bound_sigmas):
+    """A wall on one side must not degrade the estimate.
+
+    ``EPS`` is confined to +-1 and ``A1`` to twice its value, so a symmetric
+    probe can land outside the prior's support and come back ``-inf``. The
+    three-point stencil on the feasible side removes the linear term just as
+    exactly, so the answer should be unchanged.
+    """
+    (factor,) = precondition_factors(
+        _analytic_gaussian(upper_bound=bound_sigmas * ANALYTIC_SIGMA), [1.0], 1
+    )
+    assert factor == pytest.approx(ANALYTIC_SIGMA / TARGET_LOCAL_SIGMA, rel=1e-6)
+
+
+def test_preconditioning_keeps_its_factor_when_walls_block_both_sides():
+    """Pinned behaviour: an unmeasurable direction keeps the factor it came in with.
+
+    With hard bounds closer than the smallest step that shows any curvature,
+    there is no honest estimate to be had. Returning the incoming factor is the
+    same graceful degradation as for a flat direction, and is preferred to
+    inventing a scale from a blocked probe.
+    """
+    narrow = _analytic_gaussian(
+        upper_bound=0.01 * ANALYTIC_SIGMA, lower_bound=-0.01 * ANALYTIC_SIGMA
+    )
+    assert precondition_factors(narrow, [7.0], 1) == [7.0]

@@ -240,6 +240,30 @@ def _write_results_products(results, n_files, get_outroot, requested_parameter_n
     return output_file
 
 
+def _undilute_template(template, weights):
+    """Rescale a weighted fold into the profile a fully weighted event follows.
+
+    The weighted fold is the profile of the weighted *ensemble*, but the
+    likelihood's model for event ``i`` is ``1 + w_i (T - 1)`` -- a copy of the
+    template diluted by that event's own weight. ``T`` must therefore be the
+    *undiluted* profile, the one a ``w = 1`` event follows. That profile's
+    modulation is ``sum(w a) / sum(w^2)``, against the fold's
+    ``sum(w a) / sum(w)``, so the fold is short by ``sum(w) / sum(w^2)`` and the
+    likelihood would otherwise dilute it a second time. Left uncorrected, the
+    fitted phase uncertainties come out well over 50% too wide.
+
+    Only the deviation from the mean is scaled, so the result does not depend on
+    how :func:`create_template_from_profile_harm` normalizes its output.
+    """
+    local_weights = np.asarray(weights, dtype=float)
+    total_square = float(np.sum(local_weights**2))
+    if not np.isfinite(total_square) or total_square <= 0:
+        return template
+    undilute = float(np.sum(local_weights)) / total_square
+    level = template.mean()
+    return level + undilute * (template - level)
+
+
 def _prepare_templates_and_phase_priors(
     profile,
     profile_weight,
@@ -277,6 +301,7 @@ def _prepare_templates_and_phase_priors(
                 final_nbin=200,
                 imagefile=get_outroot(i) + "_template.jpg",
             )
+            template = _undilute_template(template, weights[i])
         else:
             template = template_raw
             additional_phase = additional_phase_raw
@@ -339,7 +364,6 @@ def _build_profiles_and_weights(
             times_from_pepoch,
             energies,
             parameters,
-            nbin=32,
             nharm=1,
             tolerance=tolerance,
             plot_root_file_name=[get_outroot(i) + "_pf_weight_spectrum" for i in range(n_files)],
@@ -439,6 +463,10 @@ def ell1fit(
     use_pi=False,
     ignore_uncertainties=False,
     template_iterations=1,
+    sampler="emcee",
+    nlive=1000,
+    dlogz=0.1,
+    workers=0,
 ):
     """Fit spin and ELL1 orbital parameters from one or more event files.
 
@@ -490,6 +518,12 @@ def ell1fit(
         that. ``1`` (the default) disables refinement entirely and is
         bit-identical to not having the feature. See
         :mod:`ell1fit.refinement`.
+    sampler : {"emcee", "nuts", "nested"}, optional
+        Posterior-exploration backend -- see
+        :func:`ell1fit.fitting.optimize_solution`.
+    nlive, dlogz, workers : optional
+        Only consulted when ``sampler="nested"`` -- see
+        :func:`ell1fit.fitting.optimize_solution`.
 
     Returns
     -------
@@ -661,6 +695,10 @@ def ell1fit(
         minimize_first=minimize_first,
         outroots=outroots,
         reference_phases=reference_phases,
+        sampler=sampler,
+        nlive=nlive,
+        dlogz=dlogz,
+        workers=workers,
     )
     results["template_iterations"] = template_iterations
     results["template_passes_run"] = len(refinement_history)
