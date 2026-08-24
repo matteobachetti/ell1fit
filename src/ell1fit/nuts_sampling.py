@@ -177,18 +177,6 @@ def _template_loglike(jnp, phases, coefficients, x0, dx, n_intervals, weights):
     return jnp.sum(jnp.log(jnp.maximum(values, TEMPLATE_FLOOR)))
 
 
-def _prior_parameters(func):
-    """Read a prior closure's constants by name.
-
-    The priors in :mod:`ell1fit.priors` are closures, so their constants live in
-    free variables rather than attributes. Pulling them out by name is only as
-    stable as those names, which is exactly why every translated prior is then
-    checked numerically against the original -- see :func:`_translate_prior`.
-    """
-    cells = func.__closure__ or ()
-    return dict(zip(func.__code__.co_freevars, (cell.cell_contents for cell in cells)))
-
-
 def _check_prior_translation(func, translated, probe_values):
     """Assert a translated prior reproduces the original at every probe value.
 
@@ -223,29 +211,28 @@ def _translate_prior(jnp, func, probe_values):
     one of them, including the infinities, or this raises: a prior that is
     quietly wrong changes the answer without changing the diagnostics.
     """
-    qualname = getattr(func, "__qualname__", "")
-    constants = _prior_parameters(func)
+    from .priors import _FlatLogPrior, _PeriodicNormalLogPrior, _PeriodicUniformLogPrior
 
-    if qualname.startswith("_flat_logprior"):
-        low, high = constants["bound0"], constants["bound1"]
+    if isinstance(func, _FlatLogPrior):
+        low, high = func.bound0, func.bound1
 
         def translated(value):
             return jnp.where((value < low) | (value > high), -jnp.inf, 0.0)
 
-    elif qualname.startswith("_periodic_uniform_logprior"):
-        center = constants["center"]
-        period = constants["period"]
-        half_width = constants["half_width"]
+    elif isinstance(func, _PeriodicUniformLogPrior):
+        center = func.center
+        period = func.period
+        half_width = func.half_width
 
         def translated(value):
             dx = jnp.mod(value - center + 0.5 * period, period) - 0.5 * period
             return jnp.where(jnp.abs(dx) > half_width, -jnp.inf, 0.0)
 
-    elif qualname.startswith("_periodic_normal_logprior"):
-        center = constants["center"]
-        period = constants["period"]
-        sigma = constants["sigma"]
-        norm_const = constants["norm_const"]
+    elif isinstance(func, _PeriodicNormalLogPrior):
+        center = func.center
+        period = func.period
+        sigma = func.sigma
+        norm_const = func.norm_const
 
         def translated(value):
             dx = jnp.mod(value - center + 0.5 * period, period) - 0.5 * period
@@ -264,7 +251,7 @@ def _translate_prior(jnp, func, probe_values):
 
     else:
         raise NotImplementedError(
-            f"No JAX translation for log-prior {qualname!r}. Add one in "
+            f"No JAX translation for log-prior {func!r}. Add one in "
             "ell1fit/nuts_sampling.py rather than letting the sampler run "
             "against a prior it does not implement."
         )

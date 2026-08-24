@@ -34,18 +34,6 @@ from scipy.special import ndtri, ndtr
 CHECK_GRID = np.linspace(1e-4, 1 - 1e-4, 401)
 
 
-def _prior_parameters(func):
-    """Read a prior closure's constants by name.
-
-    The same trick :mod:`ell1fit.nuts_sampling` uses, and carrying the same caveat: it
-    is only as stable as the free-variable names in :mod:`ell1fit.priors`,
-    which is why every transform built here is then checked numerically against
-    the prior it claims to invert.
-    """
-    cells = func.__closure__ or ()
-    return dict(zip(func.__code__.co_freevars, (cell.cell_contents for cell in cells)))
-
-
 #: One transform per prior shape, as data rather than as a closure: ``(kind,
 #: centre, scale, lo, hi)``. ``uniform`` maps ``u`` onto ``[centre, scale]``;
 #: ``normal`` maps it through the inverse normal CDF restricted to the CDF range
@@ -65,11 +53,10 @@ def transform_spec_for_prior(func):
     rather than guessing a box whose width would set the Occam factor and hence
     the answer.
     """
-    qualname = getattr(func, "__qualname__", "")
-    constants = _prior_parameters(func)
+    from .priors import _FlatLogPrior, _PeriodicNormalLogPrior, _PeriodicUniformLogPrior
 
-    if qualname.startswith("_flat_logprior"):
-        low, high = float(constants["bound0"]), float(constants["bound1"])
+    if isinstance(func, _FlatLogPrior):
+        low, high = float(func.bound0), float(func.bound1)
         if not (np.isfinite(low) and np.isfinite(high)):
             raise ValueError(
                 "A uniform prior with infinite bounds is improper and has no "
@@ -78,17 +65,17 @@ def transform_spec_for_prior(func):
             )
         return (UNIFORM, low, high, 0.0, 1.0)
 
-    if qualname.startswith("_periodic_uniform_logprior"):
+    if isinstance(func, _PeriodicUniformLogPrior):
         # ``half_width`` is the support, which is not always the full period;
         # ``phys_bounds`` reports the period and would be the wrong box here.
-        centre = float(constants["center"])
-        half_width = float(constants["half_width"])
+        centre = float(func.center)
+        half_width = float(func.half_width)
         return (UNIFORM, centre - half_width, centre + half_width, 0.0, 1.0)
 
-    if qualname.startswith("_periodic_normal_logprior"):
-        centre = float(constants["center"])
-        sigma = float(constants["sigma"])
-        period = float(constants["period"])
+    if isinstance(func, _PeriodicNormalLogPrior):
+        centre = float(func.center)
+        sigma = float(func.sigma)
+        period = float(func.period)
         lo = float(ndtr(-0.5 * period / sigma))
         hi = float(ndtr(0.5 * period / sigma))
         if not hi > lo:
@@ -111,7 +98,7 @@ def transform_spec_for_prior(func):
         )
 
     raise NotImplementedError(
-        f"No unit-cube transform for log-prior {qualname!r}. Add one here "
+        f"No unit-cube transform for log-prior {func!r}. Add one here "
         "rather than letting a nested sampler run against a prior it does "
         "not implement."
     )

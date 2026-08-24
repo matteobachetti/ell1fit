@@ -139,6 +139,17 @@ def main(args=None):
         default=0.1,
         help="Evidence-remaining stopping criterion for --sampler nested. Ignored otherwise.",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=0,
+        help=(
+            "Worker processes for --sampler nested. Ignored otherwise. 0 (the "
+            "default) runs single-process; the prior transform always does, "
+            "regardless of this setting -- only likelihood evaluations spread "
+            "across workers."
+        ),
+    )
 
     args = parser.parse_args(args)
     files = args.files
@@ -166,6 +177,7 @@ def main(args=None):
         sampler=args.sampler,
         nlive=args.nlive,
         dlogz=args.dlogz,
+        workers=args.workers,
     )
 
 

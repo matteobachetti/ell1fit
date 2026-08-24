@@ -466,6 +466,7 @@ def ell1fit(
     sampler="emcee",
     nlive=1000,
     dlogz=0.1,
+    workers=0,
 ):
     """Fit spin and ELL1 orbital parameters from one or more event files.
 
@@ -520,7 +521,7 @@ def ell1fit(
     sampler : {"emcee", "nuts", "nested"}, optional
         Posterior-exploration backend -- see
         :func:`ell1fit.fitting.optimize_solution`.
-    nlive, dlogz : optional
+    nlive, dlogz, workers : optional
         Only consulted when ``sampler="nested"`` -- see
         :func:`ell1fit.fitting.optimize_solution`.
 
@@ -697,6 +698,7 @@ def ell1fit(
         sampler=sampler,
         nlive=nlive,
         dlogz=dlogz,
+        workers=workers,
     )
     results["template_iterations"] = template_iterations
     results["template_passes_run"] = len(refinement_history)

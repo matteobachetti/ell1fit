@@ -108,6 +108,38 @@ def check_loglikelihood_split(
     return {"probes_compared": compared, "worst_recomposition_error": worst}
 
 
+#: Set once per worker process by :func:`_init_nested_worker`, read by
+#: :func:`_worker_loglikelihood`. A pool under macOS's ``spawn`` start method
+#: pickles whatever it sends a worker, and a closure over ``observations``/
+#: ``setup`` cannot be pickled -- so nothing captured is sent. Instead each
+#: worker gets the two picklable objects once, at start-up, and rebuilds its
+#: own local closure from them; only this module-level trampoline, which
+#: closes over nothing, ever needs to survive a pickle.
+_WORKER_LOGLIKELIHOOD = None
+
+
+def _init_nested_worker(observations, setup):
+    """Rebuild this worker's own log-likelihood from picklable inputs.
+
+    Run once per worker by the pool's own ``initializer`` mechanism. Cheap:
+    this only wires together numbers and templates ``observations``/``setup``
+    already hold -- the same assembly
+    :func:`ell1fit.posterior._build_posterior_functions` does in the main
+    process -- not the event-file loading or template refinement that built
+    them in the first place.
+    """
+    global _WORKER_LOGLIKELIHOOD
+    from .posterior import _build_posterior_functions
+
+    _, _, logpost = _build_posterior_functions(observations, setup)
+    _WORKER_LOGLIKELIHOOD, _ = split_loglikelihood(observations, setup, logpost)
+
+
+def _worker_loglikelihood(position):
+    """Trampoline dynesty can pickle to a worker: no captured state, just a global read."""
+    return _WORKER_LOGLIKELIHOOD(position)
+
+
 def run_nested(
     observations,
     setup,
@@ -120,29 +152,46 @@ def run_nested(
     dlogz=0.1,
     bound="multi",
     nested_sample="auto",
+    workers=0,
     seed=None,
 ):
     """Run ``dynesty`` nested sampling, and summarize like the other samplers.
 
     The production counterpart of :func:`ell1fit.mcmc_utils.safe_run_sampler`
     and :func:`ell1fit.nuts_sampling.run_nuts`, called when
-    ``optimize_solution(..., sampler="nested")``. Two things worth knowing
-    before reaching for it:
+    ``optimize_solution(..., sampler="nested")``.
 
-    - **This is a capability, not a speed play.** It is the only sampler here
-      that produces ``log_evidence``, and that is the only reason to choose
-      it -- it will lose on every rate against the other two.
-    - **Single-process only, for now.** The benchmark harness parallelizes
-      nested sampling across a process pool by rebuilding the problem from a
-      picklable spec in each worker; nothing equivalent exists for a
-      pipeline-built ``observations``/``setup`` yet, so a run here is one
-      process. Slow on a large problem, correct regardless.
+    **This is a capability, not a speed play.** It is the only sampler here
+    that produces ``log_evidence``, and that is the only reason to choose it
+    -- it will lose on every rate against the other two, ``workers`` or not.
 
     ``nlive`` matters more than it looks like it should: nested sampling can
     miss a narrow mode entirely and still report a tidy error bar, with
     nothing in dynesty's own diagnostics to say so. See
     :data:`PEAK_SHORTFALL_GATE`. Raise ``nlive`` on anything with more than a
     handful of free parameters.
+
+    Parameters
+    ----------
+    workers : int, optional
+        Worker processes to spread likelihood evaluations across. ``0`` (the
+        default) runs single-process. Unlike the benchmark harness, which
+        rebuilds a whole synthetic problem in each worker because that is
+        cheap for a seeded fixture, a worker here is handed the already-built
+        ``observations``/``setup`` and only rebuilds the likelihood closure
+        from them -- no event-file I/O, no template refinement repeated per
+        worker. The prior transform stays evaluated in the main process: it
+        is already picklable data (see :mod:`ell1fit.prior_transform`) and a
+        handful of microseconds of numpy, cheaper to run here than to ship a
+        cube point to a worker and back.
+
+        Not free to turn on. Measured on a small two-parameter fixture,
+        4 workers were a net *slowdown* (23 s against 17 s single-process at
+        ``nlive=500``): shipping a position to a worker and a likelihood back
+        costs more than the fixture's likelihood call did. Reach for
+        ``workers`` on a fit expensive enough that one likelihood call is
+        milliseconds, not microseconds -- a large event count or several free
+        parameters -- not by default.
 
     Returns
     -------
@@ -175,17 +224,38 @@ def run_nested(
     map_loglikelihood = float(loglikelihood(starting_pars))
 
     seed = int(np.random.default_rng().integers(2**31)) if seed is None else seed
-    sampler = dynesty.NestedSampler(
-        loglikelihood,
-        transform,
-        ndim,
-        nlive=nlive,
-        bound=bound,
-        sample=nested_sample,
-        rstate=np.random.default_rng(seed),
-    )
-    sampler.run_nested(print_progress=False, dlogz=dlogz)
-    results = sampler.results
+
+    pool = None
+    sampler_loglikelihood = loglikelihood
+    if workers:
+        import multiprocessing
+
+        pool = multiprocessing.get_context("spawn").Pool(
+            processes=workers,
+            initializer=_init_nested_worker,
+            initargs=(observations, setup),
+        )
+        sampler_loglikelihood = _worker_loglikelihood
+
+    try:
+        sampler = dynesty.NestedSampler(
+            sampler_loglikelihood,
+            transform,
+            ndim,
+            nlive=nlive,
+            bound=bound,
+            sample=nested_sample,
+            rstate=np.random.default_rng(seed),
+            pool=pool,
+            queue_size=workers if workers else None,
+            use_pool={"prior_transform": False} if workers else None,
+        )
+        sampler.run_nested(print_progress=False, dlogz=dlogz)
+        results = sampler.results
+    finally:
+        if pool is not None:
+            pool.terminate()
+            pool.join()
 
     # The guard that matters: see PEAK_SHORTFALL_GATE.
     peak_shortfall = float(map_loglikelihood - np.max(results.logl))

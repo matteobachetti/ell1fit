@@ -462,6 +462,15 @@ Both ``--sampler nuts`` and ``--sampler nested`` are also available on the
 orchestration beyond running it twice, with and without the eccentricity
 parameters in ``-P``, and subtracting the two runs' ``log_evidence`` fields --
 the harness's ``bayes`` subcommand exists to add the seed-scatter uncertainty
-on top, not because the subtraction itself needs machinery. The CLI's nested
-run is single-process, unlike the harness's pooled one, so it is slower at the
-same ``--nlive``.
+on top, not because the subtraction itself needs machinery. The CLI's
+``--sampler nested`` also takes ``--workers``, spreading likelihood
+evaluations across processes the same way the harness does, except a worker
+here is handed the already-built model rather than rebuilding it from a
+synthetic spec -- no event-file I/O or template refinement repeated per
+worker. Measured on a small two-parameter fixture, ``--workers`` was a net
+*slowdown* (23 s against 17 s single-process at ``nlive=500``): the
+per-likelihood-call cost has to clear the pool's own IPC overhead before
+spreading it across processes pays for itself, the same trade-off the
+emcee pool above makes explicit. Reach for it on a fit expensive enough
+that a single likelihood call is milliseconds, not microseconds -- a large
+event count or several free parameters -- not by default.
