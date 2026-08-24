@@ -33,6 +33,7 @@ import io
 import logging
 from dataclasses import dataclass, field
 
+import astropy.units as u
 import numpy as np
 from astropy.table import Table
 from pint.models import get_model
@@ -172,6 +173,7 @@ class EpochOrbit:
     pepoch: float  #: MJD
     tasc: float  #: fitted TASC, MJD
     tasc_err: tuple  #: (neg, pos), days
+    pbdot: float  #: dimensionless, set on the parsed model via .quantity -- see from_row
     parfile_text: str = field(repr=False)  #: synthetic in-memory parfile, this row's own model
 
     @classmethod
@@ -184,6 +186,15 @@ class EpochOrbit:
         # the fitted TASC in MJD, not an offset that needs adding to anything else.
         tasc = tasc_offset_days
 
+        # PBDOT is deliberately *not* written into this parfile text: PINT's
+        # parameter parser (floatParameter._set_quantity) silently multiplies any
+        # PBDOT magnitude above 1e-7 by 1e-12, assuming it was written in the
+        # "x1e-12" pulsar-timing convention -- corrupting a real PBDOT by 12
+        # orders of magnitude with no error raised. Real M82 X-2 values
+        # (~5.7e-8) happen to stay under that threshold, but nothing here should
+        # rely on that. Instead PBDOT is carried separately and applied to the
+        # parsed model via ``.quantity`` in _build_models, the same fix already
+        # used by orbital_decay._write_parfile.
         parfile_text = (
             "PSR                 EL1DECAY\n"
             "EPHEM               DE421\n"
@@ -192,7 +203,6 @@ class EpochOrbit:
             "F0                  1.0\n"
             "BINARY              ELL1\n"
             f"PB                  {float(row['PB']) / 86400.0!r}\n"
-            f"PBDOT               {float(row['PBDOT'])!r}\n"
             f"A1                  {float(row['A1'])!r}\n"
             f"TASC                {float(tasc)!r}\n"
             f"EPS1                {float(row['EPS1'])!r}\n"
@@ -203,6 +213,7 @@ class EpochOrbit:
             pepoch=float(row["PEPOCH"]),
             tasc=float(tasc),
             tasc_err=(float(tasc_err_days[0]), float(tasc_err_days[1])),
+            pbdot=float(row["PBDOT"]),
             parfile_text=parfile_text,
         )
 
@@ -219,9 +230,31 @@ def load_epochs(files):
 
 def _build_models(epochs):
     """``ell1fit.models._load_and_validate_models`` on every epoch's synthetic
-    parfile -- reused, not reimplemented. Returns ``(model_list, pepoch_list, ref_model)``."""
+    parfile -- reused, not reimplemented -- plus each epoch's PBDOT, applied via
+    ``.quantity`` (see the comment in :meth:`EpochOrbit.from_row`) since it is
+    never written into the parfile text itself.
+
+    ``_load_and_validate_models``'s own ``ref_model`` is discarded, not reused:
+    it is built (deepcopy of ``model_list[0]``, then ``change_binary_epoch`` to
+    the mean epoch) *before* this function gets a chance to set PBDOT, which
+    would propagate PB to the mean epoch using PBDOT=None (parsed from text
+    with no PBDOT line at all). So ``ref_model`` is rebuilt here, identically,
+    but only after every model's real PBDOT is in place.
+
+    Returns
+    -------
+    (model_list, pepoch_list, ref_model)
+    """
     parfile_likes = [io.StringIO(e.parfile_text) for e in epochs]
-    return _load_and_validate_models(parfile_likes)
+    model_list, pepoch_list, _ = _load_and_validate_models(parfile_likes)
+
+    for epoch, model in zip(epochs, model_list):
+        model.PBDOT.quantity = epoch.pbdot * u.dimensionless_unscaled
+
+    ref_model = copy.deepcopy(model_list[0])
+    ref_model.change_binary_epoch(np.mean(pepoch_list))
+
+    return model_list, pepoch_list, ref_model
 
 
 #: A PB discrepancy left over after subtracting off whatever a file's own

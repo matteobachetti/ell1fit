@@ -19,6 +19,7 @@ from astropy.table import Table
 from ..mcmc_utils import plot_mcmc_comparison
 from ..orbital_decay_data import (
     OrbitalModelCompatibilityError,
+    _build_models,
     _float128_to_float64_header,
     build_reference_model,
     check_compatibility,
@@ -305,10 +306,10 @@ def test_check_compatibility_fires_on_large_pbdot_mismatch(tmp_path):
     epoch, which for 2 files is always the midpoint). That makes the
     leftover residual exactly zero regardless of how large the PBDOT
     mismatch is, isolating this test to the PBDOT-unsound check rather than
-    also tripping the unrelated PB-residual check. Both PBDOT values are
-    also kept under 1e-7 in magnitude, to avoid a known, separate PINT
-    parfile-parsing quirk (see EpochOrbit.from_row) that silently rescales
-    a PBDOT written any larger than that.
+    also tripping the unrelated PB-residual check. (Both PBDOT values here
+    happen to stay under 1e-7 in magnitude, but that no longer matters --
+    see test_epoch_pbdot_above_1e7_threshold_is_not_corrupted below for the
+    PINT parfile-parsing quirk this used to be sensitive to.)
     """
     pb0_days = 1.7
     pepoch0, pepoch1 = 57000.0, 58000.0
@@ -339,3 +340,35 @@ def test_check_compatibility_fires_on_pb_unexplained_by_pbdot(tmp_path):
     epochs = load_epochs(files)
     with pytest.raises(OrbitalModelCompatibilityError, match="unexplained"):
         check_compatibility(epochs, tolerance=1e-9)
+
+
+def test_epoch_pbdot_above_1e7_threshold_is_not_corrupted(tmp_path):
+    """PINT's parfile parser (``floatParameter._set_quantity``) assumes any
+    PBDOT magnitude above 1e-7 was written in the "x1e-12" pulsar-timing
+    convention and silently multiplies it by 1e-12 -- a 12-order-of-magnitude
+    corruption with no error raised. Real M82 X-2 PBDOT (~5.7e-8) never
+    crosses that threshold, so this was previously latent; a large PBDOT like
+    the one used here (5.7e-6) would previously have been read back as
+    ~5.7e-18, which check_compatibility would have seen as PBDOT=0 --
+    silently failing to explain the PB difference between the two files
+    below and firing a spurious "unexplained" error, or (had PB been built
+    from the corrupted value too) simply losing the decay signal outright.
+    """
+    pb0_days = 1.7
+    pepoch0, pepoch1 = 57000.0, 58000.0
+    pbdot = 5.7e-6
+    pb0_sec = pb0_days * 86400.0
+    pb1_sec = pb0_sec + pbdot * (pepoch1 - pepoch0) * 86400.0
+
+    files = [
+        _write_ecsv(tmp_path / "e0.ecsv", pepoch=pepoch0, pb=pb0_sec, tasc=57000.1, pbdot=pbdot),
+        _write_ecsv(tmp_path / "e1.ecsv", pepoch=pepoch1, pb=pb1_sec, tasc=58000.05, pbdot=pbdot),
+    ]
+    epochs = load_epochs(files)
+
+    model_list, _, ref_model = _build_models(epochs)
+    for model in model_list:
+        assert model.PBDOT.value == pytest.approx(pbdot)
+    assert ref_model.PBDOT.value == pytest.approx(pbdot)
+
+    check_compatibility(epochs, tolerance=1e-9)  # must not raise
