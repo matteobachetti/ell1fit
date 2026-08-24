@@ -306,6 +306,131 @@ Sampler ideas tried and rejected
   chains mapped together all pay for the deepest trajectory.
 
 
+Model comparison
+----------------
+
+Effective samples per second is the wrong figure of merit for one class of
+question. Asking whether a binary is eccentric *at all* is a comparison between
+two models, and that needs the evidence :math:`\log Z` — the likelihood
+integrated over the prior — which neither the ensemble sampler nor NUTS
+produces. Nested sampling does, and ``--sampler nested`` (dynesty) is in the
+harness for that reason rather than for speed.
+
+Two preconditions had to be established first, neither of them automatic.
+
+**The prior has to be proper.** An unbounded flat prior has no evidence at all,
+and :mod:`ell1fit.priors` returns ``0`` inside its bounds rather than
+:math:`-\log w`, so the package's priors are a mixture of normalised and
+unnormalised factors — harmless for MCMC, fatal for an integral. Every prior
+``P3`` uses turns out to be proper. The omitted normalisation comes to exactly
+:math:`2\log 2`: the two eccentricity uniforms and nothing else, which is a
+useful confirmation that nothing else was left open.
+
+**The unit-cube transform, not the log-prior, is what** :math:`\log Z`
+**integrates against.** ``tools/prior_transform.py`` builds it by inverting each
+prior's own CDF, so :math:`\log Z` is already the evidence under a normalised
+prior and no correction is ever applied afterwards. It is checked three ways: a
+constant likelihood must integrate to :math:`\log Z = 0`, measured
+:math:`-0.0037 \pm 0.0075`; each transform must be proportional to
+``exp(logprior)`` as the package itself computes it; and a likelihood made
+Gaussian in exactly one *physical* parameter must reproduce independent
+one-dimensional quadrature, which it does for all ten parameters within 1.93σ.
+Only that third check can catch a wrong local-coordinate scale factor, to which
+the first is blind.
+
+Whether the Bayes factor is calibrated
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+A Bayes factor that prefers eccentricity on eccentric data demonstrates
+nothing by itself; the test is whether it also prefers a circle on circular
+data. Four problems make that control explicit — data generated with and
+without eccentricity, each fitted both with ``EPS1``/``EPS2`` free (10
+parameters) and with them fixed at zero (8). All four are 3×5,000 events, a
+scale at which the injected eccentricity is an 11.9σ effect and a call is an
+order of magnitude cheaper than on ``P3``.
+
+.. list-table:: Evidence at 4,000 live points, mean over seeds
+   :header-rows: 1
+   :widths: 12 20 20 26 22
+
+   * - Problem
+     - Data
+     - Model
+     - :math:`\log Z` sampled
+     - Laplace
+
+   * - ``E1``
+     - eccentric
+     - eccentric (10)
+     - +71.97 ± 1.37
+     - +73.24
+   * - ``E0``
+     - eccentric
+     - circular (8)
+     - +55.37 ± 0.02
+     - +55.38
+   * - ``C1``
+     - circular
+     - eccentric (10)
+     - +83.68 ± 0.94
+     - +85.26
+   * - ``C0``
+     - circular
+     - circular (8)
+     - +100.91 ± 0.00
+     - +100.90
+
+That is :math:`\ln B = +16.6 \pm 1.4` on eccentric data and
+:math:`-17.2 \pm 0.9` on circular data — decisive in both directions on
+Jeffreys' scale, and close to symmetric. The control holds. The quoted spread
+is the standard error over five seeds for the 10-parameter problems and two for
+the 8-parameter ones, which is the honest error bar for reasons given below.
+
+The Laplace approximation, computed from the JAX Hessian at the optimum,
+agrees to 0.01 nats on both 8-parameter problems and sits 1.3 and 1.6 nats
+above the 10-parameter ones. That is roughly one standard error on ``E1`` and
+somewhat beyond it on ``C1``; the eccentric model's posterior is a curved
+ridge, which is exactly where a Gaussian approximation should be expected to
+overstate the volume. It is quoted as an independent adjudicator, not as a
+correction.
+
+Nested sampling can fail silently
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+At 200 live points ``E1`` returned ``log Z = -32.0 +- 0.30``: a confident
+number, quoted to two decimals, and wrong by a hundred nats. The live points
+had never found the peak — the best likelihood any of them saw was 112 nats
+below one the optimizer reaches in seconds — and dynesty gave no indication of
+it. Its own error estimate is the sampling error of the integral it *did*
+compute, and says nothing about the mode it never entered.
+
+The harness therefore compares the sampler's best likelihood against the
+optimizer's and reports the shortfall, refusing to call a run converged when it
+exceeds one nat. The peak occupies about :math:`e^{-24}` of the prior volume,
+so finding it is a matter of the live points stumbling into it:
+
+- 1,000 live points missed it in two attempts out of three.
+- ``sample="rslice"`` did not help; it spent three times the calls and still
+  missed. (``sample="auto"`` is not a separate option to try — dynesty selects
+  ``rwalk`` at this dimension, reproducing it bit for bit.)
+- 4,000 live points found it in all five seeds, with a shortfall of 0.03 nats.
+
+The guard is necessary but not sufficient. The one 1,000-point run that *did*
+reach the peak still came out about 5 nats low, because finding a mode late is
+not the same as sampling it. Only the seed spread catches that.
+
+**dynesty's error bars understate the scatter on the 10-parameter problems by
+more than an order of magnitude.** Five seeds of ``E1`` gave 67.5 to 76.1, a
+3.1-nat standard deviation, against a quoted ±0.10; ``C1`` behaves the same
+way. On the 8-parameter problems the quoted error is honest — the seeds agree
+to 0.02 where dynesty claims 0.06. The ``bayes`` subcommand therefore builds
+its uncertainty from the seed scatter and ignores what dynesty reports, and
+several seeds per model are not optional.
+
+The cost is what one would expect of an integral rather than a sample: at 4,000
+live points on eight workers, roughly 900 s per seed for the 10-parameter
+problems and 200 s for the 8-parameter ones.
+
 Reproducing these numbers
 -------------------------
 
@@ -323,3 +448,8 @@ a difference that falls inside it. Note that ``refactor_net.py`` cannot referee
 this work: its MCMC entries carry a few tenths of a standard deviation of chain
 noise at the step counts it uses, so only its deterministic entries mean
 anything here.
+
+The evidence runs use the same harness: ``run --problem E1 --sampler nested
+--nlive 4000 --workers 8 --seeds 5 -o E1.json``, then ``bayes E1.json
+E0.json`` for the Bayes factor. ``bayes`` quotes the seed scatter, warns when
+any run failed the shortfall check, and reads ``Jeffreys`` off the result.
