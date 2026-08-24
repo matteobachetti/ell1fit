@@ -177,11 +177,13 @@ def test_plot_mcmc_comparison_smoke(null_case, tmp_path):
 _TASC_PERCENTILE_COLUMNS = ("1", "10", "16", "50", "84", "90", "99")
 
 
-def _write_ecsv(path, pepoch, pb, tasc, a1=22.0, eps1=0.0, eps2=0.0, pbdot=0.0, missing=()):
+def _write_ecsv(path, pepoch, pb, tasc, a1=22.0, eps1=0.0, eps2=0.0, pbdot=0.0, tasc_spread_days=0.001, missing=()):
     """A minimal single-epoch ell1fit result file, with just enough columns
     for orbital_decay_data to read (see its ``_REQUIRED_COLUMNS``).
 
-    ``missing`` drops named columns, to build the reader-edge-case fixtures.
+    ``tasc_spread_days`` sets the fitted TASC's 1-sigma half-width (equal on
+    both sides here). ``missing`` drops named columns, to build the
+    reader-edge-case fixtures.
     """
     columns = {
         "PEPOCH": [pepoch],
@@ -198,9 +200,9 @@ def _write_ecsv(path, pepoch, pb, tasc, a1=22.0, eps1=0.0, eps2=0.0, pbdot=0.0, 
     columns["dTASC_mean"] = [0.0]
     columns["dTASC_factor"] = [1.0]
     for p in _TASC_PERCENTILE_COLUMNS:
-        # 16/50/84 spread of 0.001 d either side of the mean, in "mean units"
-        # (factor=1 here, so this is directly in days).
-        spread = {"16": -0.001, "50": 0.0, "84": 0.001}.get(p, 0.0)
+        # 16/50/84 spread of tasc_spread_days either side of the mean, in
+        # "mean units" (factor=1 here, so this is directly in days).
+        spread = {"16": -tasc_spread_days, "50": 0.0, "84": tasc_spread_days}.get(p, 0.0)
         columns[f"dTASC_{p}"] = [spread]
 
     for name in missing:
@@ -261,11 +263,79 @@ def test_check_compatibility_fires_on_inconsistent_a1(tmp_path):
         check_compatibility(epochs, tolerance=1e-9)
 
 
-def test_check_compatibility_fires_on_inconsistent_pbdot(tmp_path):
+def test_check_compatibility_warns_but_does_not_abort_on_small_pbdot_mismatch(tmp_path, caplog):
+    """A file-to-file PBDOT difference whose spurious-delta_tasc impact stays
+    well under a file's own TASC uncertainty should warn, not abort -- this
+    mirrors a real disagreement measured between two M82 X-2 processing
+    batches.
+
+    The ``PB`` column is in *seconds* (see ``models.py``'s
+    ``_OFFSET_PARAMETERS``), and a real per-file PB is already the shared
+    orbit propagated to that file's own epoch using *that file's own*
+    reported PBDOT -- so e1's PB here is built the same way, not just copied
+    from e0, or the fixture would itself look like a PB disagreement
+    unrelated to the PBDOT difference under test.
+    """
+    pb0_days = 2.53
+    pepoch0, pepoch1 = 57000.0, 60748.0
+    pbdot0 = -5.70e-8
+    pbdot1 = -5.7e-8 + 1.11e-10
+    pb0_sec = pb0_days * 86400.0
+    pb1_sec = pb0_sec + pbdot1 * (pepoch1 - pepoch0) * 86400.0
+
     files = [
-        _write_ecsv(tmp_path / "e0.ecsv", pepoch=57000.0, pb=1.7, tasc=57000.1, pbdot=-5.7e-8),
-        _write_ecsv(tmp_path / "e1.ecsv", pepoch=57100.0, pb=1.7, tasc=57100.05, pbdot=-5.9e-8),
+        _write_ecsv(tmp_path / "e0.ecsv", pepoch=pepoch0, pb=pb0_sec, tasc=57000.1, pbdot=pbdot0, tasc_spread_days=0.00233),
+        _write_ecsv(tmp_path / "e1.ecsv", pepoch=pepoch1, pb=pb1_sec, tasc=60748.05, pbdot=pbdot1, tasc_spread_days=0.00233),
     ]
     epochs = load_epochs(files)
-    with pytest.raises(OrbitalModelCompatibilityError, match="PBDOT"):
+    with caplog.at_level("WARNING"):
+        check_compatibility(epochs, tolerance=1e-9)  # must not raise
+    assert any("spurious delta_tasc" in message for message in caplog.messages)
+
+
+def test_check_compatibility_fires_on_large_pbdot_mismatch(tmp_path):
+    """A PBDOT difference large enough that its spurious-delta_tasc impact
+    would rival the epoch's own (tight) TASC uncertainty is unsound and
+    still aborts.
+
+    ``pb1_sec`` is built as ``pb0_sec + 86400*dt*mean_pbdot`` (mean_pbdot =
+    the average of the two files' own PBDOT) -- algebraically exactly what
+    "predicted_pb_seconds + explained_sec" reduces to for a 2-file case in
+    ``check_compatibility`` (explained_sec uses dt relative to the *mean*
+    epoch, which for 2 files is always the midpoint). That makes the
+    leftover residual exactly zero regardless of how large the PBDOT
+    mismatch is, isolating this test to the PBDOT-unsound check rather than
+    also tripping the unrelated PB-residual check. Both PBDOT values are
+    also kept under 1e-7 in magnitude, to avoid a known, separate PINT
+    parfile-parsing quirk (see EpochOrbit.from_row) that silently rescales
+    a PBDOT written any larger than that.
+    """
+    pb0_days = 1.7
+    pepoch0, pepoch1 = 57000.0, 58000.0
+    pbdot0 = -5.7e-8
+    pbdot1 = -9.9e-8
+    dt_days = pepoch1 - pepoch0
+    mean_pbdot = (pbdot0 + pbdot1) / 2.0
+    pb0_sec = pb0_days * 86400.0
+    pb1_sec = pb0_sec + 86400.0 * dt_days * mean_pbdot
+
+    files = [
+        _write_ecsv(tmp_path / "e0.ecsv", pepoch=pepoch0, pb=pb0_sec, tasc=57000.1, pbdot=pbdot0, tasc_spread_days=0.0001),
+        _write_ecsv(tmp_path / "e1.ecsv", pepoch=pepoch1, pb=pb1_sec, tasc=58000.05, pbdot=pbdot1, tasc_spread_days=0.0001),
+    ]
+    epochs = load_epochs(files)
+    with pytest.raises(OrbitalModelCompatibilityError, match="unsound"):
+        check_compatibility(epochs, tolerance=1e-9)
+
+
+def test_check_compatibility_fires_on_pb_unexplained_by_pbdot(tmp_path):
+    """A PB disagreement with no matching PBDOT difference to explain it (a
+    genuinely different orbital model, not just a differing PBDOT
+    assumption) has no benign explanation and must still hard-abort."""
+    files = [
+        _write_ecsv(tmp_path / "e0.ecsv", pepoch=57000.0, pb=1.7 * 86400.0, tasc=57000.1, pbdot=0.0),
+        _write_ecsv(tmp_path / "e1.ecsv", pepoch=57100.0, pb=2.5 * 86400.0, tasc=57100.05, pbdot=0.0),
+    ]
+    epochs = load_epochs(files)
+    with pytest.raises(OrbitalModelCompatibilityError, match="unexplained"):
         check_compatibility(epochs, tolerance=1e-9)

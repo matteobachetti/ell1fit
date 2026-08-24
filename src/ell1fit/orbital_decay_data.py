@@ -16,8 +16,10 @@ do not: they are :func:`ell1fit.models._orbital_epoch_offsets`'s own output,
 computed by a single-file ``ell1fit`` run whose one-file "mean epoch" is
 trivially its own epoch, so ``change_binary_epoch`` is a no-op and every
 stored offset is exactly zero (confirmed against real files). So this module
-can propagate ``PB`` correctly (via the ``PBDOT`` it *can* read), but for
-``A1``/``EPS1``/``EPS2`` it can only require them to be exactly constant
+can propagate ``PB`` correctly (via the ``PBDOT`` it *can* read) and weigh a
+disagreement in it against how much it would actually bias the fit (see
+:func:`check_compatibility`), but for ``A1``/``EPS1``/``EPS2`` it can only
+require them to be exactly constant
 across files -- correct whenever the underlying ephemeris has no
 ``A1DOT``/``EPS1DOT``/``EPS2DOT`` (true of every input file this module has
 been tested against), but it would incorrectly flag genuine ``A1``/``EPS1``/
@@ -36,6 +38,7 @@ from astropy.table import Table
 from pint.models import get_model
 
 from .models import ORBITAL_DERIVATIVES, _load_and_validate_models, _orbital_epoch_offsets
+from .orbital_decay_model import spurious_tasc_from_pbdot_mismatch
 
 
 __all__ = [
@@ -221,16 +224,47 @@ def _build_models(epochs):
     return _load_and_validate_models(parfile_likes)
 
 
-def check_compatibility(epochs, tolerance=1e-9):
+#: A PB discrepancy left over after subtracting off whatever a file's own
+#: reported PBDOT would explain (see check_compatibility) should be exactly
+#: zero -- PB is a plain linear function of PBDOT under change_binary_epoch,
+#: nothing approximate about it. In practice a few milliseconds of residual
+#: shows up even between files from the same consistent processing batch
+#: (observed: ~13 ms on real M82 X-2 data), presumably from whatever rounding
+#: the upstream process that generated each file's fixed PB input used. This
+#: is generous enough to absorb that and still catch a genuinely different
+#: orbital model (PB0 itself wrong, or files from different targets/BINARY
+#: types mixed together), which would be wrong at the PB scale (~days), not
+#: milliseconds.
+_PB_RESIDUAL_TOLERANCE_SEC = 1.0
+
+
+def check_compatibility(epochs, tolerance=1e-9, pbdot_impact_fraction=1.0):
     """Verify every file's stored orbital solution is one shared model,
     propagated (where possible) to each file's own epoch via PINT's own
     ``change_binary_epoch``.
 
-    PB is checked by propagation (using each file's own PBDOT); A1/EPS1/EPS2
-    are checked for exact constancy, since their derivatives are not
-    observable from this file format (see the module docstring).
-    ``PBDOT`` itself is checked directly: it should not change under
-    re-epoching at all.
+    A1/EPS1/EPS2 are checked for exact constancy, since their derivatives are
+    not observable from this file format (see the module docstring). PB and
+    PBDOT are checked together: a raw PBDOT difference between files (e.g.
+    from two processing batches assuming slightly different upstream
+    ephemerides) is not itself the thing that matters -- what matters is how
+    much spurious signal it would inject into the delta_tasc(t) curve being
+    fit, via :func:`ell1fit.orbital_decay_model.spurious_tasc_from_pbdot_mismatch`,
+    weighed against that epoch's own TASC uncertainty. Small, real-world
+    differences get a warning, not an abort; only a PBDOT difference large
+    (or a baseline long) enough to rival that epoch's own statistical
+    precision is treated as unsound. Whatever part of the PB discrepancy
+    *isn't* explained by the reported PBDOT difference is checked separately,
+    strictly -- that residual has no benign explanation (see
+    :data:`_PB_RESIDUAL_TOLERANCE_SEC`).
+
+    Parameters
+    ----------
+    pbdot_impact_fraction : float
+        Abort threshold: a PBDOT difference whose spurious-delta_tasc impact
+        reaches this fraction of an epoch's own TASC uncertainty aborts;
+        below it, only a warning is logged. Default ``1.0`` (the systematic
+        would have to rival the epoch's full statistical uncertainty).
 
     Raises
     ------
@@ -248,16 +282,6 @@ def check_compatibility(epochs, tolerance=1e-9):
 
     problems = []
 
-    # PBDOT (and any other *readable* derivative) must not change under re-epoching.
-    reference_pbdot = float(model_list[0].PBDOT.value)
-    for epoch, model in zip(epochs, model_list):
-        pbdot = float(model.PBDOT.value)
-        if not np.isclose(pbdot, reference_pbdot, rtol=tolerance, atol=abs(reference_pbdot) * tolerance):
-            problems.append(
-                f"{epoch.fname}: PBDOT={pbdot!r} disagrees with {epochs[0].fname}'s "
-                f"PBDOT={reference_pbdot!r} (tolerance={tolerance:.1e} relative)"
-            )
-
     # A1/EPS1/EPS2: exact constancy (their derivatives are not observable here).
     for par in _CONSTANT_PARAMETERS:
         reference_value = float(getattr(model_list[0], par).value)
@@ -273,17 +297,55 @@ def check_compatibility(epochs, tolerance=1e-9):
                     "orbital_decay_data's module docstring."
                 )
 
-    # PB: propagate ref_model to each file's own epoch and compare.
+    # PB/PBDOT: propagate ref_model to each file's own epoch, then split the
+    # discrepancy into the part this file's own reported PBDOT explains
+    # (weighed against TASC precision, lenient) and whatever residual is left
+    # (strict -- see _PB_RESIDUAL_TOLERANCE_SEC).
     offsets = _orbital_epoch_offsets(ref_model, pepoch_list)
     reference_pb_seconds = float(ref_model.PB.value) * 86400.0
+    reference_pbdot = float(ref_model.PBDOT.value)
+    pb0_days = float(ref_model.PB.value)
+    mean_epoch = float(np.mean(pepoch_list))
+
     for epoch, model, offset in zip(epochs, model_list, offsets):
         predicted_pb_seconds = reference_pb_seconds + offset["PB_offset"]
         actual_pb_seconds = float(model.PB.value) * 86400.0
-        if not np.isclose(actual_pb_seconds, predicted_pb_seconds, rtol=tolerance, atol=0.0):
+        pb_discrepancy_sec = actual_pb_seconds - predicted_pb_seconds
+
+        delta_pbdot = float(model.PBDOT.value) - reference_pbdot
+        dt_days = epoch.pepoch - mean_epoch
+        explained_sec = delta_pbdot * dt_days * 86400.0
+        residual_sec = pb_discrepancy_sec - explained_sec
+
+        if abs(residual_sec) > _PB_RESIDUAL_TOLERANCE_SEC:
             problems.append(
                 f"{epoch.fname}: PB={actual_pb_seconds!r} s disagrees with the value "
                 f"predicted by propagating the shared reference model to this file's own "
-                f"epoch ({predicted_pb_seconds!r} s), tolerance={tolerance:.1e} relative"
+                f"epoch ({predicted_pb_seconds!r} s) by {residual_sec:+.4g} s, after already "
+                f"accounting for this file's own reported PBDOT difference -- unexplained, "
+                f"exceeds the {_PB_RESIDUAL_TOLERANCE_SEC:g} s tolerance."
+            )
+
+        if delta_pbdot == 0:
+            continue
+        spurious_tasc_sec = spurious_tasc_from_pbdot_mismatch(delta_pbdot, dt_days, pb0_days)
+        tasc_err_sec = min(epoch.tasc_err) * 86400.0
+        fraction = spurious_tasc_sec / tasc_err_sec if tasc_err_sec > 0 else np.inf
+        if fraction >= pbdot_impact_fraction:
+            problems.append(
+                f"{epoch.fname}: PBDOT={float(model.PBDOT.value)!r} differs from the group's "
+                f"reference ({reference_pbdot!r}) by {delta_pbdot!r} -- at this epoch's distance "
+                f"from the reference ({dt_days:+.1f} d), that alone would inject "
+                f"~{spurious_tasc_sec:.3g} s of spurious delta_tasc, {fraction:.1%} of this "
+                f"epoch's own {tasc_err_sec:.3g} s TASC uncertainty (threshold "
+                f"{pbdot_impact_fraction:.0%}) -- unsound."
+            )
+        elif fraction > 0.01:
+            logging.warning(
+                f"{epoch.fname}: PBDOT differs from the group's reference by {delta_pbdot!r} -- "
+                f"estimated spurious delta_tasc at this epoch: ~{spurious_tasc_sec:.3g} s "
+                f"({fraction:.1%} of its {tasc_err_sec:.3g} s TASC uncertainty). Continuing, but "
+                "this will bias the fitted PBDOT/PBDDOT somewhat."
             )
 
     if problems:

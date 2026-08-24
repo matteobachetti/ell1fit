@@ -175,6 +175,7 @@ def fit_orbital_decay(
     dlogz=0.1,
     seeds=3,
     compat_tolerance=1e-9,
+    pbdot_impact_fraction=1.0,
     reference_epoch=None,
     write_parfile=True,
 ):
@@ -186,7 +187,7 @@ def fit_orbital_decay(
         Also written to ``{outroot}_results.json``.
     """
     epochs = load_epochs(files)
-    check_compatibility(epochs, tolerance=compat_tolerance)
+    check_compatibility(epochs, tolerance=compat_tolerance, pbdot_impact_fraction=pbdot_impact_fraction)
     ref_model = build_reference_model(epochs, reference_epoch=reference_epoch)
 
     x, y, yerrn, yerrp = _assemble_data(epochs, ref_model)
@@ -287,6 +288,17 @@ def main(args=None):
         help="Relative tolerance for the cross-file orbital-model compatibility check",
     )
     parser.add_argument(
+        "--pbdot-impact-fraction",
+        type=float,
+        default=1.0,
+        dest="pbdot_impact_fraction",
+        help=(
+            "Abort threshold for a file-to-file PBDOT disagreement, as a fraction of that "
+            "epoch's own TASC uncertainty its spurious-delta_tasc impact would have to reach "
+            "(see spurious_tasc_from_pbdot_mismatch). Below this fraction it is only a warning."
+        ),
+    )
+    parser.add_argument(
         "--reference-epoch",
         type=float,
         default=None,
@@ -308,6 +320,7 @@ def main(args=None):
             dlogz=parsed.dlogz,
             seeds=parsed.seeds,
             compat_tolerance=parsed.compat_tolerance,
+            pbdot_impact_fraction=parsed.pbdot_impact_fraction,
             reference_epoch=parsed.reference_epoch,
             write_parfile=parsed.write_parfile,
         )

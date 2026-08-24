@@ -55,6 +55,7 @@ __all__ = [
     "delta_tasc_model",
     "log_likelihood_asymmetric_errors",
     "physical_from_beta",
+    "spurious_tasc_from_pbdot_mismatch",
 ]
 
 
@@ -108,6 +109,26 @@ def physical_from_beta(beta, baseline_days, pb0_days):
         result[name] = float(derivative)
 
     return result
+
+
+def spurious_tasc_from_pbdot_mismatch(delta_pbdot, dt_days, pb0_days):
+    """Seconds of spurious ``delta_tasc`` a PBDOT mismatch of ``delta_pbdot``
+    would inject at an epoch ``dt_days`` from the reference epoch.
+
+    Same physics as :func:`physical_from_beta`'s ``n=2`` conversion, used in
+    reverse: if two input files were generated assuming ``PBDOT`` values
+    differing by ``delta_pbdot`` (e.g. two processing batches using slightly
+    different upstream ephemerides), treating them as one shared-PBDOT
+    dataset -- as ell1decay's reference model does -- silently injects a
+    spurious quadratic term of exactly this size into the epoch that
+    disagrees. Used by
+    :func:`ell1fit.orbital_decay_data.check_compatibility` to weigh a PBDOT
+    disagreement against that epoch's own TASC uncertainty, rather than
+    against an arbitrary numeric tolerance on PBDOT itself: a disagreement
+    that would bias the fit by much less than its own statistical precision
+    is not worth aborting over.
+    """
+    return abs(delta_pbdot) * dt_days**2 / (2.0 * pb0_days) * 86400.0
 
 
 def log_likelihood_asymmetric_errors(beta, x, y, yerrn, yerrp, baseline_days):
