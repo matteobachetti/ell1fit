@@ -439,3 +439,224 @@ def test_deorbit_inverts_its_forward_model_at_higher_eccentricity(e):
     recovered = simple_ell1_deorbit_numba(orbited, PB, A1, TASC, eps1, eps2, tolerance=1e-12)
 
     assert np.max(np.abs(recovered - times)) < 1e-9
+
+
+def test_unknown_fit_parameters_are_rejected():
+    """A requested parameter the model does not carry must raise, not vanish.
+
+    ``_collect_parameter_names`` walks the parameter dictionary and keeps the
+    entries a requested name matches. A name that matches nothing used to be
+    dropped in silence, so ``-P F0,A1DOT`` fitted ``F0`` alone and reported a
+    successful two-parameter run -- the same silence a typo like ``-P TSAC``
+    bought. Nothing downstream could notice: the fit is internally consistent,
+    it is simply not the fit that was asked for.
+    """
+    from ..pipeline import _collect_parameter_names
+    from ..likelihoods import pletsch_clarke_likelihood
+
+    parameters = {
+        "PB": 1.0,
+        "A1": 1.0,
+        "TASC": 1.0,
+        "EPS1": 0.0,
+        "EPS2": 0.0,
+        "F0_0": 1.0,
+        "F1_0": 0.0,
+        "PEPOCH_0": 57000.0,
+        "Phase_0": 0.0,
+    }
+
+    collected = _collect_parameter_names(parameters, ["F0", "F1", "A1"], pletsch_clarke_likelihood)
+    assert set(collected) == {"A1", "F0_0", "F1_0", "Phase_0"}
+
+    with pytest.raises(ValueError, match="TSAC"):
+        _collect_parameter_names(parameters, ["F0", "TSAC"], pletsch_clarke_likelihood)
+
+    with pytest.raises(ValueError, match="A1DOT"):
+        _collect_parameter_names(parameters, ["F0", "A1DOT"], pletsch_clarke_likelihood)
+
+
+def test_per_file_parameters_are_requested_by_their_bare_name():
+    """``Phase`` and ``F0`` name per-file entries and must not be rejected.
+
+    The parameter dictionary holds ``F0_0``/``Phase_0``, never a bare ``F0`` or
+    ``Phase``, so the check for unknown names cannot simply look for an exact
+    key or it would reject every legitimate request.
+    """
+    from ..pipeline import _collect_parameter_names
+    from ..likelihoods import pletsch_clarke_likelihood
+
+    parameters = {"A1": 1.0, "F0_0": 1.0, "F0_1": 1.0, "Phase_0": 0.0, "Phase_1": 0.0}
+
+    collected = _collect_parameter_names(parameters, ["F0", "Phase"], pletsch_clarke_likelihood)
+    assert "F0_0" in collected and "F0_1" in collected
+
+
+def test_a1dot_survives_a_round_trip_through_a_parfile(tmp_path):
+    """A fitted ``A1DOT`` must read back as the value that was written.
+
+    PINT implements the parfile convention that ``A1DOT 7.2`` means 7.2e-12 in
+    the *assignment*: a bare float above 1e-7 is multiplied by 1e-12 on the way
+    in, so ``model.A1DOT.value = x`` is not the identity. ``update_model`` has
+    to assign a Quantity, which takes the units-carrying branch and does not
+    rescale. The same trap bit ``PBDOT`` on the ``ell1decay`` side.
+    """
+    from pint.models import get_model
+    from ..create_parfile import update_model
+
+    datadir = os.path.join(os.path.dirname(__file__), "data")
+    parfile = str(tmp_path / "in.par")
+    open(parfile, "w").write(open(os.path.join(datadir, "events0.par")).read())
+
+    a1dot = 3.5e-12  # lt-s/s: the scale a real measurement lands on
+    row = {
+        "PEPOCH": get_model(parfile).PEPOCH.value,
+        "dA1DOT_mean": a1dot,
+        "dA1DOT_50": a1dot,
+        "dA1DOT_16": a1dot - 1e-13,
+        "dA1DOT_84": a1dot + 1e-13,
+        "dA1DOT_initial": 0.0,
+        "dA1DOT_factor": 1.0,
+    }
+
+    new_model = update_model(get_model(parfile), row, include_info=False)
+    assert new_model.A1DOT.value == pytest.approx(a1dot, rel=1e-12)
+
+    written = str(tmp_path / "out.par")
+    with open(written, "w") as fobj:
+        fobj.write(new_model.as_parfile(include_info=False))
+    assert get_model(written).A1DOT.value == pytest.approx(a1dot, rel=1e-9)
+
+
+def test_a1dot_above_the_parfile_threshold_is_written_faithfully(tmp_path):
+    """The fitted value must reach the model even where a parfile cannot hold it.
+
+    Above 1e-7 the parfile format is genuinely ambiguous -- PINT will read the
+    number back rescaled by 1e-12, and nothing on the writing side can prevent
+    that -- but the value ``update_model`` puts into the model must still be
+    the fitted one, and the user must be told. No physical drift comes near
+    1e-7; a fit that wandered into the tail of its own prior does, since the
+    default ``A1DOT`` prior runs out to ``|A1| * 2pi / PB``, about 6e-4 for
+    M82 X-2.
+    """
+    import logging as _logging
+
+    from pint.models import get_model
+    from ..create_parfile import update_model
+
+    datadir = os.path.join(os.path.dirname(__file__), "data")
+    parfile = str(tmp_path / "in.par")
+    open(parfile, "w").write(open(os.path.join(datadir, "events0.par")).read())
+    model = get_model(parfile)
+
+    a1dot = 3.5e-6
+    row = {
+        "PEPOCH": model.PEPOCH.value,
+        "dA1DOT_mean": a1dot,
+        "dA1DOT_50": a1dot,
+        "dA1DOT_16": a1dot - 1e-8,
+        "dA1DOT_84": a1dot + 1e-8,
+        "dA1DOT_initial": 0.0,
+        "dA1DOT_factor": 1.0,
+    }
+
+    logger = _logging.getLogger()
+    records = []
+
+    class _Collect(_logging.Handler):
+        def emit(self, record):
+            records.append(record)
+
+    handler = _Collect()
+    logger.addHandler(handler)
+    try:
+        new_model = update_model(model, row, include_info=False)
+    finally:
+        logger.removeHandler(handler)
+
+    assert new_model.A1DOT.value == pytest.approx(a1dot, rel=1e-12)
+    assert any(
+        record.levelno >= _logging.WARNING and "A1DOT" in record.getMessage() for record in records
+    ), "writing an A1DOT a parfile cannot represent must warn"
+
+
+def test_a1dot_without_a_lever_arm_is_rejected():
+    """Fitting ``A1DOT`` from one epoch must raise, not sample the prior.
+
+    ``A1DOT`` enters the phase model only as ``A1DOT * binary_dt_i``. A single
+    file *is* the reference epoch, so every lever arm is zero, the likelihood
+    is exactly flat in ``A1DOT``, and a chain would report the prior as a
+    measurement -- the same failure ``UNFITTABLE_PARAMETERS`` refuses ``PBDOT``
+    for, arrived at from the data rather than from the model.
+    """
+    from ..pipeline import _reject_unmeasurable_derivatives
+
+    one_epoch = {"A1DOT": 0.0, "binary_dt_0": 0.0}
+    two_epochs = {"A1DOT": 0.0, "binary_dt_0": -3.0e7, "binary_dt_1": 3.0e7}
+
+    with pytest.raises(ValueError, match="A1DOT"):
+        _reject_unmeasurable_derivatives(one_epoch, ["A1", "A1DOT"])
+
+    # Two epochs at the same PEPOCH are no better than one.
+    with pytest.raises(ValueError, match="A1DOT"):
+        _reject_unmeasurable_derivatives(
+            {"A1DOT": 0.0, "binary_dt_0": 0.0, "binary_dt_1": 0.0}, ["A1DOT"]
+        )
+
+    _reject_unmeasurable_derivatives(two_epochs, ["A1", "A1DOT"])
+    _reject_unmeasurable_derivatives(one_epoch, ["A1"])
+
+
+def test_jax_posterior_follows_a1dot_like_the_numba_one(tmp_path):
+    """The JAX rebuild must apply ``A1DOT`` exactly as the numba phase model does.
+
+    :mod:`ell1fit.nuts_sampling` is a reimplementation, not a wrapper, so every
+    parameter that enters the phase model has to be added to it by hand -- and
+    an omission is silent: the gradient sampler would simply sample a posterior
+    that is flat in the missing direction and report a confident prior.
+
+    Probing along ``A1DOT`` alone, rather than jittering every parameter, is
+    what makes this test about ``A1DOT``. The displacements are several sigma
+    of the achievable precision, which the second assertion checks actually
+    move the log-posterior -- otherwise agreement would be the agreement of two
+    functions that both ignore it.
+    """
+    pytest.importorskip("jax")
+
+    from .datagen import InjectedSolution, make_multi_epoch_dataset
+    from .helpers import build_pipeline_state
+    from ..nuts_sampling import build_jax_logpost, enable_x64
+    from ..posterior import _build_posterior_functions
+
+    enable_x64()
+    dataset = make_multi_epoch_dataset(
+        str(tmp_path),
+        solution=InjectedSolution(A1DOT=6e-10),
+        epoch_offsets=(0.0, 700.0),
+        n_events=800,
+        prefix="jaxa1dot",
+    )
+    observations, setup = build_pipeline_state(dataset, fit_parameters=["F0", "A1", "A1DOT"])
+    _, _, numba_logpost = _build_posterior_functions(observations, setup)
+    jax_logpost = build_jax_logpost(observations, setup)
+
+    from ..scaling import TARGET_LOCAL_SIGMA
+
+    index = list(setup.parameter_names).index("A1DOT")
+    values = []
+    for offset in (-4.0, -2.0, 0.0, 2.0, 4.0):
+        position = np.zeros(len(setup.parameter_names))
+        # One *local* unit is about a million sigma -- the scaling puts one
+        # sigma at TARGET_LOCAL_SIGMA -- so probe in sigma, not in local units.
+        position[index] = offset * TARGET_LOCAL_SIGMA
+        reference = float(numba_logpost(position))
+        rebuilt = float(jax_logpost(position))
+        values.append(reference)
+        assert abs(reference - rebuilt) < 1e-4, (
+            f"JAX and numba disagree by {reference - rebuilt:.3g} at A1DOT offset {offset}"
+        )
+
+    assert max(values) - min(values) > 1.0, (
+        f"the log-posterior barely moved over the probed A1DOT range ({values}): "
+        "this comparison would pass even if both paths ignored A1DOT"
+    )
