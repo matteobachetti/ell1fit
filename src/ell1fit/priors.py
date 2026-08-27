@@ -192,6 +192,22 @@ def assign_logpriors(fit_parameter_names, parameters_with_unc, obs_length=1):
         ):  # For now the uniform distribution is from/to +-np.inf.
             log_line += "uniform between -1 and 1"
             logps.append(_flat_logprior(-1, 1))
+        elif np.isnan(parameters_with_unc[par][1]) and par == "A1DOT":
+            # Flat across the whole physically allowed range. The orbit cannot
+            # change size faster than the projected orbital velocity
+            # |A1| * 2pi / PB -- in units of c, the very quantity
+            # ``orbit_is_invertible`` screens on -- and nothing in between is
+            # preferred. That is ~1e7 times wider than any credible drift,
+            # which is deliberate: an upper limit is only worth quoting if the
+            # prior bound is not what sets it. Finite, so the prior stays
+            # proper and nested sampling can integrate against it -- at the
+            # cost of an Occam factor that a Bayes factor on A1DOT would feel.
+            center = parameters_with_unc[par][0]
+            half_width = (
+                np.abs(parameters_with_unc["A1"][0]) * 2 * np.pi / parameters_with_unc["PB"][0]
+            )
+            log_line += f"uniform within +-{half_width:.3e} lt-s/s of {center:.3e}"
+            logps.append(_flat_logprior(center - half_width, center + half_width))
         elif np.isnan(parameters_with_unc[par][1]) and par[:2] in ["F0", "PB"]:
             log_line += "uniform between 1/2 and 2 times the mean value"
             value = parameters_with_unc[par][0]

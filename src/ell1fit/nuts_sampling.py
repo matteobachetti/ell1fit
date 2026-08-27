@@ -346,11 +346,18 @@ def build_jax_logpost(observations, setup, jit=True):
         eps1 = physical("EPS1", position)
         eps2 = physical("EPS2", position)
         tasc = physical("TASC", position)
+        # Absent from parameter dictionaries built by hand rather than from a
+        # timing model, where it means "no orbital-size drift".
+        a1dot = physical("A1DOT", position) if "A1DOT" in parameters else 0.0
 
         loglike = 0.0
         for i in range(n_files):
             pb_i = pb + parameters.get(f"PB_offset_{i}", 0.0)
-            a1_i = a1 + parameters.get(f"A1_offset_{i}", 0.0)
+            a1_i = (
+                a1
+                + parameters.get(f"A1_offset_{i}", 0.0)
+                + a1dot * parameters.get(f"binary_dt_{i}", 0.0)
+            )
             eps1_i = eps1 + parameters.get(f"EPS1_offset_{i}", 0.0)
             eps2_i = eps2 + parameters.get(f"EPS2_offset_{i}", 0.0)
 

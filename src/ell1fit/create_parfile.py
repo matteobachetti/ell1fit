@@ -128,9 +128,31 @@ def update_model(model, value_dict, include_info=True):
         #     value = value / 86400 + PEPOCH
         #     err /= 86400
 
-        getattr(new_model, par).value = value
-        getattr(new_model, par).uncertainty_value = err
-        getattr(new_model, par).frozen = False
+        parameter = getattr(new_model, par)
+        if getattr(parameter, "unit_scale", False):
+            # PINT reads "PBDOT 7.2" as 7.2e-12, and implements that convention
+            # in the *assignment*: a bare float above ``scale_threshold`` (1e-7)
+            # is multiplied by ``scale_factor`` (1e-12) on the way in. So
+            # ``.value = x`` is not the identity for PBDOT or A1DOT, and a
+            # parfile written from a fit that strayed that far -- the A1DOT
+            # prior alone reaches 6e-4 -- would disagree with its own result
+            # table by twelve orders of magnitude, silently. Assigning a
+            # Quantity takes the units-carrying branch, which does not rescale.
+            parameter.quantity = value * parameter.units
+            parameter.uncertainty = err * parameter.units
+            if abs(value) > abs(parameter.scale_threshold):
+                # Above the threshold the format itself is ambiguous: the model
+                # now holds the right number, but PINT will read the parfile
+                # back rescaled, and nothing here can stop it.
+                logging.warning(
+                    f"{par} = {value:g} exceeds {parameter.scale_threshold:g}, which PINT "
+                    f"reads back scaled by {parameter.scale_factor:g}: this parfile will not "
+                    f"round-trip. No physical value reaches that magnitude -- check the fit."
+                )
+        else:
+            parameter.value = value
+            parameter.uncertainty_value = err
+        parameter.frozen = False
 
     include_info = include_info and os.name != "nt"
     try:

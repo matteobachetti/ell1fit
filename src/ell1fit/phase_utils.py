@@ -522,7 +522,15 @@ def _calculate_phases(times_from_pepoch, parameters, tolerance=1e-8):
         # callers building a parameter dictionary by hand need not supply them.
         # See :func:`ell1fit.models._orbital_epoch_offsets`.
         pb_i = pb + parameters.get(f"PB_offset_{i}", 0.0)
-        a1_i = parameters["A1"] + parameters.get(f"A1_offset_{i}", 0.0)
+        a1_i = (
+            parameters["A1"]
+            + parameters.get(f"A1_offset_{i}", 0.0)
+            # The one derivative applied to the trial value rather than frozen
+            # into an offset, which is what makes A1DOT fittable. Its lever arm
+            # binary_dt_i is PINT's own dt_integer_orbits, in seconds. See
+            # ell1fit.models._orbital_epoch_offsets.
+            + parameters.get("A1DOT", 0.0) * parameters.get(f"binary_dt_{i}", 0.0)
+        )
         eps1_i = parameters["EPS1"] + parameters.get(f"EPS1_offset_{i}", 0.0)
         eps2_i = parameters["EPS2"] + parameters.get(f"EPS2_offset_{i}", 0.0)
 

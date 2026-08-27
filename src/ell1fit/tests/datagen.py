@@ -65,6 +65,13 @@ class InjectedSolution:
         Rate of change of the orbital period, dimensionless (s/s). Zero by
         default, in which case every quantity below reduces exactly to its
         constant-period form.
+    A1DOT : float
+        Rate of change of the projected semi-major axis, in light-seconds per
+        second. Zero by default. Like ``PBDOT`` it is an *epoch-local*
+        quantity here: the ``A1`` written into each epoch's parfile is the one
+        in force at that epoch's ``TASC`` alias, so a fit that ignores the
+        drift sees a different ``A1`` at each epoch, which is exactly the
+        signal ``A1DOT`` is measured from.
     exact_kepler : bool
         Generate arrival times from an *exact* Keplerian orbit rather than from
         the ELL1 first-order expansion. ``EPS1``/``EPS2`` still define the
@@ -85,6 +92,7 @@ class InjectedSolution:
     EPS1: float = 1.2e-3
     EPS2: float = -1.6e-3
     PBDOT: float = 0.0
+    A1DOT: float = 0.0
     exact_kepler: bool = False
     pepoch_ref: float = 56682.0
 
@@ -130,6 +138,20 @@ class InjectedSolution:
         n_orbits = np.round(x - 0.5 * self.PBDOT * x**2)
         return self.TASC + n_orbits * self.PB + n_orbits**2 * self.PB * self.PBDOT / 2
 
+    def A1_near(self, pepoch):
+        """Projected semi-major axis, in light-seconds, at the alias near ``pepoch``.
+
+        The same rule as :meth:`PB_sec_near`: a parfile's ``A1`` is the one in
+        force at the ``TASC`` it quotes, so the drift is measured from the
+        reference ``TASC`` to the nearest ascending node, not to ``pepoch``
+        itself. The two differ by up to half an orbit, which at any credible
+        ``A1DOT`` is far below the precision of a fit -- but matching the
+        convention keeps the generator and PINT describing the same solution
+        rather than two that agree only approximately.
+        """
+        elapsed = (self.tasc_near(pepoch) - self.TASC) * SEC_PER_DAY
+        return self.A1 + self.A1DOT * elapsed
+
     def PB_sec_near(self, pepoch):
         """Orbital period, in seconds, valid at the alias near ``pepoch``.
 
@@ -141,7 +163,7 @@ class InjectedSolution:
         return self.PB_sec + self.PBDOT * elapsed
 
 
-def orbital_delay(t_from_tasc_sec, solution, pb_sec=None):
+def orbital_delay(t_from_tasc_sec, solution, pb_sec=None, a1=None):
     """Roemer delay of the ELL1 model, in seconds, to second order in e.
 
     This is the *forward* model: given a time in the pulsar frame, it returns
@@ -153,6 +175,10 @@ def orbital_delay(t_from_tasc_sec, solution, pb_sec=None):
         Pulsar-frame time measured from ``TASC``, in seconds.
     solution : InjectedSolution
         The injected truth.
+    a1 : float or None, optional
+        Projected semi-major axis in force at that ``TASC``, in light-seconds.
+        Defaults to the reference value; supplying the epoch-local one is what
+        makes a nonzero ``A1DOT`` come out right.
     pb_sec : float or None, optional
         Orbital period in force at that ``TASC``. Defaults to the reference
         period. Supplying the epoch-local one is what makes a nonzero
@@ -167,6 +193,8 @@ def orbital_delay(t_from_tasc_sec, solution, pb_sec=None):
     """
     if pb_sec is None:
         pb_sec = solution.PB_sec
+    if a1 is None:
+        a1 = solution.A1
     phase = 2 * np.pi * t_from_tasc_sec / pb_sec
     # tempo's bnryell1.f `dre`, with EPS1 = e sin(omega), EPS2 = e cos(omega):
     # first order plus the Wex-Zhu o(e^2) block, matching the order the package
@@ -176,7 +204,7 @@ def orbital_delay(t_from_tasc_sec, solution, pb_sec=None):
     # the literal harmonic form, where phase_utils folds the same expression
     # into six coefficients so it needs only one sine and one cosine.
     e1, e2 = solution.EPS1, solution.EPS2
-    return solution.A1 * (
+    return a1 * (
         np.sin(phase)
         - 0.5 * (e1 * np.cos(2 * phase) - e2 * np.sin(2 * phase))
         - (1 / 8)
@@ -191,7 +219,7 @@ def orbital_delay(t_from_tasc_sec, solution, pb_sec=None):
     )
 
 
-def kepler_orbital_delay(t_from_tasc_sec, solution, pb_sec=None):
+def kepler_orbital_delay(t_from_tasc_sec, solution, pb_sec=None, a1=None):
     """Roemer delay of an *exact* Keplerian orbit, in seconds.
 
     ELL1 is a first-order expansion of this. Generating events from the exact
@@ -229,6 +257,8 @@ def kepler_orbital_delay(t_from_tasc_sec, solution, pb_sec=None):
     """
     if pb_sec is None:
         pb_sec = solution.PB_sec
+    if a1 is None:
+        a1 = solution.A1
     e, om = solution.ECC, solution.OM
 
     phi = 2 * np.pi * t_from_tasc_sec / pb_sec
@@ -243,7 +273,7 @@ def kepler_orbital_delay(t_from_tasc_sec, solution, pb_sec=None):
         if np.max(np.abs(step)) < 1e-15:
             break
 
-    return solution.A1 * (
+    return a1 * (
         np.sin(om) * (np.cos(eccentric_anomaly) - e)
         + np.cos(om) * np.sqrt(1 - e**2) * np.sin(eccentric_anomaly)
     )
@@ -338,9 +368,9 @@ def generate_epoch(
     -------
     dict
         ``times_from_pepoch``, ``energy``, ``pi``, ``gtis_from_pepoch``,
-        ``pepoch``, ``F0``, ``F1``, ``TASC``, ``PB``, and ``phase0``. ``TASC``
-        and ``PB`` are the epoch-local pair, which differ per epoch once
-        ``PBDOT`` is nonzero.
+        ``pepoch``, ``F0``, ``F1``, ``TASC``, ``PB``, ``A1``, and ``phase0``.
+        ``TASC``, ``PB`` and ``A1`` are the epoch-local set, which differ per
+        epoch once ``PBDOT`` or ``A1DOT`` is nonzero.
     """
     if rng is None:
         rng = np.random.default_rng()
@@ -355,6 +385,7 @@ def generate_epoch(
     tasc = solution.tasc_near(pepoch)
     tasc_sec = (tasc - pepoch) * SEC_PER_DAY
     pb_sec = solution.PB_sec_near(pepoch)
+    a1 = solution.A1_near(pepoch)
 
     gtis = _build_gtis(duration, n_gtis, gti_duty)
     live_time = np.sum(np.diff(gtis, axis=1))
@@ -382,7 +413,7 @@ def generate_epoch(
 
         # Forward orbital model: pulsar frame -> observed arrival time.
         delay = kepler_orbital_delay if solution.exact_kepler else orbital_delay
-        t_obs = t_pulsar + delay(t_pulsar - tasc_sec, solution, pb_sec=pb_sec)
+        t_obs = t_pulsar + delay(t_pulsar - tasc_sec, solution, pb_sec=pb_sec, a1=a1)
 
         in_gti = _in_gtis(t_obs, gtis)
         accepted["t"].append(t_obs[in_gti])
@@ -407,6 +438,7 @@ def generate_epoch(
         "F1": F1,
         "TASC": tasc,
         "PB": pb_sec / SEC_PER_DAY,
+        "A1": a1,
         "phase0": phase0,
         "live_time": live_time,
     }
@@ -450,6 +482,7 @@ BINARY                               ELL1
 PB                   {PB:.16g} {PB_unc:.3g}
 PBDOT                {PBDOT:.16g}
 A1                   {A1:.16g} {A1_unc:.3g}
+A1DOT                {A1DOT:.16g}
 TASC                 {TASC:.16g} {TASC_unc:.3g}
 EPS1                 {EPS1:.16g}
 EPS2                 {EPS2:.16g}
@@ -497,15 +530,28 @@ def write_parfile(path, epoch, solution, index=0, offsets=None, uncertainties=No
     values = {
         "F0": epoch["F0"],
         "F1": epoch["F1"],
-        # TASC and PB are the epoch-local pair: a parfile's period is the one
-        # in force at the TASC it quotes. With PBDOT = 0 this is solution.PB.
+        # TASC, PB and A1 are the epoch-local set: a parfile's period and
+        # projected semi-major axis are those in force at the TASC it quotes.
+        # With PBDOT = A1DOT = 0 these are solution.PB and solution.A1.
         "PB": epoch["PB"],
-        "A1": solution.A1,
+        "A1": epoch["A1"],
         "TASC": epoch["TASC"],
         "EPS1": solution.EPS1,
         "EPS2": solution.EPS2,
         "PBDOT": solution.PBDOT,
+        "A1DOT": solution.A1DOT,
     }
+
+    # PINT reads a PBDOT or A1DOT above 1e-7 in magnitude as being quoted in
+    # the parfile convention of 1e-12 units, and silently multiplies it by
+    # 1e-12. No physical value is anywhere near that, but a test reaching for
+    # an exaggerated one would get a solution twelve orders of magnitude away
+    # from the one it asked for, and the generator would still look right.
+    for name in ("PBDOT", "A1DOT"):
+        if abs(values[name]) > 1e-7:
+            raise ValueError(
+                f"{name}={values[name]:g} exceeds 1e-7, which PINT rescales by 1e-12 on read"
+            )
     for name, offset in offsets.items():
         if name not in values:
             raise KeyError(f"Cannot offset unknown parameter {name!r}")

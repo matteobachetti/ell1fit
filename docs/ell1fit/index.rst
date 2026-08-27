@@ -17,6 +17,7 @@ what it is, then :doc:`pipeline` for how a fit actually proceeds.
    motivation
    pipeline
    examples
+   orbital_derivatives
 
 .. toctree::
    :maxdepth: 2
