@@ -30,6 +30,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+dev = [
+    "pre-commit",
+]
 test = [
     "pytest",
     "pytest-astropy",
