@@ -600,7 +600,7 @@ def run_nuts(
             "sampler='nuts' needs jax and numpyro: pip install ell1fit[nuts]"
         ) from exc
 
-    from .mcmc_utils import plot_mcmc_results
+    from .mcmc_utils import plot_mcmc_results, save_flat_samples
 
     starting_pars = np.asarray(starting_pars)
     ndim = len(starting_pars)
@@ -748,6 +748,7 @@ def run_nuts(
     result_dict["jax_agreement"] = agreement
     result_dict["jax_gradient_check"] = derivative
 
+    save_flat_samples(outroot, flat_samples, labels)
     plot_mcmc_results(
         flat_samples=flat_samples,
         labels=corner_labels or labels,

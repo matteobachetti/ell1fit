@@ -23,6 +23,7 @@ import pytest
 from astropy.table import Table
 
 from ..eccentricity import (
+    RESULTS_SUFFIX,
     default_chain_file,
     eccentricity_and_omega,
     eccentricity_summary,
@@ -32,6 +33,7 @@ from ..eccentricity import (
     plot_eccentricity_posterior,
     zero_eccentricity_exclusion,
 )
+from ..mcmc_utils import SAMPLES_SUFFIX, load_flat_samples, save_flat_samples
 
 
 SEED = 20260903
@@ -225,10 +227,88 @@ def test_mismatched_chain_and_table_are_caught():
         eps_samples_from_chain(row, chain)
 
 
-def test_default_chain_file_follows_the_output_root():
+def test_default_chain_file_falls_back_to_the_emcee_backend():
+    """With no sample file beside the table, the HDF5 chain is the fallback."""
     assert default_chain_file("out_A1_EPS1_EPS2_results.ecsv") == "out_A1_EPS1_EPS2.h5"
     with pytest.raises(ValueError, match="does not end in"):
         default_chain_file("out.ecsv")
+
+
+def test_default_chain_file_prefers_the_saved_samples(tmp_path):
+    root = str(tmp_path / "out_EPS1_EPS2")
+    save_flat_samples(root, np.zeros((10, 2)), ["dEPS1", "dEPS2"])
+
+    assert default_chain_file(root + RESULTS_SUFFIX) == root + SAMPLES_SUFFIX
+
+
+def test_saved_samples_round_trip(tmp_path):
+    """Every sampler writes this file; it is the one route to the samples."""
+    rng = np.random.default_rng(SEED)
+    samples = rng.normal(size=(500, 3))
+    labels = ["dF0", "dEPS1", "dEPS2"]
+
+    fname = save_flat_samples(str(tmp_path / "run"), samples, labels)
+    read_samples, read_labels = load_flat_samples(fname)
+
+    assert fname.endswith(SAMPLES_SUFFIX)
+    assert np.allclose(read_samples, samples)
+    assert read_labels == labels
+
+
+def test_saved_labels_are_used_instead_of_the_percentile_fingerprint(tmp_path):
+    """A table with no recorded percentiles is enough when the names are saved.
+
+    Dropping ``dEPS1_16/50/84`` from the table breaks the fingerprint route
+    outright, so a run that still succeeds can only have used the labels.
+    """
+    rng = np.random.default_rng(SEED)
+    chain = rng.normal(size=(2000, 3))
+    initial = {"EPS1": 1e-3, "EPS2": -2e-3}
+    factor = {"EPS1": 1e-5, "EPS2": 2e-5}
+
+    root = str(tmp_path / "out_EPS1_EPS2")
+    save_flat_samples(root, chain, ["dF0", "dEPS1", "dEPS2"])
+    row = {
+        f"d{par}_{field}": value[par]
+        for par in ("EPS1", "EPS2")
+        for field, value in (("initial", initial), ("factor", factor))
+    }
+    Table(rows=[row]).write(root + RESULTS_SUFFIX)
+
+    eps1, eps2 = load_eps_samples(root + RESULTS_SUFFIX)
+
+    assert np.allclose(eps1, initial["EPS1"] + chain[:, 1] * factor["EPS1"])
+    assert np.allclose(eps2, initial["EPS2"] + chain[:, 2] * factor["EPS2"])
+
+
+def test_unsampled_eccentricity_raises_even_with_labels(tmp_path):
+    rng = np.random.default_rng(SEED)
+    with pytest.raises(ValueError, match="EPS1 is not among the sampled parameters"):
+        eps_samples_from_chain({}, rng.normal(size=(100, 2)), labels=["dF0", "dA1"])
+
+
+def test_labels_win_over_a_disagreeing_fingerprint_but_warn(caplog):
+    """A chain extended after the table was written must still load."""
+    rng = np.random.default_rng(SEED)
+    chain = rng.normal(size=(2000, 2))
+    row = {
+        "dEPS1_16": 100.0,
+        "dEPS1_50": 101.0,
+        "dEPS1_84": 102.0,
+        "dEPS1_initial": 0.0,
+        "dEPS1_factor": 1.0,
+        "dEPS2_16": -1.0,
+        "dEPS2_50": 0.0,
+        "dEPS2_84": 1.0,
+        "dEPS2_initial": 0.0,
+        "dEPS2_factor": 1.0,
+    }
+
+    with caplog.at_level("WARNING"):
+        eps1, _ = eps_samples_from_chain(row, chain, labels=["dEPS1", "dEPS2"])
+
+    assert np.allclose(eps1, chain[:, 0])
+    assert "disagree with the percentiles" in caplog.text
 
 
 def _write_run(tmp_path):

@@ -15,6 +15,8 @@ __all__ = [
     "calculate_result_array_from_samples",
     "default_moves",
     "get_flat_samples",
+    "load_flat_samples",
+    "save_flat_samples",
     "plot_mcmc_comparison",
     "plot_mcmc_results",
     "safe_run_sampler",
@@ -46,6 +48,56 @@ def get_flat_samples(sampler):
     logging.info("flat chain shape: {0}".format(flat_samples.shape))
     logging.info("flat log prob shape: {0}".format(log_prob_samples.shape))
     return flat_samples, maxtau
+
+
+#: Suffix of the file every sampler writes its posterior samples to. The three
+#: back-ends store their chains in three different ways -- emcee in its own
+#: HDF5 backend, NUTS in a numpyro checkpoint, nested sampling nowhere at all --
+#: so anything wanting the samples afterwards had one route per sampler, or
+#: none. This is the one route that always exists.
+SAMPLES_SUFFIX = "_samples.npz"
+
+
+def save_flat_samples(outroot, flat_samples, labels):
+    """Write flattened posterior samples, with their parameter names, to one file.
+
+    Parameters
+    ----------
+    outroot : str
+        Output root of the run; the file is ``<outroot>_samples.npz``.
+    flat_samples : np.ndarray
+        Flattened samples, shape ``(nsamples, ndim)``, in the sampler's local
+        coordinates -- the same ones the ``d<par>_*`` result fields describe.
+    labels : list of str
+        Parameter label per column, as passed to the sampler.
+
+    Returns
+    -------
+    str
+        The file name written.
+    """
+    fname = outroot + SAMPLES_SUFFIX
+    np.savez_compressed(
+        fname,
+        samples=np.asarray(flat_samples, dtype=float),
+        labels=np.asarray([str(label) for label in labels]),
+    )
+    logging.info(f"Writing {flat_samples.shape[0]} posterior samples to {fname}")
+    return fname
+
+
+def load_flat_samples(fname):
+    """Read back what :func:`save_flat_samples` wrote.
+
+    Returns
+    -------
+    flat_samples : np.ndarray
+        Shape ``(nsamples, ndim)``.
+    labels : list of str
+        Parameter label per column.
+    """
+    with np.load(fname, allow_pickle=False) as data:
+        return data["samples"], [str(label) for label in data["labels"]]
 
 
 def calculate_result_array_from_samples(sampler, labels):
@@ -338,6 +390,7 @@ def safe_run_sampler(
         reader = emcee.backends.HDFBackend(backend_filename)
 
         result_dict, flat_samples = calculate_result_array_from_samples(reader, labels)
+        save_flat_samples(outroot, flat_samples, labels)
         logging.info("Nothing to be done here")
         return result_dict
 
@@ -469,6 +522,7 @@ def safe_run_sampler(
     )
 
     result_dict, flat_samples = calculate_result_array_from_samples(sampler, labels)
+    save_flat_samples(outroot, flat_samples, labels)
     plot_mcmc_results(
         flat_samples=flat_samples,
         labels=labels,

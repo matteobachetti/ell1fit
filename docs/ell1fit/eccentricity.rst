@@ -38,24 +38,27 @@ solid one.
 From a finished run
 -------------------
 
-The fit writes its chain to ``<outroot>.h5`` and its summary to
-``<outroot>_results.ecsv``, both in the sampler's local coordinates: column
-``i`` of the chain is ``dEPS1``, an offset from the starting value in units of
-that parameter's preconditioned scale. The table records ``dEPS1_initial`` and
-``dEPS1_factor``, which is all that is needed to put it back into physical
-units, and :func:`~ell1fit.eccentricity.load_eps_samples` does that::
+Every run writes its posterior samples to ``<outroot>_samples.npz``, whichever
+sampler produced them, alongside the summary table ``<outroot>_results.ecsv``.
+Both are in the sampler's local coordinates: column ``i`` of the chain is
+``dEPS1``, an offset from the starting value in units of that parameter's
+preconditioned scale. The table records ``dEPS1_initial`` and ``dEPS1_factor``,
+which is all that is needed to put it back into physical units, and
+:func:`~ell1fit.eccentricity.load_eps_samples` does that::
 
     from ell1fit.eccentricity import eccentricity_summary_from_run
 
     summary = eccentricity_summary_from_run("campaign_A1_EPS1_EPS2_results.ecsv")
     print(summary["ECC_summary"])
 
-Pass the results table that sits beside the chain: for a single-file run that
-is the *event file's* output root, and for a multi-file run the combined
-``-o`` root. Which column of the chain holds which parameter is worked out
-from the percentiles the table already records for it, rather than from column
-order, so a reordered or split table cannot silently mismatch the two — and a
-table and chain from different fits raise instead of returning nonsense.
+Pass the results table that sits beside the samples: for a single-file run that
+is the *event file's* output root, and for a multi-file run the combined ``-o``
+root. The sample file names its columns, so nothing has to be guessed. A run
+made before those files existed leaves only the emcee backend ``<outroot>.h5``,
+which carries no names; that is still read, with each column identified by the
+percentiles the table already records for it rather than by column order, so a
+reordered or split table cannot silently mismatch the two — and a table and
+chain from different fits raise instead of returning nonsense.
 
 Measurement or upper limit
 --------------------------

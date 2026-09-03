@@ -60,6 +60,7 @@ import numpy as np
 from astropy.table import Table
 from scipy.special import ndtri_exp
 
+from .mcmc_utils import SAMPLES_SUFFIX
 from .plotting import plot_style_context
 
 
@@ -70,6 +71,7 @@ __all__ = [
     "eccentricity_summary_from_run",
     "eps_samples_from_chain",
     "load_eps_samples",
+    "output_root",
     "plot_eccentricity_posterior",
     "zero_eccentricity_exclusion",
 ]
@@ -373,7 +375,39 @@ def _column_for_parameter(flat_chain, results_row, par, tolerance=COLUMN_MATCH_T
     return best
 
 
-def eps_samples_from_chain(results_row, flat_chain):
+def _column_from_labels(labels, par, flat_chain, results_row, tolerance=COLUMN_MATCH_TOLERANCE):
+    """Index of ``par`` among named columns, with a percentile sanity check.
+
+    Names are authoritative when the sampler wrote them down, so a disagreeing
+    fingerprint only warns -- most often it means the chain was extended after
+    the table was written, which is harmless.
+    """
+    candidates = [f"d{par}", par]
+    for candidate in candidates:
+        if candidate in labels:
+            column = labels.index(candidate)
+            break
+    else:
+        raise ValueError(
+            f"{par} is not among the sampled parameters {labels}. "
+            "Refit including EPS1 and EPS2 among the fitted parameters."
+        )
+
+    keys = [f"d{par}_{perc:g}" for perc in (16, 50, 84)]
+    if all(key in _colnames(results_row) for key in keys):
+        target = np.array([float(results_row[key]) for key in keys])
+        spread = target[2] - target[0]
+        found = np.percentile(flat_chain[:, column], [16, 50, 84])
+        if spread > 0 and np.max(np.abs(found - target)) / spread > tolerance:
+            logging.warning(
+                f"Samples of {par} disagree with the percentiles recorded for it "
+                f"({found} against {target}). Using the samples; check that the "
+                "table and the sample file come from the same fit."
+            )
+    return column
+
+
+def eps_samples_from_chain(results_row, flat_chain, labels=None):
     r"""Turn a flattened chain into physical ``EPS1``/``EPS2`` samples.
 
     The sampler works in local coordinates: column ``i`` of the chain holds
@@ -392,6 +426,11 @@ def eps_samples_from_chain(results_row, flat_chain):
         One row of a ``*_results.ecsv`` table.
     flat_chain : np.ndarray
         Flattened chain, shape ``(nsamples, ndim)``, in local coordinates.
+    labels : list of str, optional
+        Parameter name per column, as saved by
+        :func:`ell1fit.mcmc_utils.save_flat_samples`. When absent -- an HDF5
+        chain carries no names -- the columns are identified by their recorded
+        percentiles instead.
 
     Returns
     -------
@@ -401,26 +440,43 @@ def eps_samples_from_chain(results_row, flat_chain):
     flat_chain = np.atleast_2d(np.asarray(flat_chain, dtype=float))
     samples = []
     for par in ("EPS1", "EPS2"):
-        column = _column_for_parameter(flat_chain, results_row, par)
+        if labels is None:
+            column = _column_for_parameter(flat_chain, results_row, par)
+        else:
+            column = _column_from_labels(list(labels), par, flat_chain, results_row)
         initial = float(results_row[f"d{par}_initial"])
         factor = float(results_row[f"d{par}_factor"])
         samples.append(initial + flat_chain[:, column] * factor)
     return samples[0], samples[1]
 
 
-def default_chain_file(results_file):
-    """Name of the HDF5 chain that goes with a ``*_results.ecsv`` table.
+RESULTS_SUFFIX = "_results.ecsv"
 
-    Both are built from the same output root: the fit writes ``<root>.h5`` and
-    ``<root>_results.ecsv``.
-    """
-    suffix = "_results.ecsv"
-    if not str(results_file).endswith(suffix):
+
+def output_root(results_file):
+    """The output root a ``*_results.ecsv`` file was built from."""
+    if not str(results_file).endswith(RESULTS_SUFFIX):
         raise ValueError(
-            f"Cannot guess the chain file for {results_file!r}: it does not end in "
-            f"{suffix!r}. Pass chain_file explicitly."
+            f"Cannot guess the output root of {results_file!r}: it does not end in "
+            f"{RESULTS_SUFFIX!r}. Pass the sample file explicitly."
         )
-    return str(results_file)[: -len(suffix)] + ".h5"
+    return str(results_file)[: -len(RESULTS_SUFFIX)]
+
+
+def default_chain_file(results_file):
+    """Sample file that goes with a ``*_results.ecsv`` table.
+
+    Everything a run writes is built from one output root, so the samples sit
+    next to the table. Two files can hold them: ``<root>_samples.npz``, which
+    every sampler writes and which carries the parameter names, and
+    ``<root>.h5``, the emcee backend, which is all that older runs left behind.
+    The first is preferred, the second is the fallback.
+    """
+    root = output_root(results_file)
+    samples_file = root + SAMPLES_SUFFIX
+    if os.path.exists(samples_file):
+        return samples_file
+    return root + ".h5"
 
 
 def load_eps_samples(results_file, chain_file=None, row=-1):
@@ -446,23 +502,34 @@ def load_eps_samples(results_file, chain_file=None, row=-1):
         Physical posterior samples, with the same burn-in and thinning the fit
         itself applied.
     """
-    import emcee
-
     if chain_file is None:
         chain_file = default_chain_file(results_file)
     if not os.path.exists(chain_file):
-        raise FileNotFoundError(f"No chain file at {chain_file}.")
-
-    from .mcmc_utils import get_flat_samples
+        raise FileNotFoundError(
+            f"No samples beside {results_file}: expected {chain_file}. A fit run "
+            "before samples were saved leaves only its emcee backend; pass that "
+            ".h5 as chain_file."
+        )
 
     table = Table.read(results_file)
     results_row = table[row]
 
-    reader = emcee.backends.HDFBackend(chain_file, read_only=True)
-    flat_chain, _ = get_flat_samples(reader)
+    if str(chain_file).endswith(SAMPLES_SUFFIX):
+        from .mcmc_utils import load_flat_samples
+
+        flat_chain, labels = load_flat_samples(chain_file)
+    else:
+        import emcee
+
+        from .mcmc_utils import get_flat_samples
+
+        reader = emcee.backends.HDFBackend(chain_file, read_only=True)
+        flat_chain, _ = get_flat_samples(reader)
+        labels = None
+
     logging.info(f"Read {flat_chain.shape[0]} samples from {chain_file}")
 
-    return eps_samples_from_chain(results_row, flat_chain)
+    return eps_samples_from_chain(results_row, flat_chain, labels=labels)
 
 
 def eccentricity_summary_from_run(results_file, chain_file=None, row=-1, **kwargs):
