@@ -544,7 +544,7 @@ def _calculate_phases(times_from_pepoch, parameters, tolerance=1e-8):
             # and it lands more than half an orbit from PEPOCH whenever the two
             # epochs were not deliberately aligned. Logged rather than warned
             # because this fires on essentially every call.
-            logging.info("Wrapping TASC to the principal interval modulo PB")
+            logging.debug("Wrapping TASC to the principal interval modulo PB")
 
         deorbit_times_from_pepoch = simple_ell1_deorbit_numba(
             times_from_pepoch[i],
