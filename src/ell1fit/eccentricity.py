@@ -605,9 +605,7 @@ def main(args=None):
     parser = argparse.ArgumentParser(
         description="Summarize the eccentricity posterior from a finished ell1fit run."
     )
-    parser.add_argument(
-        "results_file", help="*_results.ecsv written by the fit"
-    )
+    parser.add_argument("results_file", help="*_results.ecsv written by the fit")
     parser.add_argument(
         "--chain-file",
         default=None,

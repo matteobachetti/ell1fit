@@ -800,8 +800,6 @@ def ell1fit(
         nsteps,
     )
 
-    results = _enrich_results_with_eccentricity(
-        results, outroots[-1], requested_parameter_names
-    )
+    results = _enrich_results_with_eccentricity(results, outroots[-1], requested_parameter_names)
 
     return _write_results_products(results, n_files, get_outroot, requested_parameter_names, model)
