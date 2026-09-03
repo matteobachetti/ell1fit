@@ -269,6 +269,34 @@ def _enrich_results_with_observation_metadata(
     return results
 
 
+def _enrich_results_with_eccentricity(results, outroot, requested_parameter_names):
+    """Add ECC_* columns when both EPS1 and EPS2 were fitted."""
+    if not ({"EPS1", "EPS2"} <= set(requested_parameter_names)):
+        return results
+
+    from .eccentricity import (
+        eccentricity_summary,
+        eps_samples_from_chain,
+        plot_eccentricity_posterior,
+    )
+    from .mcmc_utils import SAMPLES_SUFFIX, load_flat_samples
+
+    samples_file = outroot + SAMPLES_SUFFIX
+    if not os.path.isfile(samples_file):
+        logging.warning(
+            "EPS1 and EPS2 were fitted but no samples file found; skipping eccentricity"
+        )
+        return results
+
+    flat_chain, labels = load_flat_samples(samples_file)
+    eps1, eps2 = eps_samples_from_chain(results, flat_chain, labels=labels)
+    summary = eccentricity_summary(eps1, eps2)
+    results.update(summary)
+    plot_eccentricity_posterior(eps1, eps2, fname=outroot + "_eccentricity.jpg", summary=summary)
+    logging.info(f"Eccentricity: {summary['ECC_summary']}")
+    return results
+
+
 def _write_results_products(results, n_files, get_outroot, requested_parameter_names, model):
     """Write combined and per-file result tables plus updated parfiles."""
     table_results = Table(rows=[results])
@@ -770,6 +798,10 @@ def ell1fit(
         nharm,
         energy_range,
         nsteps,
+    )
+
+    results = _enrich_results_with_eccentricity(
+        results, outroots[-1], requested_parameter_names
     )
 
     return _write_results_products(results, n_files, get_outroot, requested_parameter_names, model)

@@ -594,3 +594,61 @@ def plot_eccentricity_posterior(eps1, eps2, fname="eccentricity.jpg", summary=No
         plt.close(fig)
 
     return fname
+
+
+def main(args=None):
+    """CLI entry point for ``ell1ecc``."""
+    import argparse
+
+    from .logging import configure_logging
+
+    parser = argparse.ArgumentParser(
+        description="Summarize the eccentricity posterior from a finished ell1fit run."
+    )
+    parser.add_argument(
+        "results_file", help="*_results.ecsv written by the fit"
+    )
+    parser.add_argument(
+        "--chain-file",
+        default=None,
+        dest="chain_file",
+        help="Samples file (*_samples.npz or *.h5); auto-detected if omitted",
+    )
+    parser.add_argument(
+        "--row",
+        type=int,
+        default=-1,
+        help="Which row of the result table to use (default: last)",
+    )
+    parser.add_argument(
+        "--flat-in-e",
+        action="store_true",
+        dest="flat_in_e",
+        help="Reweight to a prior flat in e (default: flat in EPS1/EPS2)",
+    )
+    parser.add_argument(
+        "--plot",
+        default=None,
+        help="Output plot path (default: <outroot>_eccentricity.jpg)",
+    )
+    parsed = parser.parse_args(args)
+
+    configure_logging()
+
+    eps1, eps2 = load_eps_samples(
+        parsed.results_file,
+        chain_file=parsed.chain_file,
+        row=parsed.row,
+    )
+    summary = eccentricity_summary(eps1, eps2, flat_in_e_prior=parsed.flat_in_e)
+
+    print(summary["ECC_summary"])
+    for key in sorted(summary):
+        if key != "ECC_summary":
+            print(f"  {key}: {summary[key]}")
+
+    plot_path = parsed.plot
+    if plot_path is None:
+        plot_path = output_root(parsed.results_file) + "_eccentricity.jpg"
+    plot_eccentricity_posterior(eps1, eps2, fname=plot_path, summary=summary)
+    print(f"\nPlot saved to {plot_path}")

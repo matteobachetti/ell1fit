@@ -34,6 +34,7 @@ from ..eccentricity import (
     zero_eccentricity_exclusion,
 )
 from ..mcmc_utils import SAMPLES_SUFFIX, load_flat_samples, save_flat_samples
+from ..pipeline import _enrich_results_with_eccentricity
 
 
 SEED = 20260903
@@ -371,3 +372,84 @@ def test_plot_marks_the_interval_when_detected(tmp_path):
     plot_eccentricity_posterior(eps1, eps2, fname=fname)
 
     assert (tmp_path / "ecc_detected.jpg").exists()
+
+
+# --- Pipeline integration: _enrich_results_with_eccentricity ----------------
+
+
+def _mock_results_and_samples(tmp_path, ecc=0.0, omega_deg=0.0, size=20_000):
+    """Build a results dict and samples file for testing pipeline enrichment."""
+    rng = np.random.default_rng(SEED)
+    initial = {"EPS1": 1e-3, "EPS2": -2e-3}
+    factor = {"EPS1": 1e-5, "EPS2": 2e-5}
+    omega = np.radians(omega_deg)
+    centre_eps1 = (ecc * np.sin(omega) - initial["EPS1"]) / factor["EPS1"]
+    centre_eps2 = (ecc * np.cos(omega) - initial["EPS2"]) / factor["EPS2"]
+
+    eps1_local = rng.normal(centre_eps1, SIGMA / factor["EPS1"], size)
+    eps2_local = rng.normal(centre_eps2, SIGMA / factor["EPS2"], size)
+    flat_chain = np.column_stack([eps1_local, eps2_local])
+    labels = ["dEPS1", "dEPS2"]
+
+    outroot = str(tmp_path / "run")
+    save_flat_samples(outroot, flat_chain, labels)
+
+    results = {}
+    for name, local in (("EPS1", eps1_local), ("EPS2", eps2_local)):
+        for perc in (16, 50, 84):
+            results[f"d{name}_{perc}"] = float(np.percentile(local, perc))
+        results[f"d{name}_initial"] = initial[name]
+        results[f"d{name}_factor"] = factor[name]
+
+    return results, outroot
+
+
+def test_pipeline_enrichment_adds_eccentricity_columns(tmp_path):
+    """ECC_* columns are added when EPS1 and EPS2 are both fitted."""
+    results, outroot = _mock_results_and_samples(tmp_path, ecc=20 * SIGMA, omega_deg=71.0)
+    enriched = _enrich_results_with_eccentricity(results, outroot, ["A1", "EPS1", "EPS2", "F0"])
+
+    assert "ECC_50" in enriched
+    assert "ECC_detected" in enriched
+    assert "ECC_summary" in enriched
+    assert enriched["ECC_detected"]
+    assert enriched["ECC_50"] > 0
+    assert (tmp_path / "run_eccentricity.jpg").exists()
+
+
+def test_pipeline_enrichment_skips_without_both_eps(tmp_path):
+    """No ECC_* columns when only EPS1 (or neither) is fitted."""
+    results, outroot = _mock_results_and_samples(tmp_path)
+    enriched = _enrich_results_with_eccentricity(results, outroot, ["A1", "EPS1", "F0"])
+    assert "ECC_50" not in enriched
+
+    enriched = _enrich_results_with_eccentricity(results, outroot, ["A1", "F0"])
+    assert "ECC_50" not in enriched
+
+
+def test_pipeline_enrichment_upper_limit_for_null(tmp_path):
+    """With no injected eccentricity, the enrichment reports an upper limit."""
+    results, outroot = _mock_results_and_samples(tmp_path, ecc=0.0)
+    enriched = _enrich_results_with_eccentricity(results, outroot, ["EPS1", "EPS2"])
+
+    assert not enriched["ECC_detected"]
+    assert np.isfinite(enriched["ECC_upper_limit"])
+
+
+# --- CLI entry point --------------------------------------------------------
+
+
+def test_ell1ecc_cli_prints_summary(tmp_path, capsys):
+    """The CLI prints the eccentricity summary and writes a plot."""
+    from ..eccentricity import main as ell1ecc_main
+
+    results, outroot = _mock_results_and_samples(tmp_path, ecc=20 * SIGMA, omega_deg=71.0)
+    results_file = outroot + "_results.ecsv"
+    Table(rows=[results]).write(results_file)
+
+    plot_path = str(tmp_path / "ecc_cli.jpg")
+    ell1ecc_main([results_file, "--plot", plot_path])
+
+    captured = capsys.readouterr()
+    assert "e =" in captured.out or "e <" in captured.out
+    assert (tmp_path / "ecc_cli.jpg").exists()
