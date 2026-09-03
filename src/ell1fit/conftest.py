@@ -9,7 +9,6 @@ get picked up when running the tests inside an interpreter using
 
 import os
 
-import pytest
 
 try:
     from pytest_astropy_header.display import PYTEST_HEADER_MODULES, TESTED_VERSIONS
