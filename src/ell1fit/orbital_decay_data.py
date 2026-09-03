@@ -36,7 +36,6 @@ from dataclasses import dataclass, field
 import astropy.units as u
 import numpy as np
 from astropy.table import Table
-from pint.models import get_model
 
 from .models import ORBITAL_DERIVATIVES, _load_and_validate_models, _orbital_epoch_offsets
 from .orbital_decay_model import spurious_tasc_from_pbdot_mismatch
@@ -311,7 +310,7 @@ def check_compatibility(epochs, tolerance=1e-9, pbdot_impact_fraction=1.0):
     logging.info("Checking orbital model compatibility across %d epochs", len(epochs))
     if len(epochs) < 2:
         raise OrbitalModelCompatibilityError(
-            "Need at least 2 input files to fit an orbital-decay model, got " f"{len(epochs)}."
+            f"Need at least 2 input files to fit an orbital-decay model, got {len(epochs)}."
         )
 
     model_list, pepoch_list, ref_model = _build_models(epochs)

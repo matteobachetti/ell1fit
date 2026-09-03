@@ -26,8 +26,17 @@ from ..orbital_decay_data import (
     load_epochs,
     read_result_table,
 )
-from ..orbital_decay_model import delta_tasc_model, log_likelihood_asymmetric_errors, physical_from_beta
-from ..orbital_decay_sampling import bayes_factor, default_bounds, laplace_cross_check, run_seed_scatter
+from ..orbital_decay_model import (
+    delta_tasc_model,
+    log_likelihood_asymmetric_errors,
+    physical_from_beta,
+)
+from ..orbital_decay_sampling import (
+    bayes_factor,
+    default_bounds,
+    laplace_cross_check,
+    run_seed_scatter,
+)
 
 
 #: Small enough for test runtime, per this package's convention for sampler
@@ -67,7 +76,14 @@ def null_case():
 
     m0 = _fit(2, x, y, yerrn, yerrp, baseline_days, ["b0", "b1", "b2"])
     m1 = _fit(3, x, y, yerrn, yerrp, baseline_days, ["b0", "b1", "b2", "b3"])
-    return {"beta_true": beta_true, "baseline_days": baseline_days, "x": x, "y": y, "m0": m0, "m1": m1}
+    return {
+        "beta_true": beta_true,
+        "baseline_days": baseline_days,
+        "x": x,
+        "y": y,
+        "m0": m0,
+        "m1": m1,
+    }
 
 
 @pytest.fixture(scope="module")
@@ -79,7 +95,14 @@ def pbddot_case():
 
     m0 = _fit(2, x, y, yerrn, yerrp, baseline_days, ["b0", "b1", "b2"])
     m1 = _fit(3, x, y, yerrn, yerrp, baseline_days, ["b0", "b1", "b2", "b3"])
-    return {"beta_true": beta_true, "baseline_days": baseline_days, "x": x, "y": y, "m0": m0, "m1": m1}
+    return {
+        "beta_true": beta_true,
+        "baseline_days": baseline_days,
+        "x": x,
+        "y": y,
+        "m0": m0,
+        "m1": m1,
+    }
 
 
 def test_null_case_recovers_beta_within_3sigma(null_case):
@@ -131,7 +154,10 @@ def test_physical_from_beta_recovers_injected_pbdot_and_pbddot():
             delta_tasc_exact.append(0.0)
             continue
         lo, hi = sorted([x - 5, x + 5])
-        f = lambda t: n_cycles(t) - target  # noqa: B023
+
+        def f(t):  # noqa: B023
+            return n_cycles(t) - target
+
         while f(lo) * f(hi) > 0:
             lo, hi = lo - 5, hi + 5
         delta_tasc_exact.append(brentq(f, lo, hi, xtol=1e-10) - x)
@@ -178,7 +204,18 @@ def test_plot_mcmc_comparison_smoke(null_case, tmp_path):
 _TASC_PERCENTILE_COLUMNS = ("1", "10", "16", "50", "84", "90", "99")
 
 
-def _write_ecsv(path, pepoch, pb, tasc, a1=22.0, eps1=0.0, eps2=0.0, pbdot=0.0, tasc_spread_days=0.001, missing=()):
+def _write_ecsv(
+    path,
+    pepoch,
+    pb,
+    tasc,
+    a1=22.0,
+    eps1=0.0,
+    eps2=0.0,
+    pbdot=0.0,
+    tasc_spread_days=0.001,
+    missing=(),
+):
     """A minimal single-epoch ell1fit result file, with just enough columns
     for orbital_decay_data to read (see its ``_REQUIRED_COLUMNS``).
 
@@ -235,7 +272,9 @@ def test_joint_fit_output_raises_clear_error(tmp_path):
 
 
 def test_rayleigh_only_output_raises_clear_error(tmp_path):
-    fname = _write_ecsv(tmp_path / "rayleigh.ecsv", pepoch=57000.0, pb=1.7, tasc=57000.1, missing=("dTASC_mean",))
+    fname = _write_ecsv(
+        tmp_path / "rayleigh.ecsv", pepoch=57000.0, pb=1.7, tasc=57000.1, missing=("dTASC_mean",)
+    )
     with pytest.raises(OrbitalModelCompatibilityError, match="F0/F1-only"):
         read_result_table(fname)
 
@@ -285,8 +324,22 @@ def test_check_compatibility_warns_but_does_not_abort_on_small_pbdot_mismatch(tm
     pb1_sec = pb0_sec + pbdot1 * (pepoch1 - pepoch0) * 86400.0
 
     files = [
-        _write_ecsv(tmp_path / "e0.ecsv", pepoch=pepoch0, pb=pb0_sec, tasc=57000.1, pbdot=pbdot0, tasc_spread_days=0.00233),
-        _write_ecsv(tmp_path / "e1.ecsv", pepoch=pepoch1, pb=pb1_sec, tasc=60748.05, pbdot=pbdot1, tasc_spread_days=0.00233),
+        _write_ecsv(
+            tmp_path / "e0.ecsv",
+            pepoch=pepoch0,
+            pb=pb0_sec,
+            tasc=57000.1,
+            pbdot=pbdot0,
+            tasc_spread_days=0.00233,
+        ),
+        _write_ecsv(
+            tmp_path / "e1.ecsv",
+            pepoch=pepoch1,
+            pb=pb1_sec,
+            tasc=60748.05,
+            pbdot=pbdot1,
+            tasc_spread_days=0.00233,
+        ),
     ]
     epochs = load_epochs(files)
     with caplog.at_level("WARNING"):
@@ -321,8 +374,22 @@ def test_check_compatibility_fires_on_large_pbdot_mismatch(tmp_path):
     pb1_sec = pb0_sec + 86400.0 * dt_days * mean_pbdot
 
     files = [
-        _write_ecsv(tmp_path / "e0.ecsv", pepoch=pepoch0, pb=pb0_sec, tasc=57000.1, pbdot=pbdot0, tasc_spread_days=0.0001),
-        _write_ecsv(tmp_path / "e1.ecsv", pepoch=pepoch1, pb=pb1_sec, tasc=58000.05, pbdot=pbdot1, tasc_spread_days=0.0001),
+        _write_ecsv(
+            tmp_path / "e0.ecsv",
+            pepoch=pepoch0,
+            pb=pb0_sec,
+            tasc=57000.1,
+            pbdot=pbdot0,
+            tasc_spread_days=0.0001,
+        ),
+        _write_ecsv(
+            tmp_path / "e1.ecsv",
+            pepoch=pepoch1,
+            pb=pb1_sec,
+            tasc=58000.05,
+            pbdot=pbdot1,
+            tasc_spread_days=0.0001,
+        ),
     ]
     epochs = load_epochs(files)
     with pytest.raises(OrbitalModelCompatibilityError, match="unsound"):
@@ -334,8 +401,12 @@ def test_check_compatibility_fires_on_pb_unexplained_by_pbdot(tmp_path):
     genuinely different orbital model, not just a differing PBDOT
     assumption) has no benign explanation and must still hard-abort."""
     files = [
-        _write_ecsv(tmp_path / "e0.ecsv", pepoch=57000.0, pb=1.7 * 86400.0, tasc=57000.1, pbdot=0.0),
-        _write_ecsv(tmp_path / "e1.ecsv", pepoch=57100.0, pb=2.5 * 86400.0, tasc=57100.05, pbdot=0.0),
+        _write_ecsv(
+            tmp_path / "e0.ecsv", pepoch=57000.0, pb=1.7 * 86400.0, tasc=57000.1, pbdot=0.0
+        ),
+        _write_ecsv(
+            tmp_path / "e1.ecsv", pepoch=57100.0, pb=2.5 * 86400.0, tasc=57100.05, pbdot=0.0
+        ),
     ]
     epochs = load_epochs(files)
     with pytest.raises(OrbitalModelCompatibilityError, match="unexplained"):

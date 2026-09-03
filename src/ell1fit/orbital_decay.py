@@ -13,21 +13,29 @@ import argparse
 import copy
 import json
 import logging
-import os
 
 import astropy.units as u
 import numpy as np
 
 from .logging import configure_logging
-from .mcmc_utils import plot_mcmc_comparison, plot_mcmc_results
+from .mcmc_utils import plot_mcmc_comparison
 from .orbital_decay_data import (
     OrbitalModelCompatibilityError,
     build_reference_model,
     check_compatibility,
     load_epochs,
 )
-from .orbital_decay_model import delta_tasc_model, log_likelihood_asymmetric_errors, physical_from_beta
-from .orbital_decay_sampling import bayes_factor, default_bounds, laplace_cross_check, run_seed_scatter
+from .orbital_decay_model import (
+    delta_tasc_model,
+    log_likelihood_asymmetric_errors,
+    physical_from_beta,
+)
+from .orbital_decay_sampling import (
+    bayes_factor,
+    default_bounds,
+    laplace_cross_check,
+    run_seed_scatter,
+)
 
 
 __all__ = ["fit_orbital_decay", "main"]
@@ -69,7 +77,9 @@ def _fit_model(order, x, y, yerrn, yerrp, baseline_days, labels, nlive, dlogz, s
     result = run_seed_scatter(
         loglikelihood, bounds, labels, n_seeds=seeds, nlive=nlive, dlogz=dlogz, outroot=outroot
     )
-    result["laplace_log_evidence"] = laplace_cross_check(loglikelihood, bounds, result["map_position"])
+    result["laplace_log_evidence"] = laplace_cross_check(
+        loglikelihood, bounds, result["map_position"]
+    )
     result["loglikelihood"] = loglikelihood
     return result
 
@@ -187,7 +197,9 @@ def fit_orbital_decay(
         Also written to ``{outroot}_results.json``.
     """
     epochs = load_epochs(files)
-    check_compatibility(epochs, tolerance=compat_tolerance, pbdot_impact_fraction=pbdot_impact_fraction)
+    check_compatibility(
+        epochs, tolerance=compat_tolerance, pbdot_impact_fraction=pbdot_impact_fraction
+    )
     ref_model = build_reference_model(epochs, reference_epoch=reference_epoch)
 
     x, y, yerrn, yerrp = _assemble_data(epochs, ref_model)
@@ -195,7 +207,17 @@ def fit_orbital_decay(
     pb0_days = float(ref_model.PB.value)
 
     m0_result = _fit_model(
-        2, x, y, yerrn, yerrp, baseline_days, ["b0", "b1", "b2"], nlive, dlogz, seeds, outroot + "_m0"
+        2,
+        x,
+        y,
+        yerrn,
+        yerrp,
+        baseline_days,
+        ["b0", "b1", "b2"],
+        nlive,
+        dlogz,
+        seeds,
+        outroot + "_m0",
     )
     m1_result = _fit_model(
         3,
@@ -219,7 +241,9 @@ def fit_orbital_decay(
         ["M0", "M1"],
         outroot + "_comparison.jpg",
     )
-    _write_diagnostic_plot(x, y, yerrn, yerrp, baseline_days, m0_result, m1_result, outroot + "_data.jpg")
+    _write_diagnostic_plot(
+        x, y, yerrn, yerrp, baseline_days, m0_result, m1_result, outroot + "_data.jpg"
+    )
 
     beta_16_0, beta_50_0, beta_84_0 = np.percentile(m0_result["flat_samples"], [16, 50, 84], axis=0)
     beta_16_1, beta_50_1, beta_84_1 = np.percentile(m1_result["flat_samples"], [16, 50, 84], axis=0)
@@ -266,7 +290,11 @@ def fit_orbital_decay(
     if write_parfile:
         results["parfile"] = _write_parfile(ref_model, m0_result, baseline_days, pb0_days, outroot)
 
-    logging.info(f"M0 PBDOT = {phys_m0['PBDOT']:.4e}, ln BF (M1/M0) = {bf['ln_bf']:.2f} +- {bf['ln_bf_err']:.2f} ({bf['interpretation']})")
+    logging.info(
+        f"M0 PBDOT = {phys_m0['PBDOT']:.4e}, "
+        f"ln BF (M1/M0) = {bf['ln_bf']:.2f} +- {bf['ln_bf_err']:.2f} "
+        f"({bf['interpretation']})"
+    )
 
     return results
 
@@ -278,7 +306,9 @@ def main(args=None):
     parser.add_argument("files", nargs="+", help="ell1fit .ecsv result files, one per epoch")
     parser.add_argument("-o", "--outroot", default="orbital_decay", help="Output file root")
     parser.add_argument("--nlive", type=int, default=500, help="Nested sampling live points")
-    parser.add_argument("--dlogz", type=float, default=0.1, help="Nested sampling stopping criterion")
+    parser.add_argument(
+        "--dlogz", type=float, default=0.1, help="Nested sampling stopping criterion"
+    )
     parser.add_argument("--seeds", type=int, default=3, help="Nested sampling repeats per model")
     parser.add_argument(
         "--compat-tolerance",
@@ -306,7 +336,10 @@ def main(args=None):
         help="MJD to reference the model at (default: mean PEPOCH across input files)",
     )
     parser.add_argument(
-        "--no-parfile", action="store_false", dest="write_parfile", help="Do not write {outroot}.par"
+        "--no-parfile",
+        action="store_false",
+        dest="write_parfile",
+        help="Do not write {outroot}.par",
     )
     parsed = parser.parse_args(args)
 

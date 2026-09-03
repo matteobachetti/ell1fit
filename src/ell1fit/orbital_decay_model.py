@@ -103,7 +103,11 @@ def physical_from_beta(beta, baseline_days, pb0_days):
     derivative_names = {2: "PBDOT", 3: "PBDDOT"}
     for n in range(2, len(beta)):
         derivative = (
-            math.factorial(n) * beta[n] * pb0_days * 365.25 ** (n - 2) / (86400.0 * baseline_days**n)
+            math.factorial(n)
+            * beta[n]
+            * pb0_days
+            * 365.25 ** (n - 2)
+            / (86400.0 * baseline_days**n)
         )
         name = derivative_names.get(n, f"D{n - 1}_per_yr{n - 2}")
         result[name] = float(derivative)

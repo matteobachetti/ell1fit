@@ -100,7 +100,9 @@ def _find_map(loglikelihood, bounds, seed=None):
     return result.x, float(-result.fun)
 
 
-def run_one_nested_fit(loglikelihood, bounds, labels, nlive=500, dlogz=0.1, seed=None, outroot=None):
+def run_one_nested_fit(
+    loglikelihood, bounds, labels, nlive=500, dlogz=0.1, seed=None, outroot=None
+):
     """One dynesty run over a bounded-uniform prior.
 
     Returns
@@ -119,9 +121,7 @@ def run_one_nested_fit(loglikelihood, bounds, labels, nlive=500, dlogz=0.1, seed
 
     transform = _prior_transform(bounds)
     rstate = np.random.default_rng(seed)
-    sampler = dynesty.NestedSampler(
-        loglikelihood, transform, ndim, nlive=nlive, rstate=rstate
-    )
+    sampler = dynesty.NestedSampler(loglikelihood, transform, ndim, nlive=nlive, rstate=rstate)
     sampler.run_nested(print_progress=False, dlogz=dlogz)
     results = sampler.results
 
@@ -137,9 +137,9 @@ def run_one_nested_fit(loglikelihood, bounds, labels, nlive=500, dlogz=0.1, seed
     weights = np.exp(results.logwt - results.logz[-1])
     weights = weights / weights.sum()
     kish = float(1.0 / np.sum(weights**2))
-    flat_samples = resample_equal(results.samples, weights, rstate=np.random.default_rng(int(rstate.integers(2**31))))[
-        : max(int(kish), 2)
-    ]
+    flat_samples = resample_equal(
+        results.samples, weights, rstate=np.random.default_rng(int(rstate.integers(2**31)))
+    )[: max(int(kish), 2)]
 
     if outroot is not None:
         from .mcmc_utils import plot_mcmc_results
