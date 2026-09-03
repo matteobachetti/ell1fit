@@ -208,7 +208,7 @@ def run_nested(
     except ImportError as exc:
         raise ImportError("sampler='nested' needs dynesty: pip install ell1fit[nested]") from exc
 
-    from .mcmc_utils import plot_mcmc_results
+    from .mcmc_utils import plot_mcmc_results, save_flat_samples
     from .prior_transform import build_prior_transform
 
     starting_pars = np.asarray(starting_pars)
@@ -294,6 +294,7 @@ def run_nested(
     result_dict["omitted_log_normalisation"] = omitted_log_normalisation
     result_dict["loglikelihood_split_check"] = split_check
 
+    save_flat_samples(outroot, flat_samples, labels)
     plot_mcmc_results(
         flat_samples=flat_samples,
         labels=corner_labels or labels,

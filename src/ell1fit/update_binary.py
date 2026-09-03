@@ -18,7 +18,6 @@ from pint.models import get_model
 from pint.models.parameter import funcParameter
 from .logging import configure_logging
 
-
 __all__ = [
     "main",
     "update_binary_model",
@@ -40,7 +39,9 @@ def update_binary_model(input_model, reference_model):
             and getattr(reference_model, par).quantity is None
         ):
             continue
-        getattr(new_model, par).value = getattr(reference_model, par).value
+        newval = getattr(reference_model, par).value
+
+        getattr(new_model, par).value = newval if newval is not None else 0.0
 
         if getattr(new_model, par).uncertainty_value is not None:
             getattr(new_model, par).uncertainty_value = getattr(

@@ -38,14 +38,21 @@ per file as well, a free nuisance parameter absorbing each observation's
 arbitrary phase zero.
 
 A global orbital solution is still only valid at the epoch it is referenced to.
-When the parfile sets an orbital derivative — ``PBDOT``, ``A1DOT``, ``EPS1DOT``
-or ``EPS2DOT`` — each file therefore also carries a **fixed** correction
+When the parfile sets an orbital derivative — ``PBDOT``, ``EPS1DOT`` or
+``EPS2DOT`` — each file therefore also carries a **fixed** correction
 (``PB_offset_i``, ``TASC_offset_i``, ``A1_offset_i``, …) that carries the shared
 solution to that file's own ``PEPOCH``. These are not fitted and do not vary
 with the trial parameters; PINT computes them once at load. They are exactly
 zero when no derivative is set. See
 :func:`ell1fit.models._orbital_epoch_offsets`, which also explains why the
 ``TASC`` correction is the one that matters.
+
+``A1DOT`` is the exception, and is excluded from those offsets on purpose: a
+fixed offset cannot be fitted. Each file instead carries its **lever arm**
+``binary_dt_i``, the time in seconds from the shared binary epoch to its own,
+and the orbital amplitude is rebuilt as ``A1 + A1_offset_i + A1DOT *
+binary_dt_i`` on every likelihood evaluation. See
+:doc:`orbital_derivatives`.
 
 .. note::
 

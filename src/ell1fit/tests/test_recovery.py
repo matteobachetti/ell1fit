@@ -270,3 +270,121 @@ def test_generated_observations_span_a_full_orbit(n_gtis, gti_duty):
         f"observations span {span / solution.PB_sec:.3f} orbits with "
         f"n_gtis={n_gtis}, gti_duty={gti_duty}"
     )
+
+
+#: Epochs for the A1DOT tests, in days from ``pepoch_ref``. Nearly two years
+#: apart: A1DOT is measured from the *drift* of the orbital amplitude, so the
+#: precision scales as one epoch's sigma(A1) divided by the baseline, and the
+#: 37-day spacing the other tests use would need a 20x larger injection to be
+#: visible at the same cost.
+A1DOT_EPOCH_OFFSETS = (0.0, 700.0)
+
+#: Injected drift, light-seconds per second. Sized against the two competing
+#: constraints, which pull in opposite directions and leave a narrow window.
+#:
+#: It has to be *large* enough to measure: the fit reaches sigma(A1DOT) = 1e-10
+#: on this fixture, so 6e-10 is a 4-sigma effect and a sign error in the model
+#: cannot pass the pull test by landing on the mirror image.
+#:
+#: It has to be *small* enough to find from a standing start. The drift shows
+#: up as a sinusoid in orbital phase of amplitude ``A1DOT * baseline * F0``
+#: cycles at the far epoch -- 0.27 cycles here. Push it past half a cycle and
+#: the far epoch is off by whole rotations, the likelihood becomes multimodal,
+#: and a local optimizer starting at A1DOT = 0 cannot walk to the truth: at
+#: 1e-8 (4.5 cycles) it does not, though folding the events at the injected
+#: value recovers the pulse at full strength. That is the pipeline's usual
+#: cycle-count ambiguity, not something specific to A1DOT.
+INJECTED_A1DOT = 6e-10
+
+
+@pytest.fixture(scope="module")
+def a1dot_dataset(tmp_path_factory):
+    """A two-epoch dataset with a real orbital-size drift, and parfiles blind to it.
+
+    ``offsets={"A1DOT": -INJECTED_A1DOT}`` writes ``A1DOT = 0`` into every
+    parfile while the events keep the drift, so the fit has to find it rather
+    than sit on it. The per-epoch ``A1`` values written *do* carry the drift,
+    as a real ephemeris built epoch by epoch would; the loader takes the first
+    file's, which is therefore wrong for the second epoch by exactly the amount
+    ``A1DOT`` exists to absorb.
+    """
+    outdir = str(tmp_path_factory.mktemp("a1dot"))
+    solution = InjectedSolution(A1DOT=INJECTED_A1DOT)
+    return make_multi_epoch_dataset(
+        outdir,
+        solution=solution,
+        epoch_offsets=A1DOT_EPOCH_OFFSETS,
+        n_events=3000,
+        offsets={"A1DOT": -INJECTED_A1DOT},
+        uncertainties={"A1": 1e-2, "F0": 1e-8},
+        prefix="a1dot",
+    )
+
+
+def test_pipeline_recovers_injected_a1dot(a1dot_dataset, tmp_path):
+    """``-P F0,A1,A1DOT`` must measure an injected orbital-size drift.
+
+    The assertion is the one the rest of this file uses -- land on the truth
+    within the quoted uncertainty -- plus the requirement that the uncertainty
+    be small enough for the measurement to mean anything. Without the second
+    check a fit that returned the prior would pass: it is centred on zero,
+    which is within a huge sigma of everything.
+
+    ``--template-iterations`` is not optional here
+    ----------------------------------------------
+    Each file's pulse template is built by folding *that file's own events*
+    with the current solution. An uncorrected ``A1DOT`` smears the far epoch --
+    0.27 cycles here -- so its template comes out broadened by exactly the
+    error being fitted, and the broadened template then fits the smeared events
+    fits the smeared events better than the sharp truth does, so the
+    likelihood is pulled toward ``A1DOT`` = 0. On this fixture's own seed a
+    single-pass fit returns 1.7e-10 against an injected 6e-10 -- 3 sigma low --
+    where three passes return 6.08e-10, a pull of +0.07.
+
+    That is the worst case, not the typical one. Repeated over eight further
+    seeds: one pass gives a mean 4.80e-10 (mean pull -0.50 +- 0.34), three
+    passes 5.80e-10 (mean pull -0.09 +- 0.40) with error bars 20% smaller. So
+    the effect is a systematic ~20% underestimate on average that occasionally
+    reaches 3 sigma, and refinement removes it.
+
+    This matters well beyond the test. A drift measurement biased toward zero
+    is an *upper limit that is too tight*, which is the one failure mode an
+    upper limit must not have.
+    """
+    solution = a1dot_dataset["solution"]
+    outroot = str(tmp_path / "a1dot")
+
+    main_ell1fit(
+        a1dot_dataset["event_files"]
+        + ["-p"]
+        + a1dot_dataset["par_files"]
+        + [
+            "-P",
+            "F0,A1,A1DOT",
+            "-N",
+            "2",
+            "--minimize-first",
+            "--nsteps",
+            "1000",
+            "--template-iterations",
+            "3",
+            "-o",
+            outroot,
+        ]
+    )
+
+    table = Table.read(outroot + "_A1_A1DOT_F0_N2_results.ecsv")[-1]
+    median, sigma, _ = _fitted(table, "A1DOT")
+
+    assert sigma > 0, f"A1DOT has a non-positive uncertainty {sigma}"
+    # A measurement, not a prior: the injected value must stand at least 3
+    # sigma clear of zero, or this test cannot tell the two apart.
+    assert abs(solution.A1DOT) / sigma > 3, (
+        f"sigma(A1DOT)={sigma:.3g} is too large to resolve the injected "
+        f"{solution.A1DOT:.3g}: this fit measures nothing"
+    )
+    pull = (median - solution.A1DOT) / sigma
+    assert abs(pull) < 4, (
+        f"A1DOT recovered as {median:.4g} +- {sigma:.3g}, "
+        f"{pull:.1f} sigma from the injected {solution.A1DOT:.4g}"
+    )

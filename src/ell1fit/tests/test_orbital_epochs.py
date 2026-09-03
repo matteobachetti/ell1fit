@@ -45,13 +45,18 @@ def _write_parfile(path, pepoch, **overrides):
     return str(path)
 
 
-def _load(tmp_path, years_apart, **overrides):
-    """Build the pipeline's parameter dictionary for two separated epochs."""
+def _parfiles(tmp_path, years_apart, **overrides):
+    """Two parfiles for the same solution, ``years_apart`` years of epoch apart."""
     pepochs = [56357.0, 56357.0 + 365.25 * years_apart]
-    parfiles = [
+    return [
         _write_parfile(tmp_path / f"epoch{i}.par", pepoch, **overrides)
         for i, pepoch in enumerate(pepochs)
     ]
+
+
+def _load(tmp_path, years_apart, **overrides):
+    """Build the pipeline's parameter dictionary for two separated epochs."""
+    parfiles = _parfiles(tmp_path, years_apart, **overrides)
     model, pepoch, ref_model = _load_and_validate_models(parfiles)
     _, parameters = _build_parameters_from_models(model, ref_model, [1e5] * len(parfiles))
     return parameters, pepoch
@@ -149,22 +154,81 @@ def test_pb_offset_alone_achieves_nothing(tmp_path):
 def test_a1dot_is_honoured_as_an_input(tmp_path):
     """``A1DOT`` in the parfile must reach the per-file ``A1``.
 
-    It is not fitted; it is propagated, by the same PINT call that handles
-    ``PBDOT``. The expected size is ``A1DOT`` times the epoch separation.
+    Unlike the other derivatives it does not arrive as a fixed offset: it is
+    the *trial* ``A1DOT`` times a fixed per-file lever arm ``binary_dt_i``, so
+    that it can be fitted. The size is unchanged -- ``A1DOT`` times the epoch
+    separation -- and so is the sign structure, since the lever arms straddle
+    the reference epoch.
     """
     a1dot = 1e-13  # lt-s per second
     years_apart = 4
     parameters, pepoch = _load(tmp_path, years_apart, A1DOT=a1dot)
 
     separation = (float(pepoch[1]) - float(pepoch[0])) * 86400
-    spread = parameters["A1_offset_1"] - parameters["A1_offset_0"]
+    drift = [parameters["A1DOT"] * parameters[f"binary_dt_{i}"] for i in range(2)]
 
+    assert parameters["A1DOT"] == pytest.approx(a1dot)
     # PINT propagates over dt_integer_orbits -- the separation rounded to a
     # whole number of orbits -- so the two differ by up to one period, here
     # 0.17% of the four-year baseline.
-    assert spread == pytest.approx(a1dot * separation, rel=5e-3)
-    # The offsets straddle the reference epoch, so they carry opposite signs.
-    assert parameters["A1_offset_0"] < 0 < parameters["A1_offset_1"]
+    assert drift[1] - drift[0] == pytest.approx(a1dot * separation, rel=5e-3)
+    assert drift[0] < 0 < drift[1]
+
+    # The offset that used to carry it is now empty: A1 is propagated by A1DOT
+    # alone, so nothing is left for the fixed correction to do.
+    assert parameters["A1_offset_0"] == 0.0
+    assert parameters["A1_offset_1"] == 0.0
+
+
+def test_a1dot_reproduces_pints_own_propagated_a1(tmp_path):
+    """The lever arm must give exactly the ``A1`` PINT would have propagated.
+
+    The whole point of expressing the drift as ``A1DOT * binary_dt_i`` rather
+    than as a precomputed offset is that the trial value can move. That is only
+    legitimate if, *at* the parfile's own ``A1DOT``, the phases are the ones
+    PINT's ``change_binary_epoch`` implies -- which is what this compares,
+    at the phase level rather than on the parameter, so a convention error
+    anywhere between the two cannot hide.
+
+    The injected ``A1DOT`` is deliberately enormous (1e-8 lt-s/s moves ``A1``
+    by 1.3 lt-s over the baseline): a value at the real target precision would
+    leave the two phase sets equal to within numerical noise whether or not the
+    lever arm were applied at all.
+    """
+    import copy
+
+    a1dot = 1e-8  # lt-s per second: a gross, unmistakable drift
+    parfiles = _parfiles(tmp_path, years_apart=4, A1DOT=a1dot)
+    model, pepoch, ref_model = _load_and_validate_models(parfiles)
+    _, parameters = _build_parameters_from_models(model, ref_model, [1e5] * len(parfiles))
+
+    times = [np.linspace(0, 1e5, 500) for _ in pepoch]
+    phases = _calculate_phases(times, parameters)
+
+    for i, epoch in enumerate(pepoch):
+        propagated = copy.deepcopy(ref_model)
+        propagated.change_binary_epoch(epoch)
+
+        # One file, with PINT's own propagated A1 substituted for the global
+        # value and no lever arm at all.
+        single = {
+            "PB": parameters["PB"],
+            "A1": float(propagated.A1.value),
+            "TASC": parameters["TASC"],
+            "EPS1": parameters["EPS1"],
+            "EPS2": parameters["EPS2"],
+            "PEPOCH_0": parameters[f"PEPOCH_{i}"],
+            "Phase_0": parameters[f"Phase_{i}"],
+            "TASC_offset_0": parameters[f"TASC_offset_{i}"],
+            "PB_offset_0": parameters[f"PB_offset_{i}"],
+        }
+        count = 0
+        while f"F{count}_{i}" in parameters:
+            single[f"F{count}_0"] = parameters[f"F{count}_{i}"]
+            count += 1
+
+        reference = _calculate_phases([times[i]], single)[0]
+        assert np.allclose(phases_around_zero(phases[i] - reference), 0, atol=1e-9)
 
 
 def test_offsets_are_present_for_every_file(tmp_path):

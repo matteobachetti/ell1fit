@@ -57,9 +57,20 @@ def _load_and_validate_models(parfiles):
 
 
 #: Orbital derivatives that PINT propagates when a binary epoch is moved.
-#: None of these is fitted -- they are honoured as inputs, and their only role
-#: here is to make the orbital parameters valid at each file's own epoch.
+#: Honoured as inputs, so that the orbital parameters are valid at each file's
+#: own epoch. Only ``A1DOT`` can also be *fitted*; see :data:`OFFSET_DERIVATIVES`.
 ORBITAL_DERIVATIVES = ("PBDOT", "A1DOT", "EPS1DOT", "EPS2DOT")
+
+#: The subset of :data:`ORBITAL_DERIVATIVES` whose effect is carried by a fixed
+#: per-file offset, computed once at load.
+#:
+#: ``A1DOT`` is deliberately absent. Its entire effect is ``A1 += A1DOT * dt``
+#: with ``dt`` a constant lever arm, so applying it to the *trial* ``A1DOT``
+#: inside the phase model costs one multiply and makes it fittable, where
+#: freezing it into an offset would make the likelihood flat in it -- the
+#: reason ``PBDOT`` is refused (see
+#: :data:`ell1fit.pipeline.UNFITTABLE_PARAMETERS`).
+OFFSET_DERIVATIVES = ("PBDOT", "EPS1DOT", "EPS2DOT")
 
 #: Orbital parameters that acquire a fixed per-file offset, with the unit
 #: conversion needed to express that offset the way the parameter dictionary
@@ -67,9 +78,9 @@ ORBITAL_DERIVATIVES = ("PBDOT", "A1DOT", "EPS1DOT", "EPS2DOT")
 _OFFSET_PARAMETERS = {"PB": 86400.0, "A1": 1.0, "EPS1": 1.0, "EPS2": 1.0}
 
 
-def _model_has_orbital_derivatives(model):
-    """Whether any orbital derivative is set to a nonzero value."""
-    for name in ORBITAL_DERIVATIVES:
+def _model_has_orbital_derivatives(model, names=ORBITAL_DERIVATIVES):
+    """Whether any of ``names`` is set to a nonzero value."""
+    for name in names:
         parameter = getattr(model, name, None)
         if parameter is not None and parameter.value is not None and parameter.value != 0:
             return True
@@ -98,6 +109,24 @@ def _orbital_epoch_offsets(ref_model, pepoch):
     agreement with PINT a tautology rather than a check, and would silently drop
     the parameterizations (``FB0``/``FB1``) and derivatives it already handles.
 
+    ``A1DOT`` is the exception, and is not an offset
+    -----------------------------------------------
+    Everything above rests on the correction being *fixed*. ``A1DOT`` is the one
+    derivative for which that assumption costs something real: it is exactly
+    what an upper limit on the orbit's changing size is measured from, and a
+    frozen offset makes the likelihood flat in it, so it could never be fitted.
+
+    Its effect is also the simplest of the four -- PINT's whole treatment is
+    ``A1 += A1DOT * dt_integer_orbits`` -- so this function hands back that
+    ``dt`` as ``binary_dt`` (seconds) instead, and
+    :func:`ell1fit.phase_utils._calculate_phases` multiplies it by the *trial*
+    ``A1DOT`` on every evaluation. ``A1DOT`` is zeroed before the propagation
+    here so the drift is applied once, not twice, which leaves ``A1_offset``
+    identically zero unless a future PINT moves ``A1`` by some other route.
+    The lever arm is PINT's own, so at the parfile's ``A1DOT`` the model is the
+    one PINT implies, and a fitted ``A1DOT`` written back to a parfile reads in
+    as the same solution.
+
     The ``TASC`` offset is the subtle one
     -------------------------------------
     ``_calculate_phases`` brings ``TASC`` close to each ``PEPOCH`` by wrapping it
@@ -115,10 +144,13 @@ def _orbital_epoch_offsets(ref_model, pepoch):
     -------
     list of dict
         One mapping per entry of ``pepoch``, with keys ``TASC_offset``
-        (days), ``PB_offset`` (seconds), ``A1_offset``, ``EPS1_offset``
-        and ``EPS2_offset``. Every value is
-        exactly ``0.0`` when the model sets no orbital derivative, which keeps
-        the common case bit-for-bit unchanged.
+        (days), ``PB_offset`` (seconds), ``A1_offset``, ``EPS1_offset``,
+        ``EPS2_offset`` and ``binary_dt`` (seconds). Every *offset* is
+        exactly ``0.0`` when the model sets none of
+        :data:`OFFSET_DERIVATIVES`, which keeps the common case bit-for-bit
+        unchanged. ``binary_dt`` is not an offset and is always real: it is the
+        lever arm ``A1DOT`` acts over, needed whether or not the parfile sets
+        one, since the fit may.
     """
     zero = {
         "TASC_offset": 0.0,
@@ -128,31 +160,42 @@ def _orbital_epoch_offsets(ref_model, pepoch):
         "EPS2_offset": 0.0,
     }
 
-    if not _model_has_orbital_derivatives(ref_model):
-        return [dict(zero) for _ in pepoch]
+    # A1DOT is applied to the trial value inside the phase model, so it must not
+    # also be baked into A1_offset here.
+    propagation_model = copy.deepcopy(ref_model)
+    if getattr(propagation_model, "A1DOT", None) is not None:
+        propagation_model.A1DOT.value = 0.0
 
+    has_offset_derivatives = _model_has_orbital_derivatives(ref_model, OFFSET_DERIVATIVES)
     reference = {par: float(getattr(ref_model, par).value) for par in _OFFSET_PARAMETERS}
     offsets = []
 
     for epoch in pepoch:
-        epoch_model = copy.deepcopy(ref_model)
+        epoch_model = copy.deepcopy(propagation_model)
         dt_integer_orbits = epoch_model.change_binary_epoch(epoch)
 
         if dt_integer_orbits is None:
             # PINT returns early when the epoch is already the closest ascending
-            # node: nothing was propagated, so there is nothing to correct.
-            offsets.append(dict(zero))
+            # node: nothing was propagated, so there is nothing to correct, and
+            # the lever arm is zero because the epoch *is* the reference.
+            offsets.append(dict(zero, binary_dt=0.0))
+            continue
+
+        dt_seconds = float(dt_integer_orbits.to("d").value) * 86400.0
+
+        if not has_offset_derivatives:
+            offsets.append(dict(zero, binary_dt=dt_seconds))
             continue
 
         offset = {
             f"{par}_offset": (float(getattr(epoch_model, par).value) - reference[par]) * scale
             for par, scale in _OFFSET_PARAMETERS.items()
         }
+        offset["binary_dt"] = dt_seconds
 
         # Whole orbits are the wrap's job; hand it back everything except the
         # residual. The subtraction cancels ~8 leading digits, which still
         # leaves far more precision than the correction itself needs.
-        dt_seconds = float(dt_integer_orbits.to("d").value) * 86400.0
         pb_seconds = float(epoch_model.PB.value) * 86400.0
         n_orbits = np.round(dt_seconds / pb_seconds)
         offset["TASC_offset"] = (dt_seconds - n_orbits * pb_seconds) / 86400.0
@@ -240,6 +283,12 @@ def _get_par_dict(
         "EPS1": [model.EPS1.value.astype(float), return_unc(model.EPS1)],
         "EPS2": [model.EPS2.value.astype(float), return_unc(model.EPS2)],
         "PBDOT": [model.PBDOT.value.astype(float), return_unc(model.PBDOT)],
+        # Unlike PBDOT, A1DOT has no PINT default: a parfile that omits it
+        # leaves the value None, which reads as "no drift", i.e. zero.
+        "A1DOT": [
+            0.0 if model.A1DOT.value is None else float(model.A1DOT.value),
+            np.nan if model.A1DOT.value is None else return_unc(model.A1DOT),
+        ],
         "PEPOCH": [
             model.PEPOCH.value.astype(float),
             return_unc(model.PEPOCH),

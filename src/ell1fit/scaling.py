@@ -42,7 +42,8 @@ def estimate_uncertainties_from_model(model, parameter_names, observation_length
         across models is used in the estimates.
     parameter_names : list of str
         Parameter names to estimate. Supported entries are ``PB``, ``A1``,
-        ``TASC``, and frequency-derivative names matching ``F<n>_<i>``.
+        ``A1DOT``, ``TASC``, and frequency-derivative names matching
+        ``F<n>_<i>``.
     observation_length : array-like
         Per-file observation durations in seconds. The maximum value is used.
 
@@ -51,8 +52,9 @@ def estimate_uncertainties_from_model(model, parameter_names, observation_length
     dict
         Mapping ``{parameter_name: estimated_uncertainty}``.
         Returned units follow parameter units used by this module:
-        ``PB`` (s), ``A1`` (light-seconds), ``TASC`` (s, relative to epoch),
-        and ``F<n>_<i>`` in the native derivative units.
+        ``PB`` (s), ``A1`` (light-seconds), ``A1DOT`` (light-seconds per
+        second), ``TASC`` (s, relative to epoch), and ``F<n>_<i>`` in the
+        native derivative units.
 
     Notes
     -----
@@ -61,6 +63,9 @@ def estimate_uncertainties_from_model(model, parameter_names, observation_length
     - ``PB``: :math:`\sigma_{PB} \approx \frac{\sqrt{3}}{\pi}
       \frac{1}{2\pi F0}\frac{PB^2}{A1\,T_{obs}}`
     - ``A1``: :math:`\sigma_{A1} \approx \frac{1}{2\pi F0}`
+    - ``A1DOT``: :math:`\sigma_{\dot{A1}} \approx \sigma_{A1} / T_{span}`, with
+      :math:`T_{span}` the spread of the files' ``PEPOCH``. Omitted when a
+      single epoch leaves no lever arm.
     - ``TASC``: :math:`\sigma_{TASC} \approx \frac{1}{2\pi F0}\frac{PB}{2\pi A1}`
     - ``F_k``: :math:`\sigma_{F_k} \approx \max(A1\,\Omega^{k+1}F0,\;10/T_{obs}^{k+1})`,
       with :math:`\Omega=2\pi/PB`.
@@ -77,6 +82,11 @@ def estimate_uncertainties_from_model(model, parameter_names, observation_length
 
     obs_length = np.max(observation_length)
 
+    # Epoch spacing, in seconds: the lever arm any orbital derivative is
+    # measured over. Zero for a single file.
+    epochs = np.array([model[i].PEPOCH.value for i in range(n_files)], dtype=float)
+    baseline = float(epochs.max() - epochs.min()) * 86400.0
+
     parameter_uncertainties = {}
     for name in parameter_names:
         if name == "PB":
@@ -85,6 +95,15 @@ def estimate_uncertainties_from_model(model, parameter_names, observation_length
             )
         elif name == "A1":
             parameter_uncertainties["A1"] = common_factor
+        elif name == "A1DOT":
+            # A drift is one epoch's A1 precision divided by the lever arm the
+            # epochs give it, so this is the only scale here that depends on
+            # the *spacing* of the files rather than on their length. With a
+            # single epoch there is no lever arm and no estimate: the entry is
+            # omitted, and the pipeline refuses the fit outright rather than
+            # let a flat direction return its prior.
+            if baseline > 0:
+                parameter_uncertainties["A1DOT"] = common_factor / baseline
         elif name == "TASC":
             parameter_uncertainties["TASC"] = common_factor * P / 86400 / twopi / X
         elif simple_freq_re.match(name):
@@ -290,11 +309,18 @@ def get_factors(fit_parameter_names, model, observation_length, parameters_with_
             possible_uncertainties.append(approximate_uncertainties[par])
             sources.append("model")
 
-        unc_idx = np.argmin(possible_uncertainties) if possible_uncertainties else None
-        if unc_idx is not None:
-            unc = possible_uncertainties[unc_idx]
+        # A parfile that quotes no uncertainty leaves a NaN here, and NaN wins
+        # ``argmin`` -- so a missing value used to beat a perfectly good model
+        # estimate and drop the parameter to the default scale. Discard the
+        # unusable candidates before choosing rather than after.
+        usable = [
+            (unc, src)
+            for unc, src in zip(possible_uncertainties, sources)
+            if np.isfinite(unc) and unc > 0
+        ]
+        if usable:
+            unc, source = min(usable)
             zoom_factor = _scaled_zoom_from_uncertainty(unc)
-            source = sources[unc_idx]
 
         if zoom_factor is None:
             logging.debug("Using default zoom factors")

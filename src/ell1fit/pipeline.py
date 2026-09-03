@@ -107,6 +107,33 @@ def _reject_unfittable_parameters(requested_parameter_names):
             )
 
 
+def _reject_unmeasurable_derivatives(parameters, fit_parameter_names):
+    """Refuse to fit an orbital derivative the epochs give no lever arm for.
+
+    :data:`UNFITTABLE_PARAMETERS` rejects what the *model* is flat in.
+    ``A1DOT`` is different: the model depends on it perfectly well, but only
+    through ``A1DOT * binary_dt_i``, so a dataset whose files all share one
+    epoch -- a single file, most obviously -- makes the likelihood flat in it
+    anyway, and the chain would report the prior as a measurement.
+
+    Raises
+    ------
+    ValueError
+        If ``A1DOT`` is requested and every lever arm is zero.
+    """
+    if "A1DOT" not in fit_parameter_names:
+        return
+
+    levers = [value for name, value in parameters.items() if name.startswith("binary_dt_")]
+    if not any(levers):
+        raise ValueError(
+            "A1DOT cannot be fitted from a single epoch: it enters the phase model only "
+            "as A1DOT times the separation between each file's epoch and the reference, "
+            "which is zero here, so the likelihood is flat in it and the fit would return "
+            "the prior. Give it files from at least two different epochs."
+        )
+
+
 #: Warn once the ELL1 truncation reaches this fraction of the phase precision
 #: the data support. A systematic at one third of the statistical error inflates
 #: the total by 5%, which is about where it stops being ignorable.
@@ -159,7 +186,17 @@ def _warn_on_eccentric_orbit(parameters, profiles, nharm):
 
 
 def _collect_parameter_names(parameters, requested_parameter_names, likelihood_func):
-    """Expand the user-requested parameter tokens into per-file fit parameter names."""
+    """Expand the user-requested parameter tokens into per-file fit parameter names.
+
+    Raises
+    ------
+    ValueError
+        If a requested name matches nothing in the parameter dictionary. It used
+        to be dropped in silence, so ``-P F0,A1DOT`` fitted ``F0`` alone and said
+        nothing -- and so did the typo ``-P TSAC``. The resulting fit is
+        internally consistent and simply answers a different question than the
+        one asked, which nothing downstream can detect.
+    """
     fit_parameter_names = []
     for f in parameters:
         if f.startswith("Phase") and likelihood_func == pletsch_clarke_likelihood:
@@ -170,6 +207,20 @@ def _collect_parameter_names(parameters, requested_parameter_names, likelihood_f
             # Startswith alone was confusing PBDOT for PB
             if f == g or (f.startswith(g) and freq_re.match(f)):
                 fit_parameter_names.append(f)
+
+    # A per-file parameter is requested by its bare name (``F0`` for ``F0_3``,
+    # ``Phase`` for ``Phase_3``), so a name is known if it *or* any of its
+    # per-file expansions is in the dictionary -- not by exact key alone.
+    unknown = [
+        g
+        for g in requested_parameter_names
+        if not any(f == g or f.startswith(f"{g}_") for f in parameters)
+    ]
+    if unknown:
+        raise ValueError(
+            f"Cannot fit {', '.join(unknown)}: not in the timing model. "
+            f"Available parameters: {', '.join(sorted(parameters))}."
+        )
 
     return fit_parameter_names
 
@@ -215,6 +266,34 @@ def _enrich_results_with_observation_metadata(
         results[f"ctrate_{i}"] = times_from_pepoch[i].size / expo[i]
 
     results["ell1fit_version"] = version.version
+    return results
+
+
+def _enrich_results_with_eccentricity(results, outroot, requested_parameter_names):
+    """Add ECC_* columns when both EPS1 and EPS2 were fitted."""
+    if not ({"EPS1", "EPS2"} <= set(requested_parameter_names)):
+        return results
+
+    from .eccentricity import (
+        eccentricity_summary,
+        eps_samples_from_chain,
+        plot_eccentricity_posterior,
+    )
+    from .mcmc_utils import SAMPLES_SUFFIX, load_flat_samples
+
+    samples_file = outroot + SAMPLES_SUFFIX
+    if not os.path.isfile(samples_file):
+        logging.warning(
+            "EPS1 and EPS2 were fitted but no samples file found; skipping eccentricity"
+        )
+        return results
+
+    flat_chain, labels = load_flat_samples(samples_file)
+    eps1, eps2 = eps_samples_from_chain(results, flat_chain, labels=labels)
+    summary = eccentricity_summary(eps1, eps2)
+    results.update(summary)
+    plot_eccentricity_posterior(eps1, eps2, fname=outroot + "_eccentricity.jpg", summary=summary)
+    logging.info(f"Eccentricity: {summary['ECC_summary']}")
     return results
 
 
@@ -418,6 +497,7 @@ def _prepare_fit_setup(
         requested_parameter_names,
         likelihood_func=likelihood_func,
     )
+    _reject_unmeasurable_derivatives(parameters, fit_parameter_names)
     logprior_funcs = assign_logpriors(
         fit_parameter_names,
         parameters_with_unc,
@@ -719,5 +799,7 @@ def ell1fit(
         energy_range,
         nsteps,
     )
+
+    results = _enrich_results_with_eccentricity(results, outroots[-1], requested_parameter_names)
 
     return _write_results_products(results, n_files, get_outroot, requested_parameter_names, model)

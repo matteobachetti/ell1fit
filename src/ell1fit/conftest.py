@@ -9,6 +9,7 @@ get picked up when running the tests inside an interpreter using
 
 import os
 
+
 try:
     from pytest_astropy_header.display import PYTEST_HEADER_MODULES, TESTED_VERSIONS
 
@@ -18,13 +19,18 @@ except ImportError:
 
 
 def pytest_configure(config):
-    """Configure Pytest with Astropy.
+    """Configure Pytest with Astropy and custom markers.
 
     Parameters
     ----------
     config : pytest configuration
 
     """
+    config.addinivalue_line(
+        "markers",
+        "requires_dynesty: mark test as requiring dynesty (will be skipped if not available)",
+    )
+
     if ASTROPY_HEADER:
         config.option.astropy_header = True
 

@@ -346,11 +346,18 @@ def build_jax_logpost(observations, setup, jit=True):
         eps1 = physical("EPS1", position)
         eps2 = physical("EPS2", position)
         tasc = physical("TASC", position)
+        # Absent from parameter dictionaries built by hand rather than from a
+        # timing model, where it means "no orbital-size drift".
+        a1dot = physical("A1DOT", position) if "A1DOT" in parameters else 0.0
 
         loglike = 0.0
         for i in range(n_files):
             pb_i = pb + parameters.get(f"PB_offset_{i}", 0.0)
-            a1_i = a1 + parameters.get(f"A1_offset_{i}", 0.0)
+            a1_i = (
+                a1
+                + parameters.get(f"A1_offset_{i}", 0.0)
+                + a1dot * parameters.get(f"binary_dt_{i}", 0.0)
+            )
             eps1_i = eps1 + parameters.get(f"EPS1_offset_{i}", 0.0)
             eps2_i = eps2 + parameters.get(f"EPS2_offset_{i}", 0.0)
 
@@ -593,7 +600,7 @@ def run_nuts(
             "sampler='nuts' needs jax and numpyro: pip install ell1fit[nuts]"
         ) from exc
 
-    from .mcmc_utils import plot_mcmc_results
+    from .mcmc_utils import plot_mcmc_results, save_flat_samples
 
     starting_pars = np.asarray(starting_pars)
     ndim = len(starting_pars)
@@ -741,6 +748,7 @@ def run_nuts(
     result_dict["jax_agreement"] = agreement
     result_dict["jax_gradient_check"] = derivative
 
+    save_flat_samples(outroot, flat_samples, labels)
     plot_mcmc_results(
         flat_samples=flat_samples,
         labels=corner_labels or labels,
