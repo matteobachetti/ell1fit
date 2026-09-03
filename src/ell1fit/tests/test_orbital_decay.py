@@ -16,6 +16,8 @@ import numpy as np
 import pytest
 from astropy.table import Table
 
+pytest.importorskip("dynesty")
+
 from ..mcmc_utils import plot_mcmc_comparison
 from ..orbital_decay_data import (
     OrbitalModelCompatibilityError,
