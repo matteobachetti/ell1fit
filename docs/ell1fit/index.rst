@@ -18,6 +18,7 @@ what it is, then :doc:`pipeline` for how a fit actually proceeds.
    pipeline
    examples
    orbital_derivatives
+   eccentricity
 
 .. toctree::
    :maxdepth: 2
@@ -63,6 +64,8 @@ Reference/API
 .. automodapi:: ell1fit.create_parfile
    :no-inheritance-diagram:
 .. automodapi:: ell1fit.update_binary
+   :no-inheritance-diagram:
+.. automodapi:: ell1fit.eccentricity
    :no-inheritance-diagram:
 .. automodapi:: ell1fit.mcmc_utils
    :no-inheritance-diagram:
