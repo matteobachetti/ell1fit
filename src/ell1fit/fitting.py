@@ -23,6 +23,7 @@ from scipy.optimize import minimize
 from .mcmc_utils import safe_run_sampler
 from .phase_utils import phases_from_zero_to_one
 from .posterior import _build_posterior_functions
+from .scaling import OPTIMIZER_EPS
 from .profile_plotting import _compare_phaseograms
 
 
@@ -118,7 +119,9 @@ def point_estimate_fit(observations, setup):
     values = setup.baseline_values
     factors = setup.factors
     bounds = _bounds_in_local_coordinates(values, factors, setup.logprior_funcs)
-    result = minimize(func_to_minimize, [0] * len(values), bounds=bounds)
+    result = minimize(
+        func_to_minimize, [0] * len(values), bounds=bounds, options={"eps": OPTIMIZER_EPS}
+    )
     fit_pars = result.x
 
     fitted_parameters = copy.deepcopy(setup.parameters)
@@ -215,7 +218,7 @@ def optimize_solution(
     all_zeros = [0] * len(values)
     if minimize_first:
         bounds = _bounds_in_local_coordinates(values, factors, logprior_funcs)
-        res = minimize(func_to_minimize, all_zeros, bounds=bounds)
+        res = minimize(func_to_minimize, all_zeros, bounds=bounds, options={"eps": OPTIMIZER_EPS})
         fit_pars = res.x
     else:
         fit_pars = all_zeros

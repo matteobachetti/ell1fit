@@ -10,6 +10,7 @@ from .phase_utils import simple_freq_re
 __all__ = [
     "estimate_uncertainties_from_model",
     "get_factors",
+    "OPTIMIZER_EPS",
     "order_of_magnitude",
     "precondition_factors",
 ]
@@ -123,6 +124,26 @@ def estimate_uncertainties_from_model(model, parameter_names, observation_length
 #: its initial walkers by exactly this amount, so honouring it makes the MCMC
 #: start with a sensibly-sized ball in *every* direction.
 TARGET_LOCAL_SIGMA = 1e-6
+
+
+#: How far the point-estimate optimizer steps when it probes the gradient by
+#: finite differences, in local units.
+#:
+#: ``scipy.optimize.minimize`` defaults to ``eps=1e-8``, an *absolute* number
+#: with no idea what a local unit means here -- so the probe size was silently
+#: tied to :data:`TARGET_LOCAL_SIGMA`, and changing that constant would have
+#: quietly broken the fit. Writing it as a fraction of a sigma removes the
+#: coupling. A hundredth of a sigma is exactly what the default was already
+#: giving at ``TARGET_LOCAL_SIGMA = 1e-6``, so this is a no-op at that setting.
+#:
+#: It has to be this coarse. The posterior is numerically far noisier than
+#: rounding: measured on bench problem ``P1``, a log-posterior of order 105 with
+#: a rounding floor of 1.4e-14 still jitters by **7.5e-9** over a 1e-8
+#: displacement, because the phase calculation carries its own
+#: ``tolerance=1e-8``. A probe much finer than this would measure that jitter
+#: instead of the slope, and the optimizer would stop wherever it happened to
+#: stand.
+OPTIMIZER_EPS = 1e-2 * TARGET_LOCAL_SIGMA
 
 
 #: A drop smaller than this is rounding noise rather than curvature.

@@ -13,7 +13,12 @@ import numpy as np
 import pytest
 
 from ell1fit.posterior import _build_posterior_functions
-from ell1fit.scaling import TARGET_LOCAL_SIGMA, order_of_magnitude, precondition_factors
+from ell1fit.scaling import (
+    OPTIMIZER_EPS,
+    TARGET_LOCAL_SIGMA,
+    order_of_magnitude,
+    precondition_factors,
+)
 
 from .datagen import make_multi_epoch_dataset
 from .helpers import build_pipeline_state
@@ -133,7 +138,9 @@ def test_preconditioning_helps_the_optimizer_find_the_best_optimum(state):
                 if k == 0
                 else rng.normal(0, 5 * TARGET_LOCAL_SIGMA, st.n_parameters)
             )
-            values.append(-minimize(lambda p: -f(p), start, bounds=bounds).fun)
+            values.append(
+                -minimize(lambda p: -f(p), start, bounds=bounds, options={"eps": OPTIMIZER_EPS}).fun
+            )
         values = np.array(values)
         return int(np.sum(values > values.max() - SAME_OPTIMUM)), values.max() - values.min()
 
