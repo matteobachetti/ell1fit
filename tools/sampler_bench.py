@@ -674,7 +674,7 @@ MOVES = {
 }
 
 
-def run_emcee(problem, seed, steps, moves="stretch", jitter=1e-6, nwalkers=None, workers=0, **_):
+def run_emcee(problem, seed, steps, moves="stretch", jitter=None, nwalkers=None, workers=0, **_):
     """Run a bare ``emcee`` ensemble: no backend, no plots, no convergence loop.
 
     This is the object the sampler work iterates on. What a user actually pays
@@ -686,6 +686,12 @@ def run_emcee(problem, seed, steps, moves="stretch", jitter=1e-6, nwalkers=None,
     ndim = problem.ndim
     if nwalkers is None:
         nwalkers = max(32, 2 * ndim)
+    if jitter is None:
+        # Match the package: one sigma in local coordinates, so the benchmark
+        # starts its walkers in the same ball a real run would.
+        from ell1fit.scaling import TARGET_LOCAL_SIGMA
+
+        jitter = TARGET_LOCAL_SIGMA
 
     started = time.perf_counter()
     position = problem.start + rng.normal(0.0, jitter, size=(nwalkers, ndim))

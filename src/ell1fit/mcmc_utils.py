@@ -9,6 +9,7 @@ import numpy as np
 from astropy.time import Time
 
 from .plotting import plot_style_context
+from .scaling import TARGET_LOCAL_SIGMA
 
 
 __all__ = [
@@ -284,7 +285,10 @@ def safe_run_sampler(
     # We'll track how the average autocorrelation time estimate changes
     starting_pars = np.asarray(starting_pars)
     ndim = len(starting_pars)
-    initial_jitter = 1e-6
+    # One standard deviation, by the local-coordinate convention: the starting
+    # ball should be about as wide as the posterior in every direction. This
+    # used to be a bare 1e-6 that had to match TARGET_LOCAL_SIGMA by hand.
+    initial_jitter = TARGET_LOCAL_SIGMA
 
     def _parameter_damage_report(coords, log_probs, param_labels, top_n=3):
         """Heuristic report of parameters most associated with poor walkers."""

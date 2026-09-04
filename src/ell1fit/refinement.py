@@ -34,11 +34,12 @@ Two safeguards follow from that:
 
 * **Convergence is judged in parameter space**, as the size of the point
   estimate's step in local coordinates, where one standard deviation is
-  ``1e-6`` units for every parameter. That common scale is what makes a single
-  threshold meaningful across ``F0``, ``PB``, ``A1`` and ``TASC`` at once -- and
-  it holds only because :func:`ell1fit.scaling.precondition_factors` enforces
-  it; the raw factors from :func:`~ell1fit.scaling.get_factors` differ between
-  directions by a factor of a thousand.
+  :data:`~ell1fit.scaling.TARGET_LOCAL_SIGMA` units for every parameter. That
+  common scale is what makes a single threshold meaningful across ``F0``,
+  ``PB``, ``A1`` and ``TASC`` at once -- and it holds only because
+  :func:`ell1fit.scaling.precondition_factors` enforces it; the raw factors
+  from :func:`~ell1fit.scaling.get_factors` differ between directions by a
+  factor of a thousand.
 * **The best iterate is kept, not the last.** Refinement is not guaranteed to be
   monotonic: a point-estimate step can wander and produce a worse fold than the
   one before. Scoring each pass by the summed profile :math:`Z^2_n` and keeping
@@ -58,12 +59,14 @@ from .templates import create_template_from_profile_harm, get_template_func
 
 #: Convergence threshold on the point estimate's step, in local coordinates.
 #:
-#: The units matter and are easy to get wrong. Local coordinates follow the
-#: convention that one standard deviation is
-#: :data:`~ell1fit.scaling.TARGET_LOCAL_SIGMA` = 1e-6 local units, **not** 1. An
-#: earlier version of this used 0.1, believing the factors normalised each
-#: parameter to order unity; that is 1e5 sigma, so convergence was declared on
-#: essentially every first pass regardless of how far the solution had moved.
+#: The units matter and are easy to get wrong: this threshold is a *fraction of
+#: a sigma*, so it has to be written in terms of
+#: :data:`~ell1fit.scaling.TARGET_LOCAL_SIGMA` and never as a bare number. When
+#: that constant was ``1e-6``, a version of this hard-coded ``0.1`` believing
+#: the factors normalised each parameter to order unity; that was 1e5 sigma, so
+#: convergence was declared on essentially every first pass regardless of how
+#: far the solution had moved. The constant is 1.0 now and the bare ``0.1``
+#: would happen to be right again -- which is exactly why it stays derived.
 #:
 #: A tenth of a sigma is small enough that a further pass cannot meaningfully
 #: change the answer, and large enough not to chase numerical noise.

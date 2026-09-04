@@ -119,11 +119,41 @@ def estimate_uncertainties_from_model(model, parameter_names, observation_length
     return parameter_uncertainties
 
 
-#: The local-coordinate convention: a step of this size should correspond to
-#: roughly one standard deviation of the parameter. ``safe_run_sampler`` spreads
-#: its initial walkers by exactly this amount, so honouring it makes the MCMC
-#: start with a sensibly-sized ball in *every* direction.
-TARGET_LOCAL_SIGMA = 1e-6
+#: The local-coordinate convention: a step of this size is one standard
+#: deviation of the parameter. ``safe_run_sampler`` spreads its initial walkers
+#: by exactly this amount, so honouring it makes the MCMC start with a
+#: sensibly-sized ball in *every* direction.
+#:
+#: The value is a choice of units and nothing more -- the posterior is the same
+#: shape whatever it is, and the *relative* conditioning across parameters,
+#: which is what makes one convergence threshold meaningful for ``F0``, ``PB``,
+#: ``A1`` and ``TASC`` at once, comes from :func:`precondition_factors` and
+#: holds at any target.
+#:
+#: Unity is the readable choice. Local coordinates are what the corner plots
+#: are drawn in, and at the previous ``1e-6`` every panel carried a ``1e-6``
+#: multiplier on its axis; one sigma per unit puts the posterior at order one
+#: and the labels read directly as sigmas.
+#:
+#: It was not always free to choose, because two things downstream are written
+#: in absolute terms and had to be reconciled with it first:
+#:
+#: * ``scipy.optimize``'s L-BFGS-B probes the gradient with an absolute
+#:   finite-difference step, so its default ``eps=1e-8`` used to *be* a choice
+#:   of how many sigma to step -- a hundredth of one at ``1e-6``, but 1e-8 of
+#:   one here, which would have measured numerical noise instead of the slope.
+#:   That coupling is gone: see :data:`OPTIMIZER_EPS`.
+#: * ``emcee.moves.DESnookerMove`` builds its direction as
+#:   ``delta / sqrt(|delta|)``, which is not a unit vector, so its step length
+#:   goes as the *square* of the coordinate scale. At ``1e-6`` it moved a walker
+#:   3e-11 against an ensemble spread of 9e-6 -- two millionths of a posterior
+#:   width -- and accepted ~100% of the time precisely because it never went
+#:   anywhere. Measured on ``P1`` at 16000 steps over three seeds, all
+#:   converged, it recovers from 0.717 to 0.861 effective samples per step here.
+#:   That is still short of the 0.919 from dropping it, which is why
+#:   :func:`~ell1fit.mcmc_utils.default_moves` does not use it; the scale is not
+#:   what redeems that move.
+TARGET_LOCAL_SIGMA = 1.0
 
 
 #: How far the point-estimate optimizer steps when it probes the gradient by
@@ -297,10 +327,15 @@ def get_factors(fit_parameter_names, model, observation_length, parameters_with_
     zoom = []
     Pd = model[0].PBDOT.value
 
-    # Fixed local walker jitter in safe_run_sampler is 1e-6. Multiplying
-    # uncertainties by this value should give physically meaningful initial
-    # perturbations while remaining conservative.
-    unc_to_factor_scale = 1e6
+    # These raw factors follow the same convention as everything else: a local
+    # step of TARGET_LOCAL_SIGMA is one standard deviation, so an uncertainty
+    # becomes a factor by dividing by it. Deriving it rather than writing the
+    # reciprocal out keeps this in step with the constant -- the two were
+    # separate literals that silently had to agree, and a direction whose
+    # curvature precondition_factors cannot measure keeps the factor it came in
+    # with, so a mismatch here would start that direction's walkers a long way
+    # from a sensible spread.
+    unc_to_factor_scale = 1.0 / TARGET_LOCAL_SIGMA
 
     approximate_uncertainties = estimate_uncertainties_from_model(
         model, fit_parameter_names, observation_length, optimistic=True
@@ -358,7 +393,7 @@ def get_factors(fit_parameter_names, model, observation_length, parameters_with_
         if source.startswith("uncertainty"):
             logging.info(
                 f"Zoom factor for {par} from uncertainty: {zoom_factor} "
-                f"(unc={unc}, local_jitter=1e-6)"
+                f"(unc={unc}, local_sigma={TARGET_LOCAL_SIGMA})"
             )
         elif source.startswith("model"):
             logging.info(f"Zoom factor for {par} from model: {zoom_factor} (approx_unc={unc})")

@@ -113,8 +113,8 @@ The reason is conditioning. The fitted quantities span wildly different
 magnitudes — ``F0`` in Hz to fifteen significant digits alongside ``A1`` in
 light-seconds — and an optimizer or MCMC walker that steps the same distance in
 every direction only behaves sensibly if those directions have comparable
-scale. The convention is that **one standard deviation is** ``1e-6`` **local
-units** for every parameter.
+scale. The convention is that **one standard deviation is one local unit** for
+every parameter (:data:`ell1fit.scaling.TARGET_LOCAL_SIGMA`).
 
 5. Conditioning the scales
 --------------------------
