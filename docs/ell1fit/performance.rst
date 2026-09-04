@@ -203,6 +203,43 @@ the proposals are better, not cheaper. This matters because the ensemble is
 affine invariant: rescaling the parameters cannot help it, only a better
 proposal shape can.
 
+That 3.8× is measured against the 0.8/0.2 ``DEMove``/``DESnookerMove`` mix that
+emcee recommends for correlated targets, and it understates the current
+default, because **the snooker move has since been dropped**. It was doing
+nothing: it builds its proposal direction as ``delta / sqrt(|delta|)``, which is
+not a unit vector, so its step length goes as the *square* of the coordinate
+scale — and at the ``1e-6`` convention then in force it displaced a walker
+3 × 10\ :sup:`-11` against an ensemble spread of 9 × 10\ :sup:`-6`, accepting
+almost every proposal precisely because it never went anywhere.
+
+Fixing the scale was not enough. On ``P1`` at 16000 steps over three seeds, all
+converged (worst :math:`\hat{R}` ≤ 1.0034):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 30 30
+
+   * - Move set
+     - one σ = ``1e-6``
+     - one σ = 1
+   * - ``DEMove`` + ``DESnookerMove`` (0.8/0.2)
+     - 0.717
+     - 0.861
+   * - ``DEMove`` alone
+     - 0.919
+     - 0.911
+
+The two ``DEMove`` figures agreeing across a million-fold change of units is
+the affine-invariance property acting as a control: only the snooker row is
+supposed to move, and only it does. Rescaling recovers most of the dead move,
+but a fifth of the proposals spent on it is still worse than not proposing at
+all, so :func:`~ell1fit.mcmc_utils.default_moves` now returns ``DEMove`` alone.
+The general recommendation is sound; it does not hold on these posteriors.
+
+A matched stretch-move baseline at 16000 steps is not quoted here because it
+did not converge (:math:`\hat{R}` = 1.009), which is itself the point — the
+comparison above is between two configurations that both did.
+
 **Running whole chains in separate processes**, rather than threading inside a
 single likelihood call, is worth a further 1.9× on ``P1``. Each pooled run is
 bitwise identical to its unpooled twin, so this is pure hardware and the
