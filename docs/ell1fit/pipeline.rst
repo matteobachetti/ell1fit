@@ -177,7 +177,11 @@ updated parfiles, so a fit can serve as the ephemeris for the next one.
 
 Diagnostic figures are written alongside: light curves, templates, likelihood
 traces over each ``Phase_i``, a corner plot, and side-by-side phaseograms
-comparing the starting solution against the fitted one.
+comparing the starting solution against the fitted one. A fit that varied both
+``EPS1`` and ``EPS2`` also gets ``<outroot>_eccentricity.jpg`` and
+``<outroot>_orbit.jpg``, the latter pairing a corner plot of the orbital
+parameters *in physical units* with the eccentricity they imply; see
+:doc:`eccentricity`.
 
 .. note::
 

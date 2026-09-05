@@ -60,6 +60,43 @@ percentiles the table already records for it rather than by column order, so a
 reordered or split table cannot silently mismatch the two — and a table and
 chain from different fits raise instead of returning nonsense.
 
+The orbit summary figure
+------------------------
+
+Whenever a run has an eccentricity to show — that is, whenever both ``EPS1``
+and ``EPS2`` were fitted — it also writes ``<outroot>_orbit.jpg``, which puts
+the orbit and its eccentricity side by side: on the left a corner plot of
+whichever of ``A1``, ``PB``, ``TASC``, ``EPS1`` and ``EPS2`` the chain actually
+explored, on the right the eccentricity posterior described above. The pipeline
+writes it at the end of a fit and ``ell1ecc`` writes it from a finished run;
+``--orbit-plot`` renames it.
+
+This is not the same picture as the main ``<outroot>_corner.jpg``. That one is
+drawn in the sampler's *local* coordinates — offsets from the starting
+solution, in units of each parameter's preconditioned scale — which is the
+right frame for asking whether the chain moved and a useless one for reading a
+number off. Here each parameter is in the units it is quoted in.
+
+Getting that readable takes some care, because an orbital posterior is a spike
+in an awkward place: ``A1`` might be 22 light-seconds known to a millionth of
+one, ``TASC`` an MJD known to a few microseconds. Plotted raw, every panel is a
+vertical line at an uninformative tick label. So each axis is drawn as an
+offset from the posterior **mean**, in a unit chosen so that one standard
+deviation is a number between 1 and 1000 — hours or minutes for a loosely known
+orbital period, microseconds for a sharply known epoch — with the subtracted
+mean printed in the axis label to enough significant digits that adding it back
+to a residual read off the axis lands where the posterior actually is.
+
+The units a parameter is *stored* in are not the units it is *read* in, and the
+figure keeps the two apart. ``PB`` lives in seconds inside the fit but every
+parfile quotes it in days, so the label carries days and the residuals carry
+milliseconds or seconds. ``TASC`` lives in days, as an MJD, but nobody quotes
+an epoch uncertainty in days, so its residuals are in seconds. ``A1`` keeps
+light-seconds with a metric prefix. ``EPS1`` and ``EPS2`` are dimensionless and
+get a bare power of ten. :data:`ell1fit.orbit_plot.CONVENTIONS` records this,
+one entry per parameter, and anything absent from it falls back to the
+dimensionless treatment.
+
 Measurement or upper limit
 --------------------------
 

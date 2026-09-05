@@ -67,6 +67,8 @@ Reference/API
    :no-inheritance-diagram:
 .. automodapi:: ell1fit.eccentricity
    :no-inheritance-diagram:
+.. automodapi:: ell1fit.orbit_plot
+   :no-inheritance-diagram:
 .. automodapi:: ell1fit.mcmc_utils
    :no-inheritance-diagram:
 .. automodapi:: ell1fit.profile_plotting
