@@ -32,7 +32,22 @@ detection out of nothing.
 excludes the origin -- see :func:`zero_eccentricity_exclusion` -- and quotes an
 upper limit when it does not. The limit is the 95th percentile of :math:`e`
 over the posterior samples, the same convention this package already uses for
-``A1DOT``.
+``A1DOT``. A three-sigma limit, the 99.73rd percentile, is reported alongside
+it and is reported whether or not the eccentricity is detected -- beside a
+measurement it is a cross-check rather than a competing claim.
+
+The two components are summarized too
+-------------------------------------
+
+:func:`eps_component_summary` reports ``EPS1`` and ``EPS2`` themselves in
+physical units: percentiles, the 16--50 and 50--84 error bars, and a
+three-sigma limit on the **magnitude**. The magnitude is the point --
+:math:`\epsilon_1 = e\sin\omega` may be either sign, so a bound on the signed
+value says nothing unless the sign is already known, and in a non-detection it
+is not. On a posterior sitting at the origin the magnitude limit reduces to
+exactly three sigma, the half-normal point, which is a different number from
+the Rayleigh :math:`3.44\,\sigma` the eccentricity gets: the radius of a
+two-dimensional noise cloud is not one of its components.
 
 What prior this is under
 ------------------------
@@ -58,7 +73,7 @@ import os
 
 import numpy as np
 from astropy.table import Table
-from scipy.special import ndtri_exp
+from scipy.special import erf, ndtri_exp
 
 from .mcmc_utils import SAMPLES_SUFFIX
 from .plotting import plot_style_context
@@ -71,6 +86,7 @@ __all__ = [
     "eccentricity_and_omega",
     "eccentricity_summary",
     "eccentricity_summary_from_run",
+    "eps_component_summary",
     "eps_samples_from_chain",
     "load_eps_samples",
     "load_orbital_samples",
@@ -93,6 +109,15 @@ DEFAULT_UPPER_LIMIT_LEVEL = 0.95
 #: Below this equivalent-Gaussian significance the eccentricity is reported as
 #: an upper limit rather than a measurement.
 DEFAULT_DETECTION_SIGMA = 3.0
+
+#: The credible level that stands in for "three sigma": the probability a
+#: Gaussian puts inside plus or minus three standard deviations. Using the
+#: *two-sided* content for a one-sided limit is the usual convention in this
+#: corner of the literature, and it is the one already implied by the 95%
+#: default above, which is the two-sided content of two sigma to within a
+#: rounding. It is worth being explicit, because the one-sided alternative,
+#: 99.865%, gives a noticeably looser limit and the two are easy to confuse.
+THREE_SIGMA_LEVEL = float(erf(3.0 / np.sqrt(2.0)))
 
 #: Tolerance of :func:`_column_for_parameter`, in units of the parameter's own
 #: recorded 16--84 width. A chain column belongs to a parameter when its
@@ -243,6 +268,101 @@ def _circular_summary(omega_deg, weights=None):
     }
 
 
+def _prior_weights(eccentricity, flat_in_e_prior):
+    r"""Sample weights that undo the :math:`p(e) \propto e` implied prior.
+
+    ``None`` when no reweighting is asked for, which every consumer here reads
+    as "use the samples as drawn".
+    """
+    if not flat_in_e_prior:
+        return None
+    # 1/e diverges at the origin; clip at a value far below any sample the
+    # posterior actually places there, so one unlucky draw cannot carry the
+    # whole weighted CDF.
+    floor = 1e-6 * np.median(eccentricity)
+    weights = 1.0 / np.clip(eccentricity, floor, None)
+    return weights / np.sum(weights)
+
+
+def _quantiles(values, levels, weights):
+    """Quantiles at fractional ``levels``, weighted or not."""
+    if weights is None:
+        return np.percentile(values, [100 * level for level in levels])
+    return _weighted_quantile(values, levels, weights)
+
+
+def eps_component_summary(eps1, eps2, weights=None, upper_limit_level=THREE_SIGMA_LEVEL):
+    r"""Summarize the ``EPS1`` and ``EPS2`` marginals: values, errors, limits.
+
+    These are the *marginals*, and they are not a route to the eccentricity --
+    see the warning in the module docstring, and
+    :func:`eccentricity_summary`, which uses the joint samples. What they are
+    good for is quoting the two fitted components themselves, which a parfile
+    carries but the result table previously recorded only in the sampler's
+    local coordinates.
+
+    The upper limit is on the **magnitude**. ``EPS1`` is :math:`e\sin\omega`
+    and can be either sign, so "less than" is only a statement about a signed
+    value if the sign is already known, which in a non-detection it is not.
+    :math:`|\epsilon_1| < x` says what a non-detection actually establishes,
+    and reduces to the familiar half-normal limit when the posterior sits on
+    the origin: at :data:`THREE_SIGMA_LEVEL` it is exactly three sigma.
+
+    Parameters
+    ----------
+    eps1, eps2 : array-like
+        Paired posterior samples, in physical units.
+    weights : array-like, optional
+        Sample weights from :func:`_prior_weights`. Passing the same weights
+        the eccentricity used keeps the whole summary under one prior.
+    upper_limit_level : float
+        Credible level of the magnitude limits. Defaults to
+        :data:`THREE_SIGMA_LEVEL`.
+
+    Returns
+    -------
+    dict
+        Per component: ``EPS1_<percentile>`` for each of :data:`PERCENTILES`,
+        ``EPS1_err_lo`` and ``EPS1_err_hi`` (the 16--50 and 50--84 half-widths),
+        ``EPS1_err`` (the larger of the two, which is the symmetric uncertainty
+        :mod:`ell1fit.create_parfile` writes into a parfile), and
+        ``EPS1_abs_upper_limit``. Plus ``EPS_abs_upper_limit_level`` and
+        ``EPS_summary``, the one-line form.
+    """
+    eps1 = np.asarray(eps1, dtype=float)
+    eps2 = np.asarray(eps2, dtype=float)
+    if eps1.shape != eps2.shape:
+        raise ValueError("eps1 and eps2 must be paired: same number of samples in each.")
+
+    results = {}
+    for par, values in (("EPS1", eps1), ("EPS2", eps2)):
+        quantiles = _quantiles(values, [p / 100 for p in PERCENTILES], weights)
+        results.update({f"{par}_{p:g}": float(q) for p, q in zip(PERCENTILES, quantiles)})
+        low, median, high = (results[f"{par}_{p:g}"] for p in (16, 50, 84))
+        results[f"{par}_err_lo"] = median - low
+        results[f"{par}_err_hi"] = high - median
+        results[f"{par}_err"] = max(median - low, high - median)
+        results[f"{par}_abs_upper_limit"] = float(
+            _quantiles(np.abs(values), [upper_limit_level], weights)[0]
+        )
+
+    results["EPS_abs_upper_limit_level"] = float(upper_limit_level)
+    results["EPS_summary"] = "; ".join(
+        [
+            ", ".join(
+                f"{par} = {results[f'{par}_50']:.4g} "
+                f"(+{results[f'{par}_err_hi']:.2g} -{results[f'{par}_err_lo']:.2g}, 68%)"
+                for par in ("EPS1", "EPS2")
+            ),
+            ", ".join(
+                f"|{par}| < {results[f'{par}_abs_upper_limit']:.3g}" for par in ("EPS1", "EPS2")
+            )
+            + f" ({100 * upper_limit_level:.4g}%, 3 sigma)",
+        ]
+    )
+    return results
+
+
 def eccentricity_summary(
     eps1,
     eps2,
@@ -277,11 +397,14 @@ def eccentricity_summary(
         ``ECC_<percentile>`` for each of :data:`PERCENTILES`;
         ``ECC_upper_limit`` and ``ECC_upper_limit_level`` (the limit is ``nan``
         when the eccentricity is detected, since a limit is then not the thing
-        to quote); ``ECC_detected``; ``ECC_zero_credibility`` and
-        ``ECC_significance_sigma`` from
+        to quote); ``ECC_upper_limit_3sigma`` and its ``_level``, which unlike
+        the above are reported either way; ``ECC_detected``;
+        ``ECC_zero_credibility`` and ``ECC_significance_sigma`` from
         :func:`zero_eccentricity_exclusion`; the ``OM_deg_*`` fields of
-        :func:`_circular_summary`; ``ECC_nsamples``; ``ECC_prior``; and
-        ``ECC_summary``, the one-line form to paste into a paper draft.
+        :func:`_circular_summary`; every field of
+        :func:`eps_component_summary`, under this same prior;
+        ``ECC_nsamples``; ``ECC_prior``; and ``ECC_summary``, the one-line form
+        to paste into a paper draft.
     """
     if np.shape(eps1) != np.shape(eps2):
         raise ValueError("eps1 and eps2 must be paired: same number of samples in each.")
@@ -290,27 +413,25 @@ def eccentricity_summary(
     credibility, sigma = zero_eccentricity_exclusion(eps1, eps2)
     detected = bool(sigma >= detection_sigma)
 
-    if flat_in_e_prior:
-        # 1/e diverges at the origin; clip at a value far below any sample the
-        # posterior actually places there, so one unlucky draw cannot carry the
-        # whole weighted CDF.
-        floor = 1e-6 * np.median(eccentricity)
-        weights = 1.0 / np.clip(eccentricity, floor, None)
-        weights /= np.sum(weights)
-        quantiles = _weighted_quantile(eccentricity, [p / 100 for p in PERCENTILES], weights)
-        limit = float(_weighted_quantile(eccentricity, [upper_limit_level], weights)[0])
-    else:
-        weights = None
-        quantiles = np.percentile(eccentricity, PERCENTILES)
-        limit = float(np.percentile(eccentricity, 100 * upper_limit_level))
+    weights = _prior_weights(eccentricity, flat_in_e_prior)
+    quantiles = _quantiles(eccentricity, [p / 100 for p in PERCENTILES], weights)
+    limit = float(_quantiles(eccentricity, [upper_limit_level], weights)[0])
 
     results = {f"ECC_{p:g}": float(value) for p, value in zip(PERCENTILES, quantiles)}
     results.update(_circular_summary(omega_deg, weights))
+    results.update(eps_component_summary(eps1, eps2, weights=weights))
     results["ECC_detected"] = detected
     results["ECC_zero_credibility"] = credibility
     results["ECC_significance_sigma"] = sigma
     results["ECC_upper_limit"] = np.nan if detected else limit
     results["ECC_upper_limit_level"] = float(upper_limit_level)
+    # Unlike the one above, this is reported whether or not the eccentricity is
+    # detected: beside a measurement it is a cross-check rather than a claim,
+    # and having to refit to get it would be a poor trade for the one column.
+    results["ECC_upper_limit_3sigma"] = float(
+        _quantiles(eccentricity, [THREE_SIGMA_LEVEL], weights)[0]
+    )
+    results["ECC_upper_limit_3sigma_level"] = THREE_SIGMA_LEVEL
     results["ECC_nsamples"] = int(eccentricity.size)
     results["ECC_prior"] = "flat in e" if flat_in_e_prior else "flat in the EPS1-EPS2 plane"
 
@@ -770,8 +891,10 @@ def main(args=None):
     summary = eccentricity_summary(eps1, eps2, flat_in_e_prior=parsed.flat_in_e)
 
     print(summary["ECC_summary"])
+    print(f"e < {summary['ECC_upper_limit_3sigma']:.3g} (3 sigma upper limit)")
+    print(summary["EPS_summary"])
     for key in sorted(summary):
-        if key != "ECC_summary":
+        if key not in ("ECC_summary", "EPS_summary"):
             print(f"  {key}: {summary[key]}")
 
     plot_path = parsed.plot

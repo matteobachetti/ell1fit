@@ -168,6 +168,103 @@ def test_summary_rejects_unpaired_samples():
         eccentricity_summary(np.zeros(10), np.zeros(11))
 
 
+#: 99.73rd percentiles, in units of SIGMA, of the two distributions a pure-noise
+#: EPS pair produces: |EPS1| is half-normal, so exactly 3; the eccentricity is
+#: Rayleigh, so sqrt(-2 ln 0.0027) = 3.4394. Neither is the other, which is the
+#: whole reason both numbers are worth reporting.
+HALF_NORMAL_3SIGMA = 3.0
+RAYLEIGH_3SIGMA = 3.439354
+
+
+def test_the_components_are_summarized_in_physical_units():
+    """16/50/84 of a Gaussian marginal recover the mean and the width."""
+    eps1, eps2 = _eps_samples(ecc=20 * SIGMA, omega_deg=90.0)
+
+    summary = eccentricity_summary(eps1, eps2)
+
+    # omega = 90 deg puts all the eccentricity in EPS1 and none in EPS2.
+    assert np.isclose(summary["EPS1_50"], 20 * SIGMA, rtol=0.02)
+    assert np.isclose(summary["EPS2_50"], 0.0, atol=0.05 * SIGMA)
+    assert np.isclose(summary["EPS1_84"] - summary["EPS1_50"], SIGMA, rtol=0.02)
+
+
+def test_the_component_errors_are_the_one_sigma_half_widths():
+    eps1, eps2 = _eps_samples(ecc=20 * SIGMA, omega_deg=71.0)
+
+    summary = eccentricity_summary(eps1, eps2)
+
+    for par in ("EPS1", "EPS2"):
+        assert np.isclose(summary[f"{par}_err_lo"], SIGMA, rtol=0.02)
+        assert np.isclose(summary[f"{par}_err_hi"], SIGMA, rtol=0.02)
+        # The parfile convention: the larger of the two sides.
+        assert summary[f"{par}_err"] == max(summary[f"{par}_err_lo"], summary[f"{par}_err_hi"])
+
+
+def test_the_component_limits_are_the_half_normal_three_sigma_point():
+    """Pure noise: |EPS1| is half-normal, whose 99.73rd percentile is 3 sigma."""
+    eps1, eps2 = _eps_samples(ecc=0.0)
+
+    summary = eccentricity_summary(eps1, eps2)
+
+    for par in ("EPS1", "EPS2"):
+        assert np.isclose(summary[f"{par}_abs_upper_limit"] / SIGMA, HALF_NORMAL_3SIGMA, rtol=0.05)
+    assert np.isclose(summary["EPS_abs_upper_limit_level"], 0.9973, atol=1e-4)
+
+
+def test_a_component_limit_is_on_the_magnitude_not_the_signed_value():
+    """A component sitting well below zero still gets a positive limit."""
+    eps1, eps2 = _eps_samples(ecc=20 * SIGMA, omega_deg=180.0)
+
+    summary = eccentricity_summary(eps1, eps2)
+
+    # omega = 180 deg puts EPS2 at -20 sigma. Its magnitude limit is 23 sigma.
+    assert summary["EPS2_50"] < 0
+    assert np.isclose(summary["EPS2_abs_upper_limit"] / SIGMA, 23.0, rtol=0.02)
+
+
+def test_the_three_sigma_eccentricity_limit_is_the_rayleigh_point():
+    eps1, eps2 = _eps_samples(ecc=0.0)
+
+    summary = eccentricity_summary(eps1, eps2)
+
+    assert np.isclose(summary["ECC_upper_limit_3sigma"] / SIGMA, RAYLEIGH_3SIGMA, rtol=0.05)
+    assert summary["ECC_upper_limit_3sigma"] > summary["ECC_upper_limit"]
+
+
+def test_the_three_sigma_limits_are_reported_even_for_a_detection():
+    """A limit beside a measurement is a cross-check, not a contradiction."""
+    eps1, eps2 = _eps_samples(ecc=20 * SIGMA, omega_deg=71.0)
+
+    summary = eccentricity_summary(eps1, eps2)
+
+    assert summary["ECC_detected"]
+    # The 95% limit is deliberately nan on a detection; the 3 sigma one is not.
+    assert np.isnan(summary["ECC_upper_limit"])
+    assert np.isfinite(summary["ECC_upper_limit_3sigma"])
+    assert np.isfinite(summary["EPS1_abs_upper_limit"])
+
+
+def test_the_component_summary_line_carries_values_errors_and_limits():
+    eps1, eps2 = _eps_samples(ecc=20 * SIGMA, omega_deg=71.0)
+
+    line = eccentricity_summary(eps1, eps2)["EPS_summary"]
+
+    assert "EPS1 =" in line and "EPS2 =" in line
+    assert "|EPS1| <" in line and "|EPS2| <" in line
+    assert "3 sigma" in line
+
+
+def test_the_flat_in_e_prior_reweights_the_components_too():
+    """One prior for the whole answer: the marginals cannot be under another."""
+    eps1, eps2 = _eps_samples(ecc=0.0)
+
+    plain = eccentricity_summary(eps1, eps2)
+    reweighted = eccentricity_summary(eps1, eps2, flat_in_e_prior=True)
+
+    assert reweighted["EPS1_abs_upper_limit"] < plain["EPS1_abs_upper_limit"]
+    assert reweighted["ECC_upper_limit_3sigma"] < plain["ECC_upper_limit_3sigma"]
+
+
 def _results_row(eps1_local, eps2_local, initial, factor, extra_column=None):
     """A minimal result table carrying what the unscaling needs.
 
@@ -457,6 +554,25 @@ def test_pipeline_enrichment_adds_eccentricity_columns(tmp_path):
     assert (tmp_path / "run_eccentricity.jpg").exists()
 
 
+def test_pipeline_enrichment_adds_the_component_columns(tmp_path):
+    """The physical EPS1/EPS2 values, errors and limits reach the result table."""
+    results, outroot = _mock_results_and_samples(tmp_path, ecc=20 * SIGMA, omega_deg=71.0)
+    enriched = _enrich_results_with_eccentricity(results, outroot, ["EPS1", "EPS2"])
+
+    for par in ("EPS1", "EPS2"):
+        assert np.isfinite(enriched[f"{par}_50"])
+        assert enriched[f"{par}_err"] > 0
+        assert enriched[f"{par}_abs_upper_limit"] > 0
+    assert np.isfinite(enriched["ECC_upper_limit_3sigma"])
+    # The physical value, not the local coordinate the chain is in.
+    assert enriched["EPS1_50"] != enriched["dEPS1_50"]
+
+    # And they survive the trip into an astropy table, strings included.
+    row = Table(rows=[enriched])[0]
+    assert np.isclose(row["EPS1_abs_upper_limit"], enriched["EPS1_abs_upper_limit"])
+    assert "|EPS1| <" in row["EPS_summary"]
+
+
 def test_pipeline_enrichment_skips_without_both_eps(tmp_path):
     """No ECC_* columns when only EPS1 (or neither) is fitted."""
     results, outroot = _mock_results_and_samples(tmp_path)
@@ -540,6 +656,8 @@ def test_ell1ecc_cli_prints_summary(tmp_path, capsys):
 
     captured = capsys.readouterr()
     assert "e =" in captured.out or "e <" in captured.out
+    assert "(3 sigma upper limit)" in captured.out
+    assert "|EPS1| <" in captured.out
     assert (tmp_path / "ecc_cli.jpg").exists()
     assert (tmp_path / "orbit_cli.jpg").exists()
 
