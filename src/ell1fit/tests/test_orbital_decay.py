@@ -19,6 +19,7 @@ from astropy.table import Table
 pytest.importorskip("dynesty")
 
 from ..mcmc_utils import plot_mcmc_comparison
+from ..orbital_decay import fit_orbital_decay
 from ..orbital_decay_data import (
     OrbitalModelCompatibilityError,
     _build_models,
@@ -30,6 +31,7 @@ from ..orbital_decay_data import (
 )
 from ..orbital_decay_model import (
     delta_tasc_model,
+    derivative_scale,
     log_likelihood_asymmetric_errors,
     physical_from_beta,
 )
@@ -509,3 +511,176 @@ def test_epoch_pbdot_above_1e7_threshold_is_not_corrupted(tmp_path):
     assert ref_model.PBDOT.value == pytest.approx(pbdot)
 
     check_compatibility(epochs, tolerance=1e-9)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# orbital_decay: the reported measurement-or-limit for each PB derivative
+# ---------------------------------------------------------------------------
+
+#: A 1.7-day orbit, the scale of the systems ell1fit is used on. The ``PB``
+#: column of an ell1fit result file is in *seconds*, hence the conversion at
+#: the point of writing.
+_PB_DAYS = 1.7
+_REF_MJD = 57000.0
+
+
+def _write_decay_epochs(directory, pbdot=0.0, pbddot_per_yr=0.0, tasc_err_sec=5.0, seed=SEED):
+    """A set of per-epoch ``.ecsv`` files carrying an injected PBDOT/PBDDOT.
+
+    The TASC of each epoch is the ascending node a fixed-period ephemeris
+    would predict, displaced by the ``delta_tasc(t)`` the injected
+    derivatives produce (the same closed form
+    :mod:`ell1fit.orbital_decay_model` fits), plus Gaussian noise of
+    ``tasc_err_sec``.
+    """
+    rng = np.random.default_rng(seed)
+    files = []
+    for i, dt in enumerate(np.linspace(-1500.0, 1500.0, 9)):
+        delta_sec = (
+            pbdot * dt**2 / (2 * _PB_DAYS) + (pbddot_per_yr / 365.25) * dt**3 / (6 * _PB_DAYS)
+        ) * 86400.0
+        n_orbits = round(dt / _PB_DAYS)
+        tasc = (
+            _REF_MJD + n_orbits * _PB_DAYS + (delta_sec + rng.normal(0.0, tasc_err_sec)) / 86400.0
+        )
+        files.append(
+            _write_ecsv(
+                os.path.join(str(directory), f"epoch{i}.ecsv"),
+                pepoch=_REF_MJD + dt,
+                pb=_PB_DAYS * 86400.0,
+                tasc=tasc,
+                tasc_spread_days=tasc_err_sec / 86400.0,
+            )
+        )
+    return files
+
+
+def _run_decay(directory, **kwargs):
+    return fit_orbital_decay(
+        _write_decay_epochs(directory, **kwargs),
+        outroot=os.path.join(str(directory), "decay"),
+        nlive=200,
+        dlogz=0.5,
+        seeds=2,
+        reference_epoch=_REF_MJD,
+        write_parfile=False,
+    )
+
+
+@pytest.fixture(scope="module")
+def strong_pbdot_run(tmp_path_factory):
+    """A large injected PBDOT and no PBDDOT: one run exercising both branches,
+    a measurement for PBDOT and an upper limit for PBDDOT."""
+    return _run_decay(tmp_path_factory.mktemp("strong_pbdot"), pbdot=3e-8)
+
+
+@pytest.fixture(scope="module")
+def flat_run(tmp_path_factory):
+    """No period derivative of any order: both must come back as limits."""
+    return _run_decay(tmp_path_factory.mktemp("flat"), seed=SEED + 3)
+
+
+def test_injected_pbdot_is_recovered(strong_pbdot_run):
+    """Guards the whole chain of unit conversions between the .ecsv files and
+    the reported PBDOT, not just the summary formatting."""
+    assert strong_pbdot_run["M0"]["PBDOT"] == pytest.approx(3e-8, rel=1e-2)
+
+
+def test_detected_pbdot_is_quoted_as_a_measurement(strong_pbdot_run):
+    m0 = strong_pbdot_run["M0"]
+    assert m0["PBDOT_detected"] is True
+    assert np.isnan(m0["PBDOT_upper_limit"])
+    assert "upper limit" not in m0["PBDOT_summary"]
+    assert m0["PBDOT_significance_sigma"] > 10
+
+
+def test_absent_pbddot_is_quoted_as_a_limit(strong_pbdot_run):
+    m1 = strong_pbdot_run["M1"]
+    assert m1["PBDDOT_detected"] is False
+    assert np.isfinite(m1["PBDDOT_upper_limit"])
+    assert m1["PBDDOT_upper_limit"] > 0
+    assert "|PBDDOT| <" in m1["PBDDOT_summary"]
+    assert "1/yr" in m1["PBDDOT_summary"]
+
+
+def test_both_derivatives_are_limits_when_the_data_is_flat(flat_run):
+    assert flat_run["M0"]["PBDOT_detected"] is False
+    assert flat_run["M1"]["PBDDOT_detected"] is False
+    assert np.isfinite(flat_run["M0"]["PBDOT_upper_limit"])
+    assert np.isfinite(flat_run["M1"]["PBDDOT_upper_limit"])
+
+
+def test_limit_brackets_the_injected_zero(flat_run):
+    """A limit that did not contain the truth would be a wrong limit."""
+    assert flat_run["M0"]["PBDOT_2sigma_lo"] < 0 < flat_run["M0"]["PBDOT_2sigma_hi"]
+    assert flat_run["M1"]["PBDDOT_2sigma_lo"] < 0 < flat_run["M1"]["PBDDOT_2sigma_hi"]
+
+
+def test_one_sigma_interval_sits_inside_the_two_sigma_one(flat_run):
+    for model, name in (("M0", "PBDOT"), ("M1", "PBDDOT")):
+        block = flat_run[model]
+        assert block[f"{name}_2sigma_lo"] < block[f"{name}_1sigma_lo"]
+        assert block[f"{name}_1sigma_hi"] < block[f"{name}_2sigma_hi"]
+
+
+def test_upper_limit_level_is_honoured(tmp_path):
+    """A more demanding credible level has to give a larger limit."""
+    files = _write_decay_epochs(tmp_path, seed=SEED + 4)
+    common = dict(nlive=200, dlogz=0.5, seeds=1, reference_epoch=_REF_MJD, write_parfile=False)
+    loose = fit_orbital_decay(
+        files, outroot=os.path.join(str(tmp_path), "loose"), upper_limit_level=0.68, **common
+    )
+    tight = fit_orbital_decay(
+        files, outroot=os.path.join(str(tmp_path), "tight"), upper_limit_level=0.99, **common
+    )
+    assert tight["M1"]["PBDDOT_upper_limit"] > loose["M1"]["PBDDOT_upper_limit"]
+    assert loose["M1"]["PBDDOT_upper_limit_level"] == 0.68
+
+
+def test_detection_threshold_is_honoured(strong_pbdot_run, tmp_path):
+    """An absurdly high threshold must turn even the strong PBDOT into a limit,
+    proving the Bayes factor is what drives the switch."""
+    files = _write_decay_epochs(tmp_path, pbdot=3e-8)
+    strict = fit_orbital_decay(
+        files,
+        outroot=os.path.join(str(tmp_path), "strict"),
+        nlive=200,
+        dlogz=0.5,
+        seeds=1,
+        reference_epoch=_REF_MJD,
+        write_parfile=False,
+        detection_ln_bf=1e9,
+    )
+    assert strong_pbdot_run["M0"]["PBDOT_detected"] is True
+    assert strict["M0"]["PBDOT_detected"] is False
+    assert np.isfinite(strict["M0"]["PBDOT_upper_limit"])
+
+
+def test_results_json_carries_the_limits(tmp_path):
+    """The summaries have to survive the trip through json.dump."""
+    import json
+
+    files = _write_decay_epochs(tmp_path, pbdot=3e-8)
+    outroot = os.path.join(str(tmp_path), "json")
+    fit_orbital_decay(
+        files,
+        outroot=outroot,
+        nlive=200,
+        dlogz=0.5,
+        seeds=1,
+        reference_epoch=_REF_MJD,
+        write_parfile=False,
+    )
+    with open(outroot + "_results.json") as fobj:
+        stored = json.load(fobj)
+    assert "PBDOT_summary" in stored["M0"]
+    assert "PBDDOT_upper_limit" in stored["M1"]
+    assert "bayes_factor_pbdot" in stored
+
+
+def test_derivative_scale_matches_physical_from_beta():
+    """The bulk chain conversion and the per-point one must agree exactly."""
+    beta = np.array([1.0, 2.0, 3.0, 4.0])
+    physical = physical_from_beta(beta, 3000.0, 1.7)
+    assert beta[2] * derivative_scale(2, 3000.0, 1.7) == pytest.approx(physical["PBDOT"])
+    assert beta[3] * derivative_scale(3, 3000.0, 1.7) == pytest.approx(physical["PBDDOT"])

@@ -7,7 +7,9 @@ MLIN is an offset plus a linear drift and no period derivative at all, M0
 adds the quadratic term (PBDOT), M1 adds the cubic one (PBDDOT). Their
 evidences (via nested sampling) give one Bayes factor per derivative --
 MLIN-vs-M0 for PBDOT, M0-vs-M1 for PBDDOT -- and those comparisons, not just
-the point estimates, are the reason this command exists.
+the point estimates, are the reason this command exists. Each Bayes factor
+also decides whether its derivative is reported as a measurement or as an
+upper limit (see :mod:`ell1fit.limits`).
 """
 
 import argparse
@@ -18,6 +20,7 @@ import logging
 import astropy.units as u
 import numpy as np
 
+from .limits import DEFAULT_UPPER_LIMIT_LEVEL, signed_parameter_summary
 from .logging import configure_logging
 from .mcmc_utils import plot_mcmc_comparison
 from .orbital_decay_data import (
@@ -28,10 +31,12 @@ from .orbital_decay_data import (
 )
 from .orbital_decay_model import (
     delta_tasc_model,
+    derivative_scale,
     log_likelihood_asymmetric_errors,
     physical_from_beta,
 )
 from .orbital_decay_sampling import (
+    DETECTION_LN_BF,
     bayes_factor,
     default_bounds,
     laplace_cross_check,
@@ -83,6 +88,41 @@ def _fit_model(order, x, y, yerrn, yerrp, baseline_days, labels, nlive, dlogz, s
     )
     result["loglikelihood"] = loglikelihood
     return result
+
+
+def _derivative_summary(
+    result,
+    order,
+    baseline_days,
+    pb0_days,
+    name,
+    bf,
+    threshold,
+    upper_limit_level=DEFAULT_UPPER_LIMIT_LEVEL,
+    unit=None,
+):
+    """Summarize one PB derivative's posterior as a measurement or a limit.
+
+    The chain is converted to physical units by a single multiplication --
+    ``beta[order]`` enters the derivative linearly (see
+    :func:`ell1fit.orbital_decay_model.derivative_scale`) -- so the whole
+    posterior is summarized, not just its percentiles.
+
+    Whether to quote a value or a limit is decided by ``bf``, the
+    nested-sampling Bayes factor against the model that omits this term
+    entirely, rather than by any statistic of this one model's posterior: the
+    question "does the data need this parameter?" is a model comparison, and
+    this command already pays for the evidences that answer it.
+    """
+    samples = result["flat_samples"][:, order] * derivative_scale(order, baseline_days, pb0_days)
+    detected = bool(bf["ln_bf"] >= threshold)
+    summary = signed_parameter_summary(
+        samples, name, detected=detected, upper_limit_level=upper_limit_level, unit=unit
+    )
+    summary[f"{name}_ln_bf"] = bf["ln_bf"]
+    summary[f"{name}_ln_bf_err"] = bf["ln_bf_err"]
+    summary[f"{name}_detection_ln_bf"] = float(threshold)
+    return summary
 
 
 def _write_diagnostic_plot(x, y, yerrn, yerrp, baseline_days, m0_result, m1_result, fname):
@@ -189,8 +229,20 @@ def fit_orbital_decay(
     pbdot_impact_fraction=1.0,
     reference_epoch=None,
     write_parfile=True,
+    upper_limit_level=DEFAULT_UPPER_LIMIT_LEVEL,
+    detection_ln_bf=DETECTION_LN_BF,
 ):
     """Load, validate, fit MLIN, M0 and M1, and write every output artifact.
+
+    Parameters
+    ----------
+    upper_limit_level : float
+        Credible level of the magnitude upper limit quoted for a derivative
+        that is not detected. See :mod:`ell1fit.limits`.
+    detection_ln_bf : float
+        ln Bayes factor, against the model that omits the term, that a
+        derivative must reach before a measurement is quoted instead of a
+        limit.
 
     Returns
     -------
@@ -275,6 +327,28 @@ def fit_orbital_decay(
         hi = physical_from_beta(beta_84, baseline_days, pb0_days)[key]
         return {"neg": mid - lo, "pos": hi - mid}
 
+    pbdot_summary = _derivative_summary(
+        m0_result,
+        2,
+        baseline_days,
+        pb0_days,
+        "PBDOT",
+        bf_pbdot,
+        detection_ln_bf,
+        upper_limit_level=upper_limit_level,
+    )
+    pbddot_summary = _derivative_summary(
+        m1_result,
+        3,
+        baseline_days,
+        pb0_days,
+        "PBDDOT",
+        bf_pbddot,
+        detection_ln_bf,
+        upper_limit_level=upper_limit_level,
+        unit="1/yr",
+    )
+
     results = {
         "n_epochs": len(epochs),
         "baseline_days": baseline_days,
@@ -295,6 +369,7 @@ def fit_orbital_decay(
             "laplace_log_evidence": m0_result["laplace_log_evidence"],
             "peak_shortfall": m0_result["peak_shortfall"],
             "converged": m0_result["converged"],
+            **pbdot_summary,
         },
         "M1": {
             "PBDOT": phys_m1["PBDOT"],
@@ -306,6 +381,7 @@ def fit_orbital_decay(
             "laplace_log_evidence": m1_result["laplace_log_evidence"],
             "peak_shortfall": m1_result["peak_shortfall"],
             "converged": m1_result["converged"],
+            **pbddot_summary,
         },
         # "bayes_factor" is the M0-vs-M1 comparison this command has always
         # reported, kept under its original key so existing readers of the
@@ -323,15 +399,15 @@ def fit_orbital_decay(
         results["parfile"] = _write_parfile(ref_model, m0_result, baseline_days, pb0_days, outroot)
 
     logging.info(
-        f"M0 PBDOT = {phys_m0['PBDOT']:.4e}, "
         f"ln BF (M0/MLIN) = {bf_pbdot['ln_bf']:.2f} +- {bf_pbdot['ln_bf_err']:.2f} "
         f"({bf_pbdot['interpretation']})"
     )
+    logging.info(pbdot_summary["PBDOT_summary"])
     logging.info(
-        f"M1 PBDDOT = {phys_m1['PBDDOT']:.4e} 1/yr, "
         f"ln BF (M1/M0) = {bf_pbddot['ln_bf']:.2f} +- {bf_pbddot['ln_bf_err']:.2f} "
         f"({bf_pbddot['interpretation']})"
     )
+    logging.info(pbddot_summary["PBDDOT_summary"])
 
     return results
 
@@ -373,6 +449,27 @@ def main(args=None):
         help="MJD to reference the model at (default: mean PEPOCH across input files)",
     )
     parser.add_argument(
+        "--upper-limit-level",
+        type=float,
+        default=DEFAULT_UPPER_LIMIT_LEVEL,
+        dest="upper_limit_level",
+        help=(
+            "Credible level of the magnitude upper limit quoted for an undetected "
+            "PBDOT or PBDDOT (default 0.95)"
+        ),
+    )
+    parser.add_argument(
+        "--detection-ln-bf",
+        type=float,
+        default=DETECTION_LN_BF,
+        dest="detection_ln_bf",
+        help=(
+            "ln Bayes factor a derivative must reach against the model without it "
+            "before a measurement is quoted instead of an upper limit (default 1, "
+            "where the Kass & Raftery grading stops saying 'inconclusive')"
+        ),
+    )
+    parser.add_argument(
         "--no-parfile",
         action="store_false",
         dest="write_parfile",
@@ -393,6 +490,8 @@ def main(args=None):
             pbdot_impact_fraction=parsed.pbdot_impact_fraction,
             reference_epoch=parsed.reference_epoch,
             write_parfile=parsed.write_parfile,
+            upper_limit_level=parsed.upper_limit_level,
+            detection_ln_bf=parsed.detection_ln_bf,
         )
     except OrbitalModelCompatibilityError as exc:
         logging.error(str(exc))

@@ -53,6 +53,7 @@ import numpy as np
 
 __all__ = [
     "delta_tasc_model",
+    "derivative_scale",
     "log_likelihood_asymmetric_errors",
     "physical_from_beta",
     "spurious_tasc_from_pbdot_mismatch",
@@ -79,6 +80,26 @@ def delta_tasc_model(beta, x, baseline_days):
     return sum(beta[n] * tau**n for n in range(len(beta)))
 
 
+#: Physical name of the PB derivative each tau-polynomial order carries.
+DERIVATIVE_NAMES = {2: "PBDOT", 3: "PBDDOT"}
+
+
+def derivative_scale(n, baseline_days, pb0_days):
+    """Multiplicative factor from ``beta[n]`` to its physical PB derivative.
+
+    The tau-polynomial coefficients enter the physical derivatives *linearly*
+    (see the module docstring), so one scalar per order converts a whole
+    posterior chain in a single multiplication -- which is what
+    :mod:`ell1fit.orbital_decay` needs to summarize ``PBDOT``/``PBDDOT``
+    posteriors, and is why this factor is extracted from
+    :func:`physical_from_beta` rather than left inline there.
+
+    Units follow ``physical_from_beta``: ``n = 2`` gives a dimensionless
+    ``PBDOT``, ``n = 3`` a ``PBDDOT`` in ``yr**-1``, and so on.
+    """
+    return math.factorial(n) * pb0_days * 365.25 ** (n - 2) / (86400.0 * baseline_days**n)
+
+
 def physical_from_beta(beta, baseline_days, pb0_days):
     """Convert fitted tau-polynomial coefficients to physical quantities.
 
@@ -100,17 +121,9 @@ def physical_from_beta(beta, baseline_days, pb0_days):
     if len(beta) > 1:
         result["pb_offset_sec"] = float(beta[1] * pb0_days / baseline_days)
 
-    derivative_names = {2: "PBDOT", 3: "PBDDOT"}
     for n in range(2, len(beta)):
-        derivative = (
-            math.factorial(n)
-            * beta[n]
-            * pb0_days
-            * 365.25 ** (n - 2)
-            / (86400.0 * baseline_days**n)
-        )
-        name = derivative_names.get(n, f"D{n - 1}_per_yr{n - 2}")
-        result[name] = float(derivative)
+        name = DERIVATIVE_NAMES.get(n, f"D{n - 1}_per_yr{n - 2}")
+        result[name] = float(beta[n] * derivative_scale(n, baseline_days, pb0_days))
 
     return result
 
