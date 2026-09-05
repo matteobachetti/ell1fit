@@ -18,12 +18,20 @@ collapses to one number, matching the single ``ECC_upper_limit`` that
 end of the two-sided interval, which would be a different (and, for an
 off-centre posterior, larger) statement.
 
+A second limit is always reported at 99.73%, the mass a Gaussian carries
+within three standard deviations, since a three-sigma bound is what a
+non-detection is often quoted as. Note what it costs: a 99.73% quantile is
+estimated from the outermost 0.27% of the chain, so unlike the 95% one it
+genuinely depends on how well the tail is sampled. ``{name}_nsamples`` says
+how many samples stood behind it -- a few thousand puts only a handful of
+samples beyond the limit.
+
 Because a magnitude limit throws the sign away, two-sided credible intervals
-are always reported alongside it, at the credible levels a Gaussian one and
-two sigma carry (68.27% and 95.45%) rather than the rounded 16/84 and
-2.5/97.5. A reader who wants to know whether the drift leans positive or
-negative reads the interval; a reader who wants one number for a table reads
-the limit.
+are always reported alongside it, at the credible levels a Gaussian one, two
+and three sigma carry (68.27%, 95.45% and 99.73%) rather than the rounded
+16/84 and 2.5/97.5. A reader who wants to know whether the drift leans
+positive or negative reads the interval; a reader who wants one number for a
+table reads the limit.
 
 Whether a measurement or a limit is the thing to quote is *not* decided here.
 The caller passes ``detected``. In ``ell1decay`` that decision comes from a
@@ -44,12 +52,19 @@ import numpy as np
 from scipy.special import erf
 
 
-__all__ = ["ONE_SIGMA_LEVEL", "TWO_SIGMA_LEVEL", "signed_parameter_summary"]
+__all__ = [
+    "ONE_SIGMA_LEVEL",
+    "THREE_SIGMA_LEVEL",
+    "TWO_SIGMA_LEVEL",
+    "signed_parameter_summary",
+]
 
 #: Credible levels of the reported two-sided intervals: the mass a Gaussian
-#: carries within one and two standard deviations.
+#: carries within one, two and three standard deviations (68.27%, 95.45%,
+#: 99.73%).
 ONE_SIGMA_LEVEL = float(erf(1.0 / np.sqrt(2.0)))
 TWO_SIGMA_LEVEL = float(erf(2.0 / np.sqrt(2.0)))
+THREE_SIGMA_LEVEL = float(erf(3.0 / np.sqrt(2.0)))
 
 #: Credible level of the quoted magnitude upper limit, matching
 #: :data:`ell1fit.eccentricity.DEFAULT_UPPER_LIMIT_LEVEL`.
@@ -84,7 +99,9 @@ def signed_parameter_summary(
         (``False``). The caller owns this decision -- see the module
         docstring.
     upper_limit_level : float
-        Credible level of the magnitude upper limit. Default 0.95.
+        Credible level of the headline magnitude upper limit. Default 0.95.
+        The additional three-sigma limit is always at
+        :data:`THREE_SIGMA_LEVEL` and is not affected by this.
     unit : str, optional
         Appended to the numbers in the summary line. ``None`` (the default)
         means dimensionless, as ``PBDOT`` is.
@@ -92,11 +109,14 @@ def signed_parameter_summary(
     Returns
     -------
     dict
-        ``{name}_50``, the median; ``{name}_1sigma_lo``/``_hi`` and
-        ``{name}_2sigma_lo``/``_hi``, the two-sided intervals at
-        :data:`ONE_SIGMA_LEVEL` and :data:`TWO_SIGMA_LEVEL`;
-        ``{name}_upper_limit`` (``nan`` when ``detected``, since a limit is
-        then not the thing to quote) and ``{name}_upper_limit_level``;
+        ``{name}_50``, the median; ``{name}_1sigma_lo``/``_hi``,
+        ``{name}_2sigma_lo``/``_hi`` and ``{name}_3sigma_lo``/``_hi``, the
+        two-sided intervals at :data:`ONE_SIGMA_LEVEL`,
+        :data:`TWO_SIGMA_LEVEL` and :data:`THREE_SIGMA_LEVEL`;
+        ``{name}_upper_limit`` and ``{name}_upper_limit_3sigma`` (both ``nan``
+        when ``detected``, since a limit is then not the thing to quote), with
+        ``{name}_upper_limit_level`` and
+        ``{name}_upper_limit_3sigma_level``;
         ``{name}_zero_credibility`` and ``{name}_significance_sigma``, the
         Gaussian-approximation exclusion of zero; ``{name}_detected``;
         ``{name}_nsamples``; and ``{name}_summary``, the one-line form to
@@ -118,7 +138,10 @@ def signed_parameter_summary(
     median = float(np.median(samples))
     one_lo, one_hi = _interval(samples, ONE_SIGMA_LEVEL)
     two_lo, two_hi = _interval(samples, TWO_SIGMA_LEVEL)
-    limit = float(np.percentile(np.abs(samples), 100.0 * upper_limit_level))
+    three_lo, three_hi = _interval(samples, THREE_SIGMA_LEVEL)
+    magnitude = np.abs(samples)
+    limit = float(np.percentile(magnitude, 100.0 * upper_limit_level))
+    limit_3sigma = float(np.percentile(magnitude, 100.0 * THREE_SIGMA_LEVEL))
 
     # One-dimensional counterpart of eccentricity.zero_eccentricity_exclusion:
     # there the origin's Mahalanobis distance is turned into a credibility
@@ -141,7 +164,8 @@ def signed_parameter_summary(
     else:
         line = (
             f"|{name}| < {limit:.3g}{unit_suffix} "
-            f"({100 * upper_limit_level:g}% upper limit); "
+            f"({100 * upper_limit_level:g}% upper limit), "
+            f"< {limit_3sigma:.3g}{unit_suffix} (99.73%, 3 sigma); "
             f"2 sigma interval {two_lo:.3g} to {two_hi:.3g}{unit_suffix}; "
             f"zero excluded only at {sigma:.2g} sigma, "
             "so this is a limit and not a measurement"
@@ -153,8 +177,12 @@ def signed_parameter_summary(
         f"{name}_1sigma_hi": one_hi,
         f"{name}_2sigma_lo": two_lo,
         f"{name}_2sigma_hi": two_hi,
+        f"{name}_3sigma_lo": three_lo,
+        f"{name}_3sigma_hi": three_hi,
         f"{name}_upper_limit": float("nan") if detected else limit,
         f"{name}_upper_limit_level": float(upper_limit_level),
+        f"{name}_upper_limit_3sigma": float("nan") if detected else limit_3sigma,
+        f"{name}_upper_limit_3sigma_level": THREE_SIGMA_LEVEL,
         f"{name}_zero_credibility": credibility,
         f"{name}_significance_sigma": sigma,
         f"{name}_detected": detected,

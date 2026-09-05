@@ -616,11 +616,26 @@ def test_limit_brackets_the_injected_zero(flat_run):
     assert flat_run["M1"]["PBDDOT_2sigma_lo"] < 0 < flat_run["M1"]["PBDDOT_2sigma_hi"]
 
 
-def test_one_sigma_interval_sits_inside_the_two_sigma_one(flat_run):
+def test_intervals_are_properly_nested(flat_run):
     for model, name in (("M0", "PBDOT"), ("M1", "PBDDOT")):
         block = flat_run[model]
-        assert block[f"{name}_2sigma_lo"] < block[f"{name}_1sigma_lo"]
-        assert block[f"{name}_1sigma_hi"] < block[f"{name}_2sigma_hi"]
+        assert (
+            block[f"{name}_3sigma_lo"]
+            < block[f"{name}_2sigma_lo"]
+            < block[f"{name}_1sigma_lo"]
+            < block[f"{name}_1sigma_hi"]
+            < block[f"{name}_2sigma_hi"]
+            < block[f"{name}_3sigma_hi"]
+        )
+
+
+def test_three_sigma_limit_is_reported_alongside_the_headline_one(flat_run):
+    """A three-sigma bound is what a non-detection is often quoted as."""
+    for model, name in (("M0", "PBDOT"), ("M1", "PBDDOT")):
+        block = flat_run[model]
+        assert block[f"{name}_upper_limit_3sigma"] > block[f"{name}_upper_limit"]
+        assert block[f"{name}_upper_limit_3sigma_level"] == pytest.approx(0.9973, abs=1e-4)
+    assert "3 sigma" in flat_run["M0"]["PBDOT_summary"]
 
 
 def test_upper_limit_level_is_honoured(tmp_path):
@@ -675,6 +690,7 @@ def test_results_json_carries_the_limits(tmp_path):
         stored = json.load(fobj)
     assert "PBDOT_summary" in stored["M0"]
     assert "PBDDOT_upper_limit" in stored["M1"]
+    assert "PBDDOT_upper_limit_3sigma" in stored["M1"]
     assert "bayes_factor_pbdot" in stored
 
 

@@ -37,14 +37,52 @@ def test_upper_limit_level_is_configurable(standard_normal):
     assert summary["PBDDOT_upper_limit_level"] == 0.99
 
 
-def test_one_and_two_sigma_intervals_are_gaussian_equivalent(standard_normal):
-    """The intervals are quoted at the credible levels a Gaussian 1 and 2 sigma
-    carry (68.27% and 95.45%), not at the rounded 16/84 and 2.5/97.5."""
+def test_one_two_and_three_sigma_intervals_are_gaussian_equivalent(standard_normal):
+    """The intervals are quoted at the credible levels a Gaussian 1, 2 and 3
+    sigma carry (68.27%, 95.45% and 99.73%), not at the rounded 16/84 etc."""
     summary = signed_parameter_summary(standard_normal, "PBDDOT", detected=False)
     assert summary["PBDDOT_1sigma_lo"] == pytest.approx(-1.0, abs=0.01)
     assert summary["PBDDOT_1sigma_hi"] == pytest.approx(1.0, abs=0.01)
     assert summary["PBDDOT_2sigma_lo"] == pytest.approx(-2.0, abs=0.02)
     assert summary["PBDDOT_2sigma_hi"] == pytest.approx(2.0, abs=0.02)
+    assert summary["PBDDOT_3sigma_lo"] == pytest.approx(-3.0, abs=0.08)
+    assert summary["PBDDOT_3sigma_hi"] == pytest.approx(3.0, abs=0.08)
+
+
+def test_three_sigma_upper_limit_is_the_99_73_percent_magnitude(standard_normal):
+    """99.73% of a standard normal's mass has |x| < 3."""
+    summary = signed_parameter_summary(standard_normal, "PBDDOT", detected=False)
+    assert summary["PBDDOT_upper_limit_3sigma"] == pytest.approx(3.0, rel=0.02)
+    assert summary["PBDDOT_upper_limit_3sigma_level"] == pytest.approx(0.9973, abs=1e-4)
+
+
+def test_three_sigma_limit_is_larger_than_the_95_percent_one(standard_normal):
+    summary = signed_parameter_summary(standard_normal, "PBDDOT", detected=False)
+    assert summary["PBDDOT_upper_limit_3sigma"] > summary["PBDDOT_upper_limit"]
+
+
+def test_three_sigma_limit_is_independent_of_the_headline_level(standard_normal):
+    """--upper-limit-level moves the headline limit; the 3 sigma one is fixed."""
+    loose = signed_parameter_summary(
+        standard_normal, "PBDDOT", detected=False, upper_limit_level=0.68
+    )
+    tight = signed_parameter_summary(
+        standard_normal, "PBDDOT", detected=False, upper_limit_level=0.99
+    )
+    assert loose["PBDDOT_upper_limit"] < tight["PBDDOT_upper_limit"]
+    assert loose["PBDDOT_upper_limit_3sigma"] == pytest.approx(
+        tight["PBDDOT_upper_limit_3sigma"], rel=1e-12
+    )
+
+
+def test_three_sigma_limit_is_also_dropped_when_detected(standard_normal):
+    summary = signed_parameter_summary(standard_normal + 5.0, "PBDOT", detected=True)
+    assert np.isnan(summary["PBDOT_upper_limit_3sigma"])
+
+
+def test_three_sigma_limit_appears_in_the_summary_line(standard_normal):
+    summary = signed_parameter_summary(standard_normal, "PBDDOT", detected=False)
+    assert "3 sigma" in summary["PBDDOT_summary"]
 
 
 def test_median_is_reported(standard_normal):

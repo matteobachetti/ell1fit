@@ -87,12 +87,58 @@ the posterior mass lies below the quoted magnitude — and it is deliberately
 sitting off-centre is a larger and different statement. Use
 ``--upper-limit-level`` for a level other than 95%.
 
+A **three-sigma limit is always reported as well**, at 99.73% — the mass a
+Gaussian carries within three standard deviations — since that is how a
+non-detection is often quoted. It is unaffected by ``--upper-limit-level``,
+which moves only the headline number.
+
+It comes with a caveat the 95% limit does not have. A 99.73% quantile is
+determined by the outermost 0.27% of the chain, and the chain is built by
+``resample_equal``, which draws *with replacement* — so the number of
+genuinely independent points out in that tail is smaller than
+``PBDOT_nsamples`` suggests. Bootstrapping the chain of a nine-epoch fit
+measures what that costs:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 14 20 22 22 22
+
+   * - ``--nlive``
+     - Samples
+     - Beyond the 3 sigma limit
+     - Scatter, 95% limit
+     - Scatter, 3 sigma limit
+   * - 200
+     - 885
+     - ~2
+     - 2.5%
+     - 7.8%
+   * - 500 (default)
+     - 2151
+     - ~6
+     - 2.1%
+     - 1.6%
+   * - 2000
+     - 8526
+     - ~23
+     - 1.2%
+     - 2.6%
+
+At the default ``--nlive 500`` the three-sigma limit is good to a few percent,
+which is fine for a bound quoted to two significant figures. At ``--nlive
+200`` it rests on about two samples and is not worth quoting. Raising
+``--nlive`` past the default buys more samples but not obviously more
+accuracy — the central value itself moved by about 3% between these three
+runs, comparable to the scatter within any one of them, so **do not quote a
+three-sigma limit to more than two significant figures**. The 95% limit is
+stable throughout and needs no such care.
+
 Because a magnitude limit throws away the sign, **two-sided credible intervals
 are always reported alongside it**, whether or not the parameter was detected,
-at the credible levels a Gaussian one and two sigma carry (68.27% and 95.45%)
-rather than the rounded 16/84 and 2.5/97.5. A reader who needs one number for
-a table reads the limit; a reader who needs to know whether the drift leans
-positive or negative reads the interval.
+at the credible levels a Gaussian one, two and three sigma carry (68.27%,
+95.45% and 99.73%) rather than the rounded 16/84 and 2.5/97.5. A reader who
+needs one number for a table reads the limit; a reader who needs to know
+whether the drift leans positive or negative reads the interval.
 
 One number in the output is a diagnostic and nothing more:
 ``PBDOT_significance_sigma`` is the distance of zero from the posterior in
@@ -177,16 +223,26 @@ Reading the output
      - Two-sided 68.27% credible interval.
    * - ``PBDOT_2sigma_lo`` / ``_hi``
      - Two-sided 95.45% credible interval.
+   * - ``PBDOT_3sigma_lo`` / ``_hi``
+     - Two-sided 99.73% credible interval.
    * - ``PBDOT_upper_limit``
-     - Magnitude limit, or ``NaN`` when the parameter is detected.
+     - Headline magnitude limit, or ``NaN`` when the parameter is detected.
    * - ``PBDOT_upper_limit_level``
-     - Credible level of that limit.
+     - Credible level of that limit (0.95 unless overridden).
+   * - ``PBDOT_upper_limit_3sigma``
+     - Magnitude limit at 99.73%, also ``NaN`` when detected. Estimated from
+       the chain's tail — see the caveat above.
+   * - ``PBDOT_upper_limit_3sigma_level``
+     - 0.9973, always.
    * - ``PBDOT_detected``
      - Whether the Bayes factor cleared the threshold.
    * - ``PBDOT_ln_bf`` / ``_ln_bf_err``
      - The Bayes factor the decision was made on.
    * - ``PBDOT_significance_sigma``
      - Gaussian-approximation exclusion of zero. Diagnostic only.
+   * - ``PBDOT_nsamples``
+     - Posterior samples the summary was built from. Relevant to how well the
+       three-sigma limit is resolved.
    * - ``PBDOT_summary``
      - The one-line form, ready to paste into a draft.
 
@@ -197,9 +253,9 @@ and read like this:
 .. code-block:: text
 
    PBDOT = 2.996e-08 (+7.58e-11 -7.55e-11, 1 sigma); zero excluded at 384.3 sigma
-   |PBDDOT| < 2.54e-10 1/yr (95% upper limit); 2 sigma interval -1.53e-10 to
-   2.82e-10 1/yr; zero excluded only at 0.62 sigma, so this is a limit and not
-   a measurement
+   |PBDDOT| < 2.54e-10 1/yr (95% upper limit), < 3.29e-10 1/yr (99.73%, 3
+   sigma); 2 sigma interval -1.53e-10 to 2.82e-10 1/yr; zero excluded only at
+   0.62 sigma, so this is a limit and not a measurement
 
 A typical invocation:
 
