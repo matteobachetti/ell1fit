@@ -622,3 +622,214 @@ against the 180 kyr the measured ``PBDOT`` implies.
    profile. On the two-epoch fixture it errs the other way, by a factor of two.
    Neither direction is reproducible, which is the point: on this posterior the
    inverse-Hessian marginal is not a usable forecast. Profile.
+
+Forecasting a future campaign
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A profile likelihood costs a few dozen local optimizations — half an hour for
+the dataset above — which is cheap for one answer and too expensive for the
+question that follows it: *would more observations, or a bigger telescope,
+change the verdict?* For screening candidate epoch lists there is a linear
+model that costs nothing, provided it is calibrated once against a real profile
+run.
+
+.. warning::
+
+   Do **not** read :math:`\sigma_{A1}` from a fit with ``A1DOT`` held at zero
+   as the drift sensitivity. On the M82 X-2 set that fit reports
+   :math:`\sigma_{A1} = 5.8` ms, but the drift the same data can resolve over
+   its own 12.35-yr span is :math:`\sigma_{\dot{x}} \times T_{\rm span} = 68`
+   ms — twelve times larger. The gap is the price of the ``A1``/``A1DOT``
+   degeneracy plus the fact that the useful lever arm is 3.2 yr, not 12.4. One
+   number is the precision on the *average* ``A1``; the other is the precision
+   on the *difference* between the ends, and only the second one is the
+   measurement.
+
+The cheap model
+^^^^^^^^^^^^^^^
+
+Treat each epoch as an independent measurement of ``A1`` with weight
+:math:`w_i`, and :math:`(A1, \dot{x})` as a straight-line fit through them:
+
+.. math::
+
+   \sigma_{\dot{x}} = \kappa \left[\sum_i w_i (t_i - \bar{t}_w)^2\right]^{-1/2},
+   \qquad \bar{t}_w = \frac{\sum_i w_i t_i}{\sum_i w_i}.
+
+Two things make it usable:
+
+**The weights come out of the results table.** Phase precision goes as the
+square root of the pulsed signal-to-noise, so :math:`w_i \propto Z^2_{1,i} - 2`
+— the per-file ``Z21_i`` column the pipeline already writes, minus the two
+degrees of freedom of its noise floor. Only the shape matters; normalise the
+set so that :math:`(\sum_i w_i)^{-1/2}` equals the :math:`\sigma_{A1}` the
+pipeline actually reported for that dataset.
+
+**One constant absorbs everything the model ignores** — the curved
+``A1``/``A1DOT`` degeneracy, the per-epoch ``F0``/``F1``/``Phase`` covariance,
+the template smearing. Fit :math:`\kappa` by running the model on the same
+epochs a profile likelihood has already been run on. On the M82 X-2 dataset
+:math:`\kappa = 3.0`; the uncalibrated model is three times too optimistic,
+which is the same disease as the Fisher matrix and the same reason not to
+trust either raw. :math:`\kappa` is **not** universal — re-derive it against
+one profile run before forecasting on a different source, and treat the output
+as good to a factor of ~1.5.
+
+Applied to the 14-epoch set that includes the 2026 epoch, the model forecasts
+:math:`\sigma_{\dot{x}} = 1.7\times10^{-10}` lt-s/s, a shortfall of 45 against
+the Kepler expectation — the 2026 epoch having bought a little over the 52 the
+15-epoch profile run measured.
+
+What the scalings say
+^^^^^^^^^^^^^^^^^^^^^
+
+.. math::
+
+   \sigma_{\dot{x}} \propto \frac{1}{\sqrt{N_{\rm ep} A}\; T_{\rm rms}},
+
+with :math:`A` the effective area and :math:`T_{\rm rms}` the weighted spread
+of the epochs. Collecting area enters under a square root and the baseline
+enters linearly, which sets the terms of trade: **a mission with ten times
+NuSTAR's area buys a factor of 3.2, and nothing more.** Monitoring at a fixed
+cadence makes :math:`N_{\rm ep} \propto T`, so time is worth
+:math:`T^{3/2}` — closing the remaining factor of 14 on M82 X-2 needs six times
+the present baseline, about seventy years. Two epochs a year from 2032 with a
+10x instrument crosses one sigma around 2100.
+
+Angular resolution is the underrated axis. :math:`Z^2_1` is the squared pulsed
+counts over the *total* counts in the aperture, so resolving the target out of
+its neighbours cuts the denominator directly. If M82 X-2 is a third of what
+NuSTAR's aperture collects, separating it is worth another :math:`\sqrt{3}` —
+comparable to a factor of three in area, for free.
+
+The anchor floor
+^^^^^^^^^^^^^^^^
+
+No future instrument improves the *early* end of an existing lever arm. Once
+the earliest block of data is fixed, its own ``A1`` precision bounds everything
+downstream:
+
+.. math::
+
+   \sigma_{\dot{x}} \;\geq\; \kappa\, \frac{\sigma_{A1}^{\rm (anchor)}}{T_{\rm span}}.
+
+The 2014 NuSTAR block — seven epochs inside one month — reaches
+:math:`\sigma_{A1} = 6.5` ms together, and that number is now permanent:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 35 35
+
+   * - span from 2014
+     - floor on :math:`\sigma_{\dot{x}}`
+     - shortfall vs Kepler
+   * - 12.4 yr (today)
+     - :math:`5.0\times10^{-11}`
+     - 13x
+   * - 30 yr
+     - :math:`2.1\times10^{-11}`
+     - 5.3x
+   * - 50 yr
+     - :math:`1.2\times10^{-11}`
+     - 3.2x
+   * - 160 yr
+     - :math:`3.9\times10^{-12}`
+     - 1.0x
+
+A perfect telescope launched tomorrow reaches one sigma on this source in the
+twenty-second century. That is the honest ceiling, and it is why the section
+above says to quote the bound rather than chase the detection.
+
+Short observations barely constrain ``A1`` at all
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The obvious way to buy lever arm cheaply is an archival epoch from long before
+the campaign started. It is worth checking, but the arithmetic is unforgiving,
+and for a reason that is easy to miss: within one epoch the fit is free in
+``Phase_i``, ``F0_i`` and ``F1_i``, which between them absorb the constant,
+linear and quadratic parts of the orbital delay over that window. What is left
+to constrain ``A1`` is the cubic and higher terms of
+:math:`x \sin(2\pi t / P_b)`, so for :math:`\Delta T \ll P_b` the usable signal
+falls as :math:`(\Delta T / P_b)^3` — verified numerically as a log-log slope
+of 2.99.
+
+Taking the rms of :math:`\sin(2\pi t/P_b)` orthogonalised against
+:math:`\{1, t, t^2\}` over a window of length :math:`\Delta T`, averaged over
+the starting orbital phase, and normalising to a NuSTAR pointing spanning a
+full 2.53-d orbit:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 20 25 25
+
+   * - window
+     - :math:`\Delta T / P_b`
+     - leverage on ``A1``
+     - relative
+   * - 2.5 d (full orbit)
+     - 0.99
+     - :math:`3.2\times10^{-1}`
+     - 1
+   * - 1.5 d
+     - 0.59
+     - :math:`9.1\times10^{-2}`
+     - 1/4
+   * - 100 ks
+     - 0.46
+     - :math:`4.4\times10^{-2}`
+     - 1/7
+   * - 50 ks
+     - 0.23
+     - :math:`5.8\times10^{-3}`
+     - 1/55
+   * - 30 ks
+     - 0.14
+     - :math:`1.3\times10^{-3}`
+     - 1/252
+
+A single 30-ks snapshot is 250 times worse at measuring ``A1`` than an
+orbit-spanning pointing with the same photons. **An archival epoch is worth
+having only if it spans a decent fraction of an orbit** — how long it is
+matters far more than how many counts it collected, and no amount of effective
+area compensates.
+
+The gain, when the epoch does qualify, is real but bounded. Adding one epoch in
+2001 to the M82 X-2 set — 13.4 yr before the 2014 block — gives:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 25 25 25 25
+
+   * - its share of the total ``A1`` weight
+     - required single-epoch :math:`\sigma_{A1}`
+     - gain
+     - shortfall
+   * - 0.03
+     - 33 ms
+     - 1.3x
+     - 36x
+   * - 0.1
+     - 18 ms
+     - 1.7x
+     - 27x
+   * - 1.0
+     - 6 ms
+     - 3.4x
+     - 13x
+   * - :math:`\infty`
+     - 0
+     - 4.6x
+     - 10x
+
+Even an infinitely good 2001 epoch stops at 4.6x, because the *other* end of
+the lever arm then becomes the anchor. A 4.6x tighter published bound is a
+result worth having; a detection is not on the table.
+
+One last thing such an epoch must clear: the pulse has to be findable. M82
+X-2's spin is not extrapolatable backwards — ``F0`` runs from 0.72876 Hz in
+2014 to 0.71166 Hz in 2026, a mean :math:`\dot{F_0}` of
+:math:`-4.3\times10^{-11}` Hz/s, but wandering by :math:`\sim 3\times10^{-3}`
+Hz about any smooth trend, and spinning *up* between 2020 and 2021. Reaching
+back thirteen years means a blind search over several times that scatter, with
+an orbital acceleration search inside it, and the trials penalty comes straight
+off the detection threshold.
