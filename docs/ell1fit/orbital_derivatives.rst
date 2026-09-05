@@ -1,5 +1,220 @@
-Orbital-size drift: fitting and bounding ``A1DOT``
-==================================================
+Orbital derivatives: period drift and orbital-size drift
+========================================================
+
+Two different derivatives say the orbit is evolving, and ``ell1fit`` reaches
+them by two different routes. ``PBDOT`` and ``PBDDOT`` — the orbital period's
+first and second time derivatives — are measured *across* epochs by
+``ell1decay``, from how the fitted ascending-node time ``TASC`` of each epoch
+drifts away from a constant-period ephemeris. ``A1DOT`` — the drift of the
+projected orbital size — is instead a free parameter *inside* a single
+coherent multi-file ``ell1fit`` run.
+
+Both are usually non-detections, and both are then quoted the same way: as the
+95th percentile of the parameter's magnitude over the posterior samples. This
+page covers the period derivatives first, since they are the ones most often
+asked for, and ``A1DOT`` second.
+
+Period drift: ``PBDOT`` and ``PBDDOT``
+--------------------------------------
+
+If the orbital period drifts as
+:math:`P(t) = P_b + \dot{P_b}\,t + \tfrac{1}{2}\ddot{P_b}\,t^2 + \ldots`, then
+the ascending node arrives progressively earlier or later than a fixed-period
+ephemeris predicts, by
+
+.. math::
+
+   \Delta T_{\rm asc}(t) = \frac{\dot{P_b}\,t^2}{2 P_b}
+                         + \frac{\ddot{P_b}\,t^3}{6 P_b} + \ldots
+
+``ell1decay`` takes one ``ell1fit`` result file per epoch, forms
+:math:`\Delta T_{\rm asc}` for each, and fits that curve. The per-epoch
+``TASC`` uncertainties are generally asymmetric, so the likelihood is a
+split-normal one, picking the negative or positive error bar per point
+according to which side of the model the point falls on.
+
+Three models, two Bayes factors
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Three nested models are always fit, never one in isolation:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 12 40 48
+
+   * - Model
+     - Terms in :math:`\Delta T_{\rm asc}(t)`
+     - What it represents
+   * - ``MLIN``
+     - constant + linear
+     - No period derivative at all. The constant absorbs a reference ``TASC``
+       that was not exactly the data's own mean; the linear term absorbs a
+       plain ``PB`` *miscalibration*, which is not a ``PB`` derivative.
+   * - ``M0``
+     - ``MLIN`` plus a quadratic term
+     - Adds ``PBDOT``.
+   * - ``M1``
+     - ``M0`` plus a cubic term
+     - Adds ``PBDDOT``.
+
+Each model's evidence :math:`\log Z` comes from nested sampling, repeated over
+several seeds because the scatter across seeds is a fairer error on
+:math:`\log Z` than any single run's own quoted one. Comparing neighbours in
+that ladder gives one Bayes factor per derivative:
+
+- ``bayes_factor_pbdot`` — ``M0`` over ``MLIN``: does the data need ``PBDOT``?
+- ``bayes_factor_pbddot`` — ``M1`` over ``M0``: does it need ``PBDDOT``?
+
+Each comparison differs by exactly one parameter, which is what makes it a
+question about that one derivative rather than about the shape of the curve in
+general.
+
+Measurement or upper limit
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A derivative is reported as a **measurement** when its own Bayes factor
+reaches :math:`\ln \mathrm{BF} \ge 1`, and as an **upper limit** otherwise.
+That threshold is not a new invention: :math:`2\ln\mathrm{BF} = 2` is exactly
+where the Kass & Raftery (1995) grading stops calling the evidence
+inconclusive. Change it with ``--detection-ln-bf`` if a paper wants a
+different bar.
+
+The limit itself is **the 95th percentile of the parameter's magnitude** over
+the posterior samples, the same convention used for ``A1DOT`` below and for
+the eccentricity. It says what an upper limit should say — that fraction of
+the posterior mass lies below the quoted magnitude — and it is deliberately
+*not* the more extreme end of the two-sided interval, which for a posterior
+sitting off-centre is a larger and different statement. Use
+``--upper-limit-level`` for a level other than 95%.
+
+Because a magnitude limit throws away the sign, **two-sided credible intervals
+are always reported alongside it**, whether or not the parameter was detected,
+at the credible levels a Gaussian one and two sigma carry (68.27% and 95.45%)
+rather than the rounded 16/84 and 2.5/97.5. A reader who needs one number for
+a table reads the limit; a reader who needs to know whether the drift leans
+positive or negative reads the interval.
+
+One number in the output is a diagnostic and nothing more:
+``PBDOT_significance_sigma`` is the distance of zero from the posterior in
+units of its own standard deviation — a Gaussian approximation, quoted only so
+the numbers are comparable with what ``ell1ecc`` prints. Nothing switches on
+it. If it disagrees sharply with the Bayes factor, that is a sign the
+posterior is not the near-Gaussian shape the approximation assumes, and the
+corner plot is worth a look.
+
+What the limit rests on, and what it does not
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The two halves of the answer have very different sensitivities to the prior
+box, and it is worth being clear about which is which. Measured on a synthetic
+nine-epoch dataset with no injected derivative, varying the prior half-width
+on the quadratic and cubic coefficients over a factor of 100 (the default is
+200 times the data's own residual spread):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 20 20 19 19
+
+   * - Prior half-width
+     - :math:`\ln\mathrm{BF}` ``PBDOT``
+     - :math:`\ln\mathrm{BF}` ``PBDDOT``
+     - ``PBDOT`` limit
+     - ``PBDDOT`` limit
+   * - 20 × spread
+     - -1.80
+     - -0.63
+     - 1.90e-10
+     - 2.38e-10
+   * - 200 × spread (default)
+     - -4.06
+     - -2.88
+     - 1.84e-10
+     - 2.23e-10
+   * - 2000 × spread
+     - -5.80
+     - -6.15
+     - 1.78e-10
+     - 2.48e-10
+
+**The limits are prior-insensitive.** They move by under about 10% over that
+whole range, and not even monotonically — that is nested-sampling scatter, not
+a prior dependence. The box is far wider than the data can constrain, so the
+posterior is likelihood-dominated and its percentiles are a statement about
+the data.
+
+**The detection gate is not the same kind of statement.** Both Bayes factors
+shift by roughly 2.3 per decade of prior width — which is :math:`\ln 10`,
+exactly the Occam factor, since the box width is set from the data's own
+residual spread and not from a physical bound. Widening the prior by a factor
+of three moves :math:`\ln\mathrm{BF}` by more than the entire detection
+threshold.
+
+The ``A1DOT`` half of this page argues against using a Bayes factor to *set a
+limit* for precisely this reason, and that argument still stands. It is not
+contradicted here, because the Bayes factor decides only **whether to quote a
+value or a limit**, never how large the limit is. In the measurement above the
+verdict happens to be the same at every width — everything is far below the
+threshold — but a genuinely marginal derivative sitting near
+:math:`\ln\mathrm{BF} \approx 1` could be flipped by a factor-of-three
+change in the box. If a result turns on that verdict, vary
+``--detection-ln-bf`` and check whether the conclusion survives.
+
+Reading the output
+~~~~~~~~~~~~~~~~~~
+
+``{outroot}_results.json`` holds a block per model. Inside ``M0`` (for
+``PBDOT``) and ``M1`` (for ``PBDDOT``) each derivative carries:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 38 62
+
+   * - Key
+     - Meaning
+   * - ``PBDOT_50``
+     - Posterior median.
+   * - ``PBDOT_1sigma_lo`` / ``_hi``
+     - Two-sided 68.27% credible interval.
+   * - ``PBDOT_2sigma_lo`` / ``_hi``
+     - Two-sided 95.45% credible interval.
+   * - ``PBDOT_upper_limit``
+     - Magnitude limit, or ``NaN`` when the parameter is detected.
+   * - ``PBDOT_upper_limit_level``
+     - Credible level of that limit.
+   * - ``PBDOT_detected``
+     - Whether the Bayes factor cleared the threshold.
+   * - ``PBDOT_ln_bf`` / ``_ln_bf_err``
+     - The Bayes factor the decision was made on.
+   * - ``PBDOT_significance_sigma``
+     - Gaussian-approximation exclusion of zero. Diagnostic only.
+   * - ``PBDOT_summary``
+     - The one-line form, ready to paste into a draft.
+
+``PBDDOT`` is reported in :math:`\mathrm{yr}^{-1}`; ``PBDOT``, being a period
+over a time, is dimensionless. The summary lines are also written to the log,
+and read like this:
+
+.. code-block:: text
+
+   PBDOT = 2.996e-08 (+7.58e-11 -7.55e-11, 1 sigma); zero excluded at 384.3 sigma
+   |PBDDOT| < 2.54e-10 1/yr (95% upper limit); 2 sigma interval -1.53e-10 to
+   2.82e-10 1/yr; zero excluded only at 0.62 sigma, so this is a limit and not
+   a measurement
+
+A typical invocation:
+
+.. code-block:: console
+
+   $ ell1decay epoch*.ecsv -o decay --upper-limit-level 0.95
+
+Note that ``{outroot}.par`` records ``M0``'s **median** ``PBDOT`` even when
+that parameter is only an upper limit. That is deliberate: an ephemeris needs
+a number, and "this is a limit rather than a measurement" is a statement for
+the paper, not for the parameter file. ``M1`` is never adopted into the
+ephemeris regardless of its Bayes factor.
+
+Orbital-size drift: bounding ``A1DOT``
+--------------------------------------
 
 ``A1DOT`` (:math:`\dot{x}`, light-seconds per second) is the rate at which the
 projected semi-major axis of the orbit changes. It is the orbital-size
@@ -16,12 +231,12 @@ bounding it away — tests whether the observed orbital decay really is the
 orbit shrinking, rather than something in the companion (a quadrupole cycle,
 say) that moves ``PB`` without moving the orbital size in step.
 
-This page covers how ``ell1fit`` fits ``A1DOT``, how to turn a fit into an
+This section covers how ``ell1fit`` fits ``A1DOT``, how to turn a fit into an
 upper limit, what will silently spoil that limit, and how to forecast in
 advance whether a given dataset can reach an interesting number at all.
 
 How ``A1DOT`` enters the model
-------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The pipeline holds one binary shared across all files, referenced to a single
 epoch, and gives each file a fixed offset carrying that solution to its own
@@ -65,7 +280,7 @@ of the posterior carry the same expression, and a test compares them
 (``test_jax_posterior_follows_a1dot_like_the_numba_one``).
 
 Fitting it
-----------
+~~~~~~~~~~
 
 ``A1DOT`` is requested like any other parameter::
 
@@ -102,7 +317,7 @@ how the observations are *spaced* rather than how long they are.
    candidates are now filtered to the finite positive ones before choosing.
 
 The prior
----------
+~~~~~~~~~
 
 With no uncertainty in the parfile, ``A1DOT`` gets a flat prior symmetric about
 the parfile value, of half-width
@@ -120,7 +335,7 @@ can integrate against it, at the cost of an Occam factor that a Bayes factor on
 ``A1DOT`` would feel.
 
 Setting an upper limit
-----------------------
+~~~~~~~~~~~~~~~~~~~~~~
 
 Fit ``A1DOT`` as a global free parameter in the multi-file fit, with the flat
 symmetric prior above, and quote **the 95th percentile of** :math:`|\dot{x}|`
@@ -139,7 +354,7 @@ symmetric prior above, and quote **the 95th percentile of** :math:`|\dot{x}|`
   limit must never err.
 
 What will spoil the limit
--------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **Template smearing biases the drift toward zero.** Each file's pulse template
 is built by folding *that file's own events* with the current solution. An
@@ -189,7 +404,7 @@ seen to disagree about it at the 0.2% level. Mixing them makes
 :math:`\Delta t_i` inconsistent between files.
 
 Forecasting the sensitivity
----------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Before spending a fit, it is worth knowing what precision the data can reach.
 The obvious tool is the Fisher matrix — take the Hessian of the log-posterior
@@ -243,7 +458,7 @@ instead of a full chain.
    of freedom as there are epoch amplitudes to fit.
 
 Recipe
-~~~~~~
+^^^^^^
 
 1. Build the fit setup exactly as the pipeline does — load, fold, weight,
    build templates, trace ``Phase_i``, precondition, **refine** — and stop
@@ -256,7 +471,7 @@ Recipe
    bound, read the crossing at :math:`\Delta \log p = 1.92`.
 
 The M82 X-2 dataset
--------------------
+~~~~~~~~~~~~~~~~~~~
 
 Fifteen NuSTAR epochs, :math:`2.67\times10^{6}` events, spanning MJD 56683 to
 60659 (10.9 yr), fitting ``F0_i``, ``F1_i`` and ``Phase_i`` per epoch plus a
