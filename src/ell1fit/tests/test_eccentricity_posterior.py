@@ -476,6 +476,53 @@ def test_pipeline_enrichment_upper_limit_for_null(tmp_path):
     assert np.isfinite(enriched["ECC_upper_limit"])
 
 
+def _mock_orbital_run(tmp_path, ecc=20 * SIGMA, omega_deg=71.0, size=20_000):
+    """A run that varied A1 and PB as well as the eccentricity pair."""
+    results, outroot = _mock_results_and_samples(tmp_path, ecc=ecc, omega_deg=omega_deg, size=size)
+    eps_chain, labels = load_flat_samples(outroot + SAMPLES_SUFFIX)
+
+    rng = np.random.default_rng(SEED + 1)
+    extra = {"A1": (22.225, 1e-6), "PB": (218668.4, 1e-3)}
+    columns, names = [], []
+    for name, (initial, factor) in extra.items():
+        local = rng.normal(0.0, 300.0, eps_chain.shape[0])
+        columns.append(local)
+        names.append("d" + name)
+        for perc in (16, 50, 84):
+            results[f"d{name}_{perc}"] = float(np.percentile(local, perc))
+        results[f"d{name}_initial"] = initial
+        results[f"d{name}_factor"] = factor
+
+    save_flat_samples(outroot, np.column_stack(columns + [eps_chain]), names + list(labels))
+    return results, outroot
+
+
+def test_pipeline_enrichment_draws_the_orbit_summary(tmp_path):
+    """The eccentricity hook is where the orbit summary is written too."""
+    results, outroot = _mock_results_and_samples(tmp_path, ecc=20 * SIGMA, omega_deg=71.0)
+
+    _enrich_results_with_eccentricity(results, outroot, ["EPS1", "EPS2"])
+
+    assert (tmp_path / "run_orbit.jpg").exists()
+
+
+def test_the_orbit_summary_gets_every_orbital_parameter_that_was_fitted(tmp_path, monkeypatch):
+    """Not just the EPS pair: A1 and PB were sampled, so they get panels too."""
+    from matplotlib.figure import Figure
+
+    # The hook saves the standalone eccentricity plot first and the summary
+    # second, so it is the last figure that is the one to look at.
+    saved = []
+    monkeypatch.setattr(Figure, "savefig", lambda self, *a, **k: saved.append(self))
+
+    results, outroot = _mock_orbital_run(tmp_path)
+    _enrich_results_with_eccentricity(results, outroot, ["A1", "PB", "EPS1", "EPS2"])
+
+    # A1, PB, EPS1, EPS2 -> a 4x4 corner block, plus the eccentricity panel.
+    assert len(saved) == 2
+    assert len(saved[-1].axes) == 4 * 4 + 1
+
+
 # --- CLI entry point --------------------------------------------------------
 
 
@@ -488,8 +535,24 @@ def test_ell1ecc_cli_prints_summary(tmp_path, capsys):
     Table(rows=[results]).write(results_file)
 
     plot_path = str(tmp_path / "ecc_cli.jpg")
-    ell1ecc_main([results_file, "--plot", plot_path])
+    orbit_path = str(tmp_path / "orbit_cli.jpg")
+    ell1ecc_main([results_file, "--plot", plot_path, "--orbit-plot", orbit_path])
 
     captured = capsys.readouterr()
     assert "e =" in captured.out or "e <" in captured.out
     assert (tmp_path / "ecc_cli.jpg").exists()
+    assert (tmp_path / "orbit_cli.jpg").exists()
+
+
+def test_ell1ecc_cli_names_both_plots_after_the_output_root(tmp_path, capsys):
+    """With no explicit paths, both figures land beside the result table."""
+    from ..eccentricity import main as ell1ecc_main
+
+    results, outroot = _mock_orbital_run(tmp_path)
+    results_file = outroot + "_results.ecsv"
+    Table(rows=[results]).write(results_file)
+
+    ell1ecc_main([results_file])
+
+    assert (tmp_path / "run_eccentricity.jpg").exists()
+    assert (tmp_path / "run_orbit.jpg").exists()

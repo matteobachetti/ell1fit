@@ -276,10 +276,11 @@ def _enrich_results_with_eccentricity(results, outroot, requested_parameter_name
 
     from .eccentricity import (
         eccentricity_summary,
-        eps_samples_from_chain,
+        physical_samples_from_chain,
         plot_eccentricity_posterior,
     )
     from .mcmc_utils import SAMPLES_SUFFIX, load_flat_samples
+    from .orbit_plot import ORBITAL_PARAMETERS, plot_orbit_summary
 
     samples_file = outroot + SAMPLES_SUFFIX
     if not os.path.isfile(samples_file):
@@ -289,10 +290,17 @@ def _enrich_results_with_eccentricity(results, outroot, requested_parameter_name
         return results
 
     flat_chain, labels = load_flat_samples(samples_file)
-    eps1, eps2 = eps_samples_from_chain(results, flat_chain, labels=labels)
+    # Every orbital parameter, not just the pair: whichever of them this fit
+    # varied go into the orbit summary alongside the eccentricity. strict=False
+    # because a fit is free to hold any of them fixed.
+    samples = physical_samples_from_chain(
+        results, flat_chain, ORBITAL_PARAMETERS, labels=labels, strict=False
+    )
+    eps1, eps2 = samples["EPS1"], samples["EPS2"]
     summary = eccentricity_summary(eps1, eps2)
     results.update(summary)
     plot_eccentricity_posterior(eps1, eps2, fname=outroot + "_eccentricity.jpg", summary=summary)
+    plot_orbit_summary(samples, fname=outroot + "_orbit.jpg", summary=summary)
     logging.info(f"Eccentricity: {summary['ECC_summary']}")
     return results
 

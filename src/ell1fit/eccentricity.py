@@ -73,6 +73,7 @@ __all__ = [
     "eccentricity_summary_from_run",
     "eps_samples_from_chain",
     "load_eps_samples",
+    "load_orbital_samples",
     "output_root",
     "physical_samples_from_chain",
     "plot_eccentricity_posterior",
@@ -563,6 +564,12 @@ def load_eps_samples(results_file, chain_file=None, row=-1):
             ".h5 as chain_file."
         )
 
+    results_row, flat_chain, labels = _read_run(results_file, chain_file, row)
+    return eps_samples_from_chain(results_row, flat_chain, labels=labels)
+
+
+def _read_run(results_file, chain_file, row):
+    """The results row and the flattened chain that goes with it."""
     table = Table.read(results_file)
     results_row = table[row]
 
@@ -580,8 +587,39 @@ def load_eps_samples(results_file, chain_file=None, row=-1):
         labels = None
 
     logging.info(f"Read {flat_chain.shape[0]} samples from {chain_file}")
+    return results_row, flat_chain, labels
 
-    return eps_samples_from_chain(results_row, flat_chain, labels=labels)
+
+def load_orbital_samples(results_file, chain_file=None, row=-1):
+    """Physical samples of whichever orbital parameters a finished run explored.
+
+    The same load as :func:`load_eps_samples`, widened to every parameter of
+    :data:`ell1fit.orbit_plot.ORBITAL_PARAMETERS`. Parameters that were held
+    fixed are simply absent from the result rather than an error, since which
+    of them a given fit varied is the user's choice and not a fault.
+
+    Parameters
+    ----------
+    results_file : str
+        Path to the ``*_results.ecsv`` written by the fit.
+    chain_file : str, optional
+        Path to the samples. Defaults to :func:`default_chain_file`.
+    row : int
+        Which row of the table to use; the default is the most recent fit.
+
+    Returns
+    -------
+    dict
+        ``{parameter: np.ndarray}`` of physical posterior samples.
+    """
+    from .orbit_plot import ORBITAL_PARAMETERS
+
+    if chain_file is None:
+        chain_file = default_chain_file(results_file)
+    results_row, flat_chain, labels = _read_run(results_file, chain_file, row)
+    return physical_samples_from_chain(
+        results_row, flat_chain, ORBITAL_PARAMETERS, labels=labels, strict=False
+    )
 
 
 def eccentricity_summary_from_run(results_file, chain_file=None, row=-1, **kwargs):
@@ -709,15 +747,26 @@ def main(args=None):
         default=None,
         help="Output plot path (default: <outroot>_eccentricity.jpg)",
     )
+    parser.add_argument(
+        "--orbit-plot",
+        default=None,
+        dest="orbit_plot",
+        help=(
+            "Output path for the orbital summary: the orbital parameters this fit "
+            "explored, in physical units, beside the eccentricity they imply "
+            "(default: <outroot>_orbit.jpg)"
+        ),
+    )
     parsed = parser.parse_args(args)
 
     configure_logging()
 
-    eps1, eps2 = load_eps_samples(
+    samples = load_orbital_samples(
         parsed.results_file,
         chain_file=parsed.chain_file,
         row=parsed.row,
     )
+    eps1, eps2 = samples["EPS1"], samples["EPS2"]
     summary = eccentricity_summary(eps1, eps2, flat_in_e_prior=parsed.flat_in_e)
 
     print(summary["ECC_summary"])
@@ -730,3 +779,11 @@ def main(args=None):
         plot_path = output_root(parsed.results_file) + "_eccentricity.jpg"
     plot_eccentricity_posterior(eps1, eps2, fname=plot_path, summary=summary)
     print(f"\nPlot saved to {plot_path}")
+
+    from .orbit_plot import plot_orbit_summary
+
+    orbit_path = parsed.orbit_plot
+    if orbit_path is None:
+        orbit_path = output_root(parsed.results_file) + "_orbit.jpg"
+    plot_orbit_summary(samples, fname=orbit_path, summary=summary)
+    print(f"Orbit summary saved to {orbit_path}")
