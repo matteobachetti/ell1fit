@@ -65,6 +65,7 @@ from .plotting import plot_style_context
 
 
 __all__ = [
+    "ParameterNotSampled",
     "default_chain_file",
     "eccentricity_and_omega",
     "eccentricity_summary",
@@ -72,6 +73,7 @@ __all__ = [
     "eps_samples_from_chain",
     "load_eps_samples",
     "output_root",
+    "physical_samples_from_chain",
     "plot_eccentricity_posterior",
     "zero_eccentricity_exclusion",
 ]
@@ -328,6 +330,17 @@ def eccentricity_summary(
     return results
 
 
+class ParameterNotSampled(ValueError):
+    """A requested parameter is not among the columns of this chain.
+
+    Kept distinct from the other :class:`ValueError` raised here, which means
+    the table and the chain disagree about a parameter they *both* contain --
+    that is a corrupted pairing of files and must never be silently skipped.
+    "Not fitted" is a perfectly ordinary thing for a caller that asks for every
+    orbital parameter and takes whichever were explored.
+    """
+
+
 def _colnames(results_row):
     """Column names of an astropy ``Row``, or keys of a plain mapping."""
     if hasattr(results_row, "colnames"):
@@ -352,9 +365,9 @@ def _column_for_parameter(flat_chain, results_row, par, tolerance=COLUMN_MATCH_T
     available = _colnames(results_row)
     missing = [key for key in keys if key not in available]
     if missing:
-        raise ValueError(
+        raise ParameterNotSampled(
             f"{par} was not a fitted parameter in these results: {missing[0]} is missing. "
-            "Refit including EPS1 and EPS2 among the fitted parameters."
+            f"Refit including {par} among the fitted parameters."
         )
 
     target = np.array([float(results_row[key]) for key in keys])
@@ -388,9 +401,9 @@ def _column_from_labels(labels, par, flat_chain, results_row, tolerance=COLUMN_M
             column = labels.index(candidate)
             break
     else:
-        raise ValueError(
+        raise ParameterNotSampled(
             f"{par} is not among the sampled parameters {labels}. "
-            "Refit including EPS1 and EPS2 among the fitted parameters."
+            f"Refit including {par} among the fitted parameters."
         )
 
     keys = [f"d{par}_{perc:g}" for perc in (16, 50, 84)]
@@ -408,17 +421,39 @@ def _column_from_labels(labels, par, flat_chain, results_row, tolerance=COLUMN_M
 
 
 def eps_samples_from_chain(results_row, flat_chain, labels=None):
-    r"""Turn a flattened chain into physical ``EPS1``/``EPS2`` samples.
+    r"""Physical ``EPS1``/``EPS2`` samples, paired sample by sample.
+
+    The eccentricity-specific face of :func:`physical_samples_from_chain`,
+    which documents the conversion. Both parameters are required here: without
+    the pair there is no eccentricity to speak of.
+    """
+    samples = physical_samples_from_chain(results_row, flat_chain, ("EPS1", "EPS2"), labels=labels)
+    return samples["EPS1"], samples["EPS2"]
+
+
+def _local_scaling(results_row, par):
+    """The ``initial`` and ``factor`` that map local coordinates to physical."""
+    keys = [f"d{par}_initial", f"d{par}_factor"]
+    for key in keys:
+        if key not in _colnames(results_row):
+            raise ParameterNotSampled(
+                f"{par} has no recorded scaling in these results: {key} is missing, "
+                "so its samples cannot be put back into physical units."
+            )
+    return float(results_row[keys[0]]), float(results_row[keys[1]])
+
+
+def physical_samples_from_chain(results_row, flat_chain, parameters, labels=None, strict=True):
+    r"""Turn a flattened chain into physical samples of the named parameters.
 
     The sampler works in local coordinates: column ``i`` of the chain holds
-    ``dEPS1``, the offset from the starting value in units of that parameter's
-    preconditioned scale. The fit records both numbers needed to undo that,
-    ``dEPS1_initial`` and ``dEPS1_factor``, so that
+    ``dA1``, say, the offset from the starting value in units of that
+    parameter's preconditioned scale. The fit records both numbers needed to
+    undo that, ``dA1_initial`` and ``dA1_factor``, so that
 
     .. math::
 
-       \epsilon_1 = \epsilon_1^{\mathrm{initial}}
-                    + \mathrm{d}\epsilon_1 \times \mathrm{factor}.
+       A1 = A1^{\mathrm{initial}} + \mathrm{d}A1 \times \mathrm{factor}.
 
     Parameters
     ----------
@@ -426,28 +461,44 @@ def eps_samples_from_chain(results_row, flat_chain, labels=None):
         One row of a ``*_results.ecsv`` table.
     flat_chain : np.ndarray
         Flattened chain, shape ``(nsamples, ndim)``, in local coordinates.
+    parameters : iterable of str
+        Physical parameter names, e.g. ``("A1", "EPS1", "EPS2")``.
     labels : list of str, optional
         Parameter name per column, as saved by
         :func:`ell1fit.mcmc_utils.save_flat_samples`. When absent -- an HDF5
         chain carries no names -- the columns are identified by their recorded
         percentiles instead.
+    strict : bool
+        Whether a parameter that was not fitted is an error. ``True``, the
+        default, suits a caller that needs a specific parameter and has nothing
+        to say without it. ``False`` suits one that offers a menu -- the orbital
+        summary plot asks for all five orbital parameters and draws whichever
+        the chain actually explored. Either way, a chain that *disagrees* with
+        the table about a parameter both contain still raises: that means the
+        two files are from different fits, which is never something to skip.
 
     Returns
     -------
-    eps1, eps2 : np.ndarray
-        Physical posterior samples, paired sample by sample.
+    dict
+        ``{parameter: np.ndarray}``, in the order requested, holding the
+        physical posterior samples. Parameters skipped under ``strict=False``
+        are simply absent.
     """
     flat_chain = np.atleast_2d(np.asarray(flat_chain, dtype=float))
-    samples = []
-    for par in ("EPS1", "EPS2"):
-        if labels is None:
-            column = _column_for_parameter(flat_chain, results_row, par)
-        else:
-            column = _column_from_labels(list(labels), par, flat_chain, results_row)
-        initial = float(results_row[f"d{par}_initial"])
-        factor = float(results_row[f"d{par}_factor"])
-        samples.append(initial + flat_chain[:, column] * factor)
-    return samples[0], samples[1]
+    samples = {}
+    for par in parameters:
+        try:
+            if labels is None:
+                column = _column_for_parameter(flat_chain, results_row, par)
+            else:
+                column = _column_from_labels(list(labels), par, flat_chain, results_row)
+            initial, factor = _local_scaling(results_row, par)
+        except ParameterNotSampled:
+            if strict:
+                raise
+            continue
+        samples[par] = initial + flat_chain[:, column] * factor
+    return samples
 
 
 RESULTS_SUFFIX = "_results.ecsv"
