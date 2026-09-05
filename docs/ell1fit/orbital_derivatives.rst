@@ -205,6 +205,45 @@ threshold — but a genuinely marginal derivative sitting near
 change in the box. If a result turns on that verdict, vary
 ``--detection-ln-bf`` and check whether the conclusion survives.
 
+Can the limits be cross-checked against the 1-sigma error?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Tempting, and usually wrong. For a Gaussian posterior *centred on zero* the
+99.73% magnitude limit really is three times the one-sigma half-width (and the
+95% one is 1.960 times it, not two — 95% is not 95.45%). Neither condition
+generally holds here, for two independent reasons.
+
+**The posterior is rarely centred on zero.** A non-detection means the
+posterior is *consistent* with zero, not centred on it; in practice it sits
+one to two sigma away. Once it does, :math:`|x|` is folded-normal and its
+high quantiles run well above the interval half-width. Across eight
+symmetric-error test posteriors the direct three-sigma limit came out 19% to
+42% larger than three times the one-sigma half-width. The one case that
+happened to land near zero (:math:`\mu/s = -0.20`) agreed to 0.8%.
+
+**With asymmetric TASC errors the posterior is not Gaussian at all.** This is
+the case that matters, since real ``ell1fit`` output has asymmetric error
+bars — it is why the likelihood is split-normal in the first place. That
+likelihood picks each point's sigma from the *sign* of its residual, so the
+log-likelihood is piecewise quadratic, with a kink wherever a residual crosses
+zero. With equal error bars the curvature is constant and the posterior is
+exactly Gaussian; with unequal ones the curvature jumps in magnitude and sign.
+Measured on five asymmetric-error datasets, the ratio
+:math:`h_{3\sigma}/h_{1\sigma}` ranged from **2.32 to 4.01** against the
+Gaussian 3.000, with excess kurtosis from −0.94 to +1.27 — and it is not
+sampler noise: on one dataset the ratio held at 1.66/2.32 through
+``--nlive`` 500, 2000 and 6000 (3k to 40k samples).
+
+So the deviation is real, large, and specific to each dataset — there is no
+correction factor to apply. This is precisely why the reported limits are
+**empirical quantiles of the chain**, which assume nothing about the shape,
+rather than anything derived from a one-sigma error. If a cross-check is
+wanted, the honest one is to compare the quoted limit against the
+folded-normal quantile implied by the chain's own mean and standard deviation:
+on the symmetric-error runs, where the posterior really is Gaussian, that
+agreed to a few percent every time, and a sharp disagreement is a useful
+signal that the posterior is skewed or kinked.
+
 Reading the output
 ~~~~~~~~~~~~~~~~~~
 
