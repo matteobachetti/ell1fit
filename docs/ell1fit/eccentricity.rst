@@ -152,6 +152,51 @@ The same data, twenty sigma of eccentricity added:
 
 ``ECC_summary`` holds the one-line form of whichever branch was taken.
 
+What gets reported, and at what level
+-------------------------------------
+
+Beside ``ECC_upper_limit`` at 95%, every run reports:
+
+``ECC_upper_limit_3sigma``
+    The 99.73rd percentile of :math:`e`. Unlike the 95% limit, which is ``nan``
+    on a detection because a limit is then not the thing to quote, this one is
+    always a number: beside a measurement it is a cross-check.
+
+``EPS1_50``, ``EPS1_err_lo``, ``EPS1_err_hi``, ``EPS1_err`` (and the same for ``EPS2``)
+    The components themselves, in physical units, with their asymmetric 68%
+    error bars. ``EPS1_err`` is the larger of the two sides — the symmetric
+    number :mod:`ell1fit.create_parfile` writes into a parfile. Before these
+    existed the result table carried only ``dEPS1_16/50/84``, in the sampler's
+    local coordinates.
+
+``EPS1_abs_upper_limit``, ``EPS2_abs_upper_limit``
+    Three-sigma limits on :math:`|\epsilon_1|` and :math:`|\epsilon_2|`.
+
+``EPS_summary``
+    The one-line form, as ``ECC_summary`` is for the eccentricity.
+
+Two conventions are worth stating outright.
+
+**"Three sigma" means 99.73%**, the probability a Gaussian puts inside
+:math:`\pm 3\sigma`. Using the two-sided content for a one-sided limit is what
+the existing 95% default already does — 95% is the two-sided content of two
+sigma, to within a rounding — so the two limits are on the same footing. The
+one-sided alternative, 99.865%, gives a looser number, and the two are easy to
+confuse in a paper.
+
+**The component limits are on the magnitude.** :math:`\epsilon_1 = e\sin\omega`
+can be either sign, so :math:`\epsilon_1 < x` is only a statement if the sign
+is already known, which in a non-detection it is not.
+:math:`|\epsilon_1| < x` is what a non-detection actually establishes.
+
+The two limits are not the same number even for the same data. On a posterior
+sitting at the origin with per-component width :math:`\sigma`, each component's
+magnitude is half-normal and its three-sigma limit is exactly
+:math:`3\,\sigma`, while the eccentricity is Rayleigh and gets
+:math:`\sqrt{-2\ln 0.0027}\,\sigma = 3.44\,\sigma`. The radius of a
+two-dimensional noise cloud is not one of its components, and quoting one for
+the other understates or overstates the limit by 15%.
+
 The periastron angle
 --------------------
 
