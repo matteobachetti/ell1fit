@@ -37,6 +37,7 @@ __all__ = [
     "CONVENTIONS",
     "ORBITAL_PARAMETERS",
     "axis_scale",
+    "plot_orbit_summary",
 ]
 
 
@@ -212,3 +213,161 @@ def axis_scale(parameter, samples):
         label += f"\n({unit_text})"
 
     return AxisScale(parameter=parameter, centre=centre, scale=scale, unit=unit, label=label)
+
+
+#: Inches per corner panel, and the margins around the block of them. Sized so
+#: a two-line axis label fits under the bottom row without being clipped.
+PANEL_INCHES = 1.15
+LABEL_INCHES = 1.05
+ECC_PANEL_INCHES = 3.0
+PANEL_GAP_INCHES = 0.6
+TOP_INCHES = 0.55
+TITLE_INCHES = 0.35
+
+
+def _corner_axes(fig, n, geometry):
+    """A block of ``n`` x ``n`` axes, immune to ``corner``'s own layout call.
+
+    ``corner.corner`` ends by calling ``fig.subplots_adjust``, which would drag
+    a second panel drawn beside it out of place -- or rather, would drag the
+    corner block over the whole figure and leave the second panel underneath
+    it. Axes taken from a ``GridSpec`` with explicit margins ignore the
+    figure's subplot parameters entirely, so the call lands on nothing and both
+    blocks stay where they were put.
+    """
+    from matplotlib.gridspec import GridSpec
+
+    grid = GridSpec(n, n, figure=fig, wspace=0.06, hspace=0.06, **geometry)
+    return [fig.add_subplot(grid[i, j]) for i in range(n) for j in range(n)]
+
+
+def plot_orbit_summary(
+    samples_by_parameter, fname="orbit.jpg", summary=None, bins=80, label_fontsize=5.5
+):
+    """Draw the orbital corner plot beside the eccentricity it implies.
+
+    Left, the parameters of :data:`ORBITAL_PARAMETERS` that this chain actually
+    explored, in physical units, each axis centred on its posterior mean; see
+    :func:`axis_scale` for how the centre and unit are chosen. Right, the
+    eccentricity posterior, drawn by
+    :func:`ell1fit.eccentricity.draw_eccentricity_posterior` so that it is the
+    same panel the standalone plot shows and cannot drift from it.
+
+    Parameters
+    ----------
+    samples_by_parameter : dict
+        ``{parameter: physical samples}``, as
+        :func:`ell1fit.eccentricity.physical_samples_from_chain` returns.
+        Parameters outside :data:`ORBITAL_PARAMETERS` are ignored.
+    fname : str
+        Output image path.
+    summary : dict, optional
+        Output of :func:`ell1fit.eccentricity.eccentricity_summary`, reused for
+        the right-hand panel rather than recomputed.
+    bins : int
+        Histogram bins for the eccentricity panel.
+    label_fontsize : float
+        Size of the corner axis labels, which carry a subtracted centre and so
+        run longer than a bare parameter name.
+
+    Returns
+    -------
+    str
+        ``fname``, for convenience.
+
+    Raises
+    ------
+    ValueError
+        If ``EPS1`` and ``EPS2`` are not both present. Without them there is no
+        eccentricity posterior, and this figure is the one that pairs the two;
+        the plain corner plot of the fit already covers everything else.
+    """
+    import corner
+    import matplotlib.pyplot as plt
+
+    from .eccentricity import draw_eccentricity_posterior
+    from .plotting import plot_style_context
+
+    missing = [par for par in ("EPS1", "EPS2") if par not in samples_by_parameter]
+    if missing:
+        raise ValueError(
+            f"No eccentricity posterior to show: {', '.join(missing)} was not sampled. "
+            "This figure pairs the orbital corner plot with the eccentricity, so it is "
+            "only drawn when both EPS1 and EPS2 were fitted."
+        )
+
+    drawn = [par for par in ORBITAL_PARAMETERS if par in samples_by_parameter]
+    scales = [axis_scale(par, samples_by_parameter[par]) for par in drawn]
+    columns = np.column_stack(
+        [scale.apply(samples_by_parameter[par]) for par, scale in zip(drawn, scales)]
+    )
+
+    n = len(drawn)
+    # The corner block is laid out in inches and only then converted to figure
+    # fractions, so its panels stay square however many parameters there are
+    # and however tall the eccentricity beside them makes the figure.
+    grid_inches = PANEL_INCHES * n
+    corner_block = grid_inches + LABEL_INCHES
+    width = corner_block + PANEL_GAP_INCHES + ECC_PANEL_INCHES + 0.3
+    height = max(corner_block + TOP_INCHES, ECC_PANEL_INCHES + 1.2)
+    grid_bottom = LABEL_INCHES / height
+    grid_top = (LABEL_INCHES + grid_inches) / height
+
+    with plot_style_context():
+        fig = plt.figure(figsize=(width, height))
+        axes = _corner_axes(
+            fig,
+            n,
+            dict(
+                left=LABEL_INCHES / width,
+                right=corner_block / width,
+                bottom=grid_bottom,
+                top=grid_top,
+            ),
+        )
+        corner.corner(
+            columns,
+            labels=[scale.label for scale in scales],
+            quantiles=[0.16, 0.5, 0.84],
+            fig=fig,
+            label_kwargs={"fontsize": label_fontsize},
+            max_n_ticks=3,
+        )
+        for ax in axes:
+            ax.tick_params(labelsize=label_fontsize)
+
+        from matplotlib.gridspec import GridSpec
+
+        # Centred on the corner block rather than stretched to it: a two-parameter
+        # fit must not produce a letterbox histogram, nor a five-parameter one a
+        # column. TITLE_INCHES is the two-line eccentricity summary above it.
+        ecc_inches = min(ECC_PANEL_INCHES, grid_inches)
+        ecc_middle = (grid_bottom + grid_top) / 2
+        right = GridSpec(
+            1,
+            1,
+            figure=fig,
+            left=(corner_block + PANEL_GAP_INCHES) / width,
+            right=1 - 0.15 / width,
+            bottom=ecc_middle - ecc_inches / 2 / height,
+            top=ecc_middle + (ecc_inches / 2 - TITLE_INCHES) / height,
+        )
+        ecc_ax = fig.add_subplot(right[0, 0])
+        draw_eccentricity_posterior(
+            ecc_ax,
+            samples_by_parameter["EPS1"],
+            samples_by_parameter["EPS2"],
+            summary=summary,
+            bins=bins,
+        )
+        # A small eccentricity gives tick labels like "0.00015", seven characters
+        # wide, and the default five of them run into each other in a panel this
+        # narrow. Fewer and smaller; the standalone plot, which is wider relative
+        # to its labels, is left exactly as it was.
+        ecc_ax.locator_params(axis="x", nbins=4)
+        ecc_ax.tick_params(labelsize=label_fontsize + 1)
+
+        fig.savefig(fname, dpi=300)
+        plt.close(fig)
+
+    return fname
