@@ -25,6 +25,7 @@ from astropy.table import Table
 from ..eccentricity import (
     RESULTS_SUFFIX,
     default_chain_file,
+    draw_eccentricity_posterior,
     eccentricity_and_omega,
     eccentricity_summary,
     eccentricity_summary_from_run,
@@ -372,6 +373,45 @@ def test_plot_marks_the_interval_when_detected(tmp_path):
     plot_eccentricity_posterior(eps1, eps2, fname=fname)
 
     assert (tmp_path / "ecc_detected.jpg").exists()
+
+
+def test_the_panel_can_be_drawn_into_an_axis_the_caller_owns(tmp_path):
+    """Same panel, someone else's figure: nothing is created and nothing saved."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    eps1, eps2 = _eps_samples(ecc=20 * SIGMA, omega_deg=71.0, size=20_000)
+    fig, ax = plt.subplots()
+
+    summary = draw_eccentricity_posterior(ax, eps1, eps2)
+
+    assert summary["ECC_detected"]
+    assert ax.get_xlabel() == "Eccentricity"
+    # The median line and the 68% span, on top of the histogram.
+    assert len(ax.lines) == 1
+    assert fig.axes == [ax]
+    assert not list(tmp_path.iterdir())
+    plt.close(fig)
+
+
+def test_the_panel_reuses_a_summary_it_is_handed():
+    """No recomputation, so the panel and the table can never disagree."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    eps1, eps2 = _eps_samples(ecc=0.0, size=20_000)
+    summary = eccentricity_summary(eps1, eps2, upper_limit_level=0.99)
+    fig, ax = plt.subplots()
+
+    returned = draw_eccentricity_posterior(ax, eps1, eps2, summary=summary)
+
+    assert returned is summary
+    assert "99% upper limit" in ax.get_legend().get_texts()[-1].get_text()
+    plt.close(fig)
 
 
 # --- Pipeline integration: _enrich_results_with_eccentricity ----------------

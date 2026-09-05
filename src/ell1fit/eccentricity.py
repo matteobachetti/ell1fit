@@ -67,6 +67,7 @@ from .plotting import plot_style_context
 __all__ = [
     "ParameterNotSampled",
     "default_chain_file",
+    "draw_eccentricity_posterior",
     "eccentricity_and_omega",
     "eccentricity_summary",
     "eccentricity_summary_from_run",
@@ -592,8 +593,59 @@ def eccentricity_summary_from_run(results_file, chain_file=None, row=-1, **kwarg
     return eccentricity_summary(eps1, eps2, **kwargs)
 
 
+def draw_eccentricity_posterior(ax, eps1, eps2, summary=None, bins=80):
+    """Draw the eccentricity posterior into an existing axis.
+
+    The drawing half of :func:`plot_eccentricity_posterior`, split out so that
+    a caller assembling a multi-panel figure gets the *same* panel rather than
+    a second implementation of it that can drift.
+
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        Where to draw. Its figure, style and layout are the caller's business.
+    eps1, eps2 : array-like
+        Paired posterior samples, in physical units.
+    summary : dict, optional
+        Output of :func:`eccentricity_summary`; recomputed with the defaults if
+        not given.
+    bins : int
+        Histogram bins.
+
+    Returns
+    -------
+    dict
+        The summary used, whether passed in or computed here.
+    """
+    if summary is None:
+        summary = eccentricity_summary(eps1, eps2)
+    eccentricity, _ = eccentricity_and_omega(eps1, eps2)
+
+    ax.hist(eccentricity, bins=bins, histtype="stepfilled", color="grey", alpha=0.4)
+    if summary["ECC_detected"]:
+        ax.axvline(summary["ECC_50"], color="k", label="median")
+        ax.axvspan(
+            summary["ECC_16"], summary["ECC_84"], color="k", alpha=0.12, label="68% interval"
+        )
+    else:
+        ax.axvline(
+            summary["ECC_upper_limit"],
+            color="k",
+            ls="--",
+            label=f"{100 * summary['ECC_upper_limit_level']:g}% upper limit",
+        )
+    ax.set_xlabel("Eccentricity")
+    ax.set_ylabel("Posterior samples")
+    ax.set_xlim(0, None)
+    ax.legend(loc="upper right")
+    # The summary line is too long for one 3.5-inch title: break it at the
+    # semicolons and give the top margin back the room it needs.
+    ax.set_title(summary["ECC_summary"].replace("; ", "\n"), fontsize=5)
+    return summary
+
+
 def plot_eccentricity_posterior(eps1, eps2, fname="eccentricity.jpg", summary=None, bins=80):
-    """Plot the eccentricity posterior, marking either the interval or the limit.
+    """Plot the eccentricity posterior on its own, marking the interval or limit.
 
     Parameters
     ----------
@@ -614,32 +666,9 @@ def plot_eccentricity_posterior(eps1, eps2, fname="eccentricity.jpg", summary=No
     """
     import matplotlib.pyplot as plt
 
-    if summary is None:
-        summary = eccentricity_summary(eps1, eps2)
-    eccentricity, _ = eccentricity_and_omega(eps1, eps2)
-
     with plot_style_context():
         fig, ax = plt.subplots()
-        ax.hist(eccentricity, bins=bins, histtype="stepfilled", color="grey", alpha=0.4)
-        if summary["ECC_detected"]:
-            ax.axvline(summary["ECC_50"], color="k", label="median")
-            ax.axvspan(
-                summary["ECC_16"], summary["ECC_84"], color="k", alpha=0.12, label="68% interval"
-            )
-        else:
-            ax.axvline(
-                summary["ECC_upper_limit"],
-                color="k",
-                ls="--",
-                label=f"{100 * summary['ECC_upper_limit_level']:g}% upper limit",
-            )
-        ax.set_xlabel("Eccentricity")
-        ax.set_ylabel("Posterior samples")
-        ax.set_xlim(0, None)
-        ax.legend(loc="upper right")
-        # The summary line is too long for one 3.5-inch title: break it at the
-        # semicolons and give the top margin back the room it needs.
-        ax.set_title(summary["ECC_summary"].replace("; ", "\n"), fontsize=5)
+        draw_eccentricity_posterior(ax, eps1, eps2, summary=summary, bins=bins)
         fig.subplots_adjust(top=0.88)
         fig.savefig(fname, dpi=300)
         plt.close(fig)
