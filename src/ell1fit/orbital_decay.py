@@ -2,11 +2,12 @@
 ``ell1fit`` TASC results, replacing a standalone research script that did the
 same thing with ``emcee`` and an externally-maintained reference ``.par``.
 
-Two models are always fit and compared, never one in isolation: M0 is a
-quadratic ``delta_tasc(t)`` (offset, linear drift, PBDOT), M1 adds a cubic
-term (PBDDOT). Their evidences (via nested sampling) give a Bayes factor for
-whether the data need the cubic term at all -- that comparison, not just the
-PBDOT point estimate, is the reason this command exists.
+Three nested models are always fit and compared, never one in isolation:
+MLIN is an offset plus a linear drift and no period derivative at all, M0
+adds the quadratic term (PBDOT), M1 adds the cubic one (PBDDOT). Their
+evidences (via nested sampling) give one Bayes factor per derivative --
+MLIN-vs-M0 for PBDOT, M0-vs-M1 for PBDDOT -- and those comparisons, not just
+the point estimates, are the reason this command exists.
 """
 
 import argparse
@@ -189,7 +190,7 @@ def fit_orbital_decay(
     reference_epoch=None,
     write_parfile=True,
 ):
-    """Load, validate, fit M0 and M1, and write every output artifact.
+    """Load, validate, fit MLIN, M0 and M1, and write every output artifact.
 
     Returns
     -------
@@ -206,6 +207,19 @@ def fit_orbital_decay(
     baseline_days = float(x.max() - x.min())
     pb0_days = float(ref_model.PB.value)
 
+    mlin_result = _fit_model(
+        1,
+        x,
+        y,
+        yerrn,
+        yerrp,
+        baseline_days,
+        ["b0", "b1"],
+        nlive,
+        dlogz,
+        seeds,
+        outroot + "_mlin",
+    )
     m0_result = _fit_model(
         2,
         x,
@@ -233,7 +247,12 @@ def fit_orbital_decay(
         outroot + "_m1",
     )
 
-    bf = bayes_factor(m0_result, m1_result)
+    bf_pbddot = bayes_factor(
+        m0_result, m1_result, lower_label="M0 (PBDOT only)", higher_label="M1 (PBDOT+PBDDOT)"
+    )
+    bf_pbdot = bayes_factor(
+        mlin_result, m0_result, lower_label="MLIN (no PBDOT)", higher_label="M0 (PBDOT)"
+    )
 
     plot_mcmc_comparison(
         [m0_result["flat_samples"], m1_result["flat_samples"]],
@@ -261,6 +280,13 @@ def fit_orbital_decay(
         "baseline_days": baseline_days,
         "reference_epoch": float(ref_model.PEPOCH.value),
         "PB0_days": pb0_days,
+        "MLIN": {
+            "log_evidence": mlin_result["log_evidence"],
+            "log_evidence_err": mlin_result["log_evidence_err"],
+            "laplace_log_evidence": mlin_result["laplace_log_evidence"],
+            "peak_shortfall": mlin_result["peak_shortfall"],
+            "converged": mlin_result["converged"],
+        },
         "M0": {
             "PBDOT": phys_m0["PBDOT"],
             "PBDOT_err": phys_err(2, beta_16_0, beta_50_0, beta_84_0, "PBDOT"),
@@ -281,7 +307,13 @@ def fit_orbital_decay(
             "peak_shortfall": m1_result["peak_shortfall"],
             "converged": m1_result["converged"],
         },
-        "bayes_factor": bf,
+        # "bayes_factor" is the M0-vs-M1 comparison this command has always
+        # reported, kept under its original key so existing readers of the
+        # JSON keep working; "bayes_factor_pbddot" is the same dict under the
+        # name that says which derivative it is about.
+        "bayes_factor": bf_pbddot,
+        "bayes_factor_pbddot": bf_pbddot,
+        "bayes_factor_pbdot": bf_pbdot,
     }
 
     with open(outroot + "_results.json", "w") as fobj:
@@ -292,8 +324,13 @@ def fit_orbital_decay(
 
     logging.info(
         f"M0 PBDOT = {phys_m0['PBDOT']:.4e}, "
-        f"ln BF (M1/M0) = {bf['ln_bf']:.2f} +- {bf['ln_bf_err']:.2f} "
-        f"({bf['interpretation']})"
+        f"ln BF (M0/MLIN) = {bf_pbdot['ln_bf']:.2f} +- {bf_pbdot['ln_bf_err']:.2f} "
+        f"({bf_pbdot['interpretation']})"
+    )
+    logging.info(
+        f"M1 PBDDOT = {phys_m1['PBDDOT']:.4e} 1/yr, "
+        f"ln BF (M1/M0) = {bf_pbddot['ln_bf']:.2f} +- {bf_pbddot['ln_bf_err']:.2f} "
+        f"({bf_pbddot['interpretation']})"
     )
 
     return results

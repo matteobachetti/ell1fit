@@ -76,6 +76,7 @@ def null_case():
     beta_true = np.array([50.0, 30.0, -800.0])
     x, y, yerrn, yerrp = _synthetic_dataset(beta_true, baseline_days)
 
+    mlin = _fit(1, x, y, yerrn, yerrp, baseline_days, ["b0", "b1"])
     m0 = _fit(2, x, y, yerrn, yerrp, baseline_days, ["b0", "b1", "b2"])
     m1 = _fit(3, x, y, yerrn, yerrp, baseline_days, ["b0", "b1", "b2", "b3"])
     return {
@@ -83,8 +84,33 @@ def null_case():
         "baseline_days": baseline_days,
         "x": x,
         "y": y,
+        "mlin": mlin,
         "m0": m0,
         "m1": m1,
+    }
+
+
+@pytest.fixture(scope="module")
+def no_pbdot_case():
+    """Data generated with no quadratic term at all: the null case for PBDOT.
+
+    Deliberately built from an order-1 ``beta_true``, so the quadratic
+    coefficient is exactly zero rather than merely small -- a "PBDOT is not
+    detected" test has to be run against data that genuinely has none.
+    """
+    baseline_days = 3000.0
+    beta_true = np.array([50.0, 30.0])
+    x, y, yerrn, yerrp = _synthetic_dataset(beta_true, baseline_days, seed=SEED + 2)
+
+    mlin = _fit(1, x, y, yerrn, yerrp, baseline_days, ["b0", "b1"])
+    m0 = _fit(2, x, y, yerrn, yerrp, baseline_days, ["b0", "b1", "b2"])
+    return {
+        "beta_true": beta_true,
+        "baseline_days": baseline_days,
+        "x": x,
+        "y": y,
+        "mlin": mlin,
+        "m0": m0,
     }
 
 
@@ -118,6 +144,44 @@ def test_null_case_bayes_factor_favors_m0(null_case):
     bf = bayes_factor(null_case["m0"], null_case["m1"])
     assert bf["ln_bf"] < 0
     assert "M0" in bf["interpretation"]
+
+
+def test_bayes_factor_labels_are_configurable():
+    """The PBDOT comparison is between a different pair of models than the
+    PBDDOT one, so the interpretation text cannot name M0 and M1."""
+    lower = {"log_evidence": 0.0, "log_evidence_err": 0.1}
+    higher = {"log_evidence": 10.0, "log_evidence_err": 0.1}
+    bf = bayes_factor(lower, higher, lower_label="MLIN", higher_label="M0")
+    assert "M0" in bf["interpretation"]
+    assert "MLIN" not in bf["interpretation"]
+    assert bayes_factor(higher, lower, lower_label="MLIN", higher_label="M0")["interpretation"] == (
+        "very strong evidence for MLIN"
+    )
+
+
+def test_pbdot_bayes_factor_favors_the_quadratic_when_pbdot_is_present(null_case):
+    """null_case's data carries a large quadratic term, so dropping PBDOT
+    entirely must be strongly disfavoured."""
+    bf = bayes_factor(null_case["mlin"], null_case["m0"], lower_label="MLIN", higher_label="M0")
+    assert bf["ln_bf"] > 0
+    assert "M0" in bf["interpretation"]
+
+
+def test_pbdot_bayes_factor_favors_the_linear_model_when_pbdot_is_absent(no_pbdot_case):
+    bf = bayes_factor(
+        no_pbdot_case["mlin"], no_pbdot_case["m0"], lower_label="MLIN", higher_label="M0"
+    )
+    assert bf["ln_bf"] < 0
+    assert "MLIN" in bf["interpretation"]
+
+
+def test_linear_fit_recovers_its_own_beta_within_3sigma(no_pbdot_case):
+    beta_16, beta_84 = np.percentile(no_pbdot_case["mlin"]["flat_samples"], [16, 84], axis=0)
+    sigma = (beta_84 - beta_16) / 2
+    pull = (
+        np.median(no_pbdot_case["mlin"]["flat_samples"], axis=0) - no_pbdot_case["beta_true"]
+    ) / sigma
+    assert np.all(np.abs(pull) < 3), f"pulls too large: {pull}"
 
 
 def test_pbddot_case_recovers_beta3_within_3sigma(pbddot_case):

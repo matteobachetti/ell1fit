@@ -21,6 +21,7 @@ from scipy.optimize import minimize
 
 
 __all__ = [
+    "DETECTION_LN_BF",
     "PEAK_SHORTFALL_GATE",
     "bayes_factor",
     "default_bounds",
@@ -268,10 +269,28 @@ def run_seed_scatter(loglikelihood, bounds, labels, n_seeds=3, nlive=500, dlogz=
     }
 
 
-def bayes_factor(result_m0, result_m1):
-    """ln BF (M1 over M0) from two :func:`run_seed_scatter` results, with a
-    Jeffreys'-scale text interpretation (Kass & Raftery 1995 grading of
-    ``2 * ln BF``).
+#: ``ln BF`` above which the extra parameter is taken to be detected, so that
+#: a measurement is quoted instead of an upper limit. Not a new threshold: it
+#: is exactly where :func:`bayes_factor`'s own Kass & Raftery grading of
+#: ``2 * ln BF`` stops saying "inconclusive".
+DETECTION_LN_BF = 1.0
+
+
+def bayes_factor(
+    result_lower,
+    result_higher,
+    lower_label="M0 (PBDOT only)",
+    higher_label="M1 (PBDOT+PBDDOT)",
+):
+    """ln BF (the higher model over the lower one) from two
+    :func:`run_seed_scatter` results, with a Jeffreys'-scale text
+    interpretation (Kass & Raftery 1995 grading of ``2 * ln BF``).
+
+    "Lower" and "higher" mean fewer and more parameters: the two comparisons
+    ``ell1decay`` makes are MLIN-vs-M0 (does the data need ``PBDOT``?) and
+    M0-vs-M1 (does it need ``PBDDOT``?), so the model names cannot be baked
+    into the interpretation text. The defaults keep the M0/M1 wording this
+    function had when it only ever served the second comparison.
 
     Returns
     -------
@@ -279,8 +298,8 @@ def bayes_factor(result_m0, result_m1):
         ``ln_bf``, ``ln_bf_err`` (seed-scatter errors combined in
         quadrature), ``interpretation``.
     """
-    ln_bf = result_m1["log_evidence"] - result_m0["log_evidence"]
-    ln_bf_err = float(np.hypot(result_m0["log_evidence_err"], result_m1["log_evidence_err"]))
+    ln_bf = result_higher["log_evidence"] - result_lower["log_evidence"]
+    ln_bf_err = float(np.hypot(result_lower["log_evidence_err"], result_higher["log_evidence_err"]))
 
     grade = 2 * abs(ln_bf)
     if grade < 2:
@@ -291,7 +310,7 @@ def bayes_factor(result_m0, result_m1):
         strength = "strong"
     else:
         strength = "very strong"
-    favored = "M1 (PBDOT+PBDDOT)" if ln_bf > 0 else "M0 (PBDOT only)"
+    favored = higher_label if ln_bf > 0 else lower_label
     interpretation = f"{strength} evidence for {favored}" if grade >= 2 else "inconclusive"
 
     return {"ln_bf": float(ln_bf), "ln_bf_err": ln_bf_err, "interpretation": interpretation}
