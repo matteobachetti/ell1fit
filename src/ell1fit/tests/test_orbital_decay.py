@@ -19,7 +19,7 @@ from astropy.table import Table
 pytest.importorskip("dynesty")
 
 from ..mcmc_utils import plot_mcmc_comparison
-from ..orbital_decay import fit_orbital_decay
+from ..orbital_decay import _write_diagnostic_plot, fit_orbital_decay
 from ..orbital_decay_data import (
     OrbitalModelCompatibilityError,
     _build_models,
@@ -262,6 +262,70 @@ def test_plot_mcmc_comparison_smoke(null_case, tmp_path):
         fname,
     )
     assert os.path.exists(fname)
+    assert os.path.getsize(fname) > 0
+
+
+def _fake_result(ndim, seed=1):
+    """Just enough of a sampler result for the diagnostic plot: it reads only
+    ``flat_samples``."""
+    rng = np.random.default_rng(seed)
+    return {"flat_samples": rng.normal(size=(300, ndim)) * 1e-3}
+
+
+def test_diagnostic_plot_is_written_at_a_column_width(tmp_path, monkeypatch):
+    """The delta_tasc figure goes into a paper, so its width is part of its
+    contract: a figure that is not a column wide gets rescaled by the
+    typesetter, and rescaling shrinks the 7-point labels with it.
+
+    This is also the only test this figure has -- before the style
+    standardisation it had none at all, and nothing else reaches it.
+    """
+    from matplotlib.figure import Figure
+
+    from ..plotting import figure_size
+
+    sizes = []
+    real_savefig = Figure.savefig
+
+    def _savefig(self, *args, **kwargs):
+        sizes.append(tuple(self.get_size_inches()))
+        return real_savefig(self, *args, **kwargs)
+
+    monkeypatch.setattr(Figure, "savefig", _savefig)
+
+    x = np.linspace(0.0, 400.0, 12)
+    y = 1e-3 * x
+    yerr = np.full_like(x, 5.0)
+
+    fname = _write_diagnostic_plot(
+        x,
+        y,
+        yerr,
+        yerr,
+        baseline_days=400.0,
+        m0_result=_fake_result(3),
+        m1_result=_fake_result(4, seed=2),
+        fname=str(tmp_path / "decay_data"),
+    )
+
+    # A bare root picks up the run's format, which defaults to vector PDF.
+    assert fname.endswith(".pdf")
+    assert os.path.getsize(fname) > 0
+    assert sizes == [figure_size("column-tall")]
+
+
+def test_diagnostic_plot_honours_an_explicit_extension(tmp_path):
+    fname = _write_diagnostic_plot(
+        np.linspace(0.0, 400.0, 8),
+        np.zeros(8),
+        np.full(8, 5.0),
+        np.full(8, 5.0),
+        baseline_days=400.0,
+        m0_result=_fake_result(3),
+        m1_result=_fake_result(4, seed=2),
+        fname=str(tmp_path / "decay_data.png"),
+    )
+    assert fname.endswith(".png")
     assert os.path.getsize(fname) > 0
 
 

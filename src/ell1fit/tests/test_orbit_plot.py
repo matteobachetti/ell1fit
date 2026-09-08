@@ -10,16 +10,12 @@ silently collapse; and that the corner panels stay square whatever the
 eccentricity panel does to the figure's height.
 """
 
-import matplotlib
+import numpy as np
+import pytest
+from matplotlib.figure import Figure
 
-matplotlib.use("Agg")
-
-import numpy as np  # noqa: E402
-import pytest  # noqa: E402
-from matplotlib.figure import Figure  # noqa: E402
-
-from ..eccentricity import eccentricity_summary  # noqa: E402
-from ..orbit_plot import ORBITAL_PARAMETERS, plot_orbit_summary  # noqa: E402
+from ..eccentricity import eccentricity_summary
+from ..orbit_plot import ORBITAL_PARAMETERS, plot_orbit_summary
 
 
 SEED = 20260905

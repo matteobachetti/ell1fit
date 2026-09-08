@@ -11,6 +11,7 @@ from .likelihoods import pletsch_clarke_likelihood
 from .likelihoods import rayleigh_as_likelihood
 from .logging import configure_logging
 from .pipeline import ell1fit
+from .plotting import add_figure_format_argument, set_figure_format
 
 
 __all__ = [
@@ -151,7 +152,9 @@ def main(args=None):
         ),
     )
 
+    add_figure_format_argument(parser)
     args = parser.parse_args(args)
+    set_figure_format(args.figure_format)
     files = args.files
     parfiles = args.parfile
 

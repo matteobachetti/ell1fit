@@ -242,7 +242,7 @@ def _corner_axes(fig, n, geometry):
 
 
 def plot_orbit_summary(
-    samples_by_parameter, fname="orbit.jpg", summary=None, bins=80, label_fontsize=5.5
+    samples_by_parameter, fname="orbit", summary=None, bins=80, label_fontsize=None
 ):
     """Draw the orbital corner plot beside the eccentricity it implies.
 
@@ -260,20 +260,22 @@ def plot_orbit_summary(
         :func:`ell1fit.eccentricity.physical_samples_from_chain` returns.
         Parameters outside :data:`ORBITAL_PARAMETERS` are ignored.
     fname : str
-        Output image path.
+        Output root, or a complete file name; see
+        :func:`ell1fit.plotting.figure_path`.
     summary : dict, optional
         Output of :func:`ell1fit.eccentricity.eccentricity_summary`, reused for
         the right-hand panel rather than recomputed.
     bins : int
         Histogram bins for the eccentricity panel.
-    label_fontsize : float
+    label_fontsize : float, optional
         Size of the corner axis labels, which carry a subtracted centre and so
-        run longer than a bare parameter name.
+        run longer than a bare parameter name. Defaults to
+        :data:`ell1fit.plotting.CORNER_LABEL_SIZE`.
 
     Returns
     -------
     str
-        ``fname``, for convenience.
+        The path written.
 
     Raises
     ------
@@ -286,7 +288,10 @@ def plot_orbit_summary(
     import matplotlib.pyplot as plt
 
     from .eccentricity import draw_eccentricity_posterior
-    from .plotting import plot_style_context
+    from .plotting import CORNER_LABEL_SIZE, plot_style_context, save_figure
+
+    if label_fontsize is None:
+        label_fontsize = CORNER_LABEL_SIZE
 
     missing = [par for par in ("EPS1", "EPS2") if par not in samples_by_parameter]
     if missing:
@@ -367,7 +372,4 @@ def plot_orbit_summary(
         ecc_ax.locator_params(axis="x", nbins=4)
         ecc_ax.tick_params(labelsize=label_fontsize + 1)
 
-        fig.savefig(fname, dpi=300)
-        plt.close(fig)
-
-    return fname
+        return save_figure(fig, fname)

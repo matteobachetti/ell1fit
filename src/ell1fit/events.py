@@ -15,7 +15,9 @@ import numpy as np
 from hendrics.io import load_events
 
 from .phase_utils import _mjd_to_sec
+from .plotting import figure_size as _figure_size
 from .plotting import plot_style_context as _plot_style_context
+from .plotting import save_figure as _save_figure
 
 
 __all__ = [
@@ -28,7 +30,7 @@ def _load_and_format_events(
     energy_range,
     pepoch,
     plotlc=True,
-    plotfile="lightcurve.jpg",
+    plotfile="lightcurve",
     return_energy=False,
     use_pi=False,
 ):
@@ -67,10 +69,9 @@ def _load_and_format_events(
         lc = events.to_lc(100)
 
         with _plot_style_context():
-            fig = plt.figure("LC", figsize=(3.5, 2.65))
+            fig = plt.figure("LC", figsize=_figure_size("column"), layout="constrained")
             lc.plot(ax=plt.gca())
-            plt.savefig(plotfile)
-            plt.close(fig)
+            _save_figure(fig, plotfile)
 
     if energy_range is not None:
         events.filter_energy_range(energy_range, inplace=True)
@@ -98,7 +99,7 @@ def _load_events_for_all_files(files, energy_range, pepoch, get_outroot, use_pi=
             fname,
             energy_range,
             pepoch[i],
-            plotfile=get_outroot(i) + f"_lightcurve_{i}.jpg",
+            plotfile=get_outroot(i) + f"_lightcurve_{i}",
             return_energy=True,
             use_pi=use_pi,
         )

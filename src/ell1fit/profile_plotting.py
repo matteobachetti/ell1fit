@@ -11,7 +11,10 @@ import numpy as np
 from scipy.ndimage import gaussian_filter
 
 from .phase_utils import phases_from_zero_to_one
+from .plotting import figure_size as _figure_size
+from .plotting import image_axes as _image_axes
 from .plotting import plot_style_context as _plot_style_context
+from .plotting import save_figure as _save_figure
 
 
 __all__ = [
@@ -83,6 +86,7 @@ def _plot_phaseogram(phases, times, ax0, ax1, norm="meansub_smooth"):
     X, Y = np.meshgrid(xedges, yedges)
     H = normalize_dyn_profile(H.T, norm)
     ax1.pcolormesh(X, Y, H, cmap="cubehelix")
+    _image_axes(ax1)
     for num in (0.5, 1, 1.5):
         ax1.axvline(num, color="grey", lw=2, ls="--")
 
@@ -94,15 +98,16 @@ def _plot_phaseogram(phases, times, ax0, ax1, norm="meansub_smooth"):
 def _compare_phaseograms(phase1, phase2, times, fname):
     """Compare two phase solutions by plotting side-by-side phaseograms."""
     with _plot_style_context():
-        fig = plt.figure(figsize=(7, 7))
-        gs = plt.GridSpec(2, 2, height_ratios=(1, 3))
-        ax00 = plt.subplot(gs[0, 0])
-        ax10 = plt.subplot(gs[1, 0], sharex=ax00)
-        ax01 = plt.subplot(gs[0, 1], sharey=ax00)
-        ax11 = plt.subplot(gs[1, 1], sharex=ax01, sharey=ax10)
+        fig = plt.figure(figsize=_figure_size("page"), layout="constrained")
+        # ``figure=`` is what lets constrained layout see this grid; without it
+        # matplotlib warns and falls back to laying the panels out by default.
+        gs = fig.add_gridspec(2, 2, height_ratios=(1, 3))
+        ax00 = fig.add_subplot(gs[0, 0])
+        ax10 = fig.add_subplot(gs[1, 0], sharex=ax00)
+        ax01 = fig.add_subplot(gs[0, 1], sharey=ax00)
+        ax11 = fig.add_subplot(gs[1, 1], sharex=ax01, sharey=ax10)
 
         _plot_phaseogram(phases_from_zero_to_one(phase1), times, ax00, ax10)
         _plot_phaseogram(phases_from_zero_to_one(phase2), times, ax01, ax11)
 
-        plt.savefig(fname)
-        plt.close(fig)
+        return _save_figure(fig, fname)

@@ -41,7 +41,7 @@ def _plot_phaseogram_set(reference_phases, fitted_phases, times_from_pepoch, out
             reference_phases[i],
             phases_from_zero_to_one(fitted_phases[i]),
             times_from_pepoch[i],
-            fname=outroots[i] + suffix + ".jpg",
+            fname=outroots[i] + suffix,
         )
 
 

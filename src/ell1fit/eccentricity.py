@@ -76,7 +76,14 @@ from astropy.table import Table
 from scipy.special import erf, ndtri_exp
 
 from .mcmc_utils import SAMPLES_SUFFIX
-from .plotting import plot_style_context
+from .plotting import (
+    SUMMARY_TITLE_SIZE,
+    add_figure_format_argument,
+    figure_size,
+    plot_style_context,
+    save_figure,
+    set_figure_format,
+)
 
 
 __all__ = [
@@ -799,11 +806,11 @@ def draw_eccentricity_posterior(ax, eps1, eps2, summary=None, bins=80):
     ax.legend(loc="upper right")
     # The summary line is too long for one 3.5-inch title: break it at the
     # semicolons and give the top margin back the room it needs.
-    ax.set_title(summary["ECC_summary"].replace("; ", "\n"), fontsize=5)
+    ax.set_title(summary["ECC_summary"].replace("; ", "\n"), fontsize=SUMMARY_TITLE_SIZE)
     return summary
 
 
-def plot_eccentricity_posterior(eps1, eps2, fname="eccentricity.jpg", summary=None, bins=80):
+def plot_eccentricity_posterior(eps1, eps2, fname="eccentricity", summary=None, bins=80):
     """Plot the eccentricity posterior on its own, marking the interval or limit.
 
     Parameters
@@ -811,7 +818,8 @@ def plot_eccentricity_posterior(eps1, eps2, fname="eccentricity.jpg", summary=No
     eps1, eps2 : array-like
         Paired posterior samples, in physical units.
     fname : str
-        Output image path.
+        Output root, or a complete file name; see
+        :func:`ell1fit.plotting.figure_path`.
     summary : dict, optional
         Output of :func:`eccentricity_summary`; recomputed with the defaults if
         not given.
@@ -821,18 +829,16 @@ def plot_eccentricity_posterior(eps1, eps2, fname="eccentricity.jpg", summary=No
     Returns
     -------
     str
-        ``fname``, for convenience.
+        The path written.
     """
     import matplotlib.pyplot as plt
 
     with plot_style_context():
-        fig, ax = plt.subplots()
+        # Square: a posterior histogram has no natural aspect, and the
+        # two-line numerical summary above it needs the vertical room.
+        fig, ax = plt.subplots(figsize=figure_size("column-square"), layout="constrained")
         draw_eccentricity_posterior(ax, eps1, eps2, summary=summary, bins=bins)
-        fig.subplots_adjust(top=0.88)
-        fig.savefig(fname, dpi=300)
-        plt.close(fig)
-
-    return fname
+        return save_figure(fig, fname)
 
 
 def main(args=None):
@@ -866,7 +872,7 @@ def main(args=None):
     parser.add_argument(
         "--plot",
         default=None,
-        help="Output plot path (default: <outroot>_eccentricity.jpg)",
+        help="Output plot path (default: <outroot>_eccentricity)",
     )
     parser.add_argument(
         "--orbit-plot",
@@ -875,12 +881,14 @@ def main(args=None):
         help=(
             "Output path for the orbital summary: the orbital parameters this fit "
             "explored, in physical units, beside the eccentricity they imply "
-            "(default: <outroot>_orbit.jpg)"
+            "(default: <outroot>_orbit)"
         ),
     )
+    add_figure_format_argument(parser)
     parsed = parser.parse_args(args)
 
     configure_logging()
+    set_figure_format(parsed.figure_format)
 
     samples = load_orbital_samples(
         parsed.results_file,
@@ -899,7 +907,7 @@ def main(args=None):
 
     plot_path = parsed.plot
     if plot_path is None:
-        plot_path = output_root(parsed.results_file) + "_eccentricity.jpg"
+        plot_path = output_root(parsed.results_file) + "_eccentricity"
     plot_eccentricity_posterior(eps1, eps2, fname=plot_path, summary=summary)
     print(f"\nPlot saved to {plot_path}")
 
@@ -907,6 +915,6 @@ def main(args=None):
 
     orbit_path = parsed.orbit_plot
     if orbit_path is None:
-        orbit_path = output_root(parsed.results_file) + "_orbit.jpg"
+        orbit_path = output_root(parsed.results_file) + "_orbit"
     plot_orbit_summary(samples, fname=orbit_path, summary=summary)
     print(f"Orbit summary saved to {orbit_path}")

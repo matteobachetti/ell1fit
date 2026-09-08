@@ -64,14 +64,14 @@ The orbit summary figure
 ------------------------
 
 Whenever a run has an eccentricity to show — that is, whenever both ``EPS1``
-and ``EPS2`` were fitted — it also writes ``<outroot>_orbit.jpg``, which puts
+and ``EPS2`` were fitted — it also writes ``<outroot>_orbit.pdf``, which puts
 the orbit and its eccentricity side by side: on the left a corner plot of
 whichever of ``A1``, ``PB``, ``TASC``, ``EPS1`` and ``EPS2`` the chain actually
 explored, on the right the eccentricity posterior described above. The pipeline
 writes it at the end of a fit and ``ell1ecc`` writes it from a finished run;
 ``--orbit-plot`` renames it.
 
-This is not the same picture as the main ``<outroot>_corner.jpg``. That one is
+This is not the same picture as the main ``<outroot>_corner.pdf``. That one is
 drawn in the sampler's *local* coordinates — offsets from the starting
 solution, in units of each parameter's preconditioned scale — which is the
 right frame for asking whether the chain moved and a useless one for reading a

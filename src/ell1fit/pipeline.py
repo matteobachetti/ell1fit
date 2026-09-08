@@ -50,7 +50,9 @@ from .phase_utils import _calculate_phases
 from .phase_utils import ell1_truncation_error
 from .phase_utils import folded_profile
 from .phase_utils import phases_around_zero
+from .plotting import figure_size as _figure_size
 from .plotting import plot_style_context as _plot_style_context
+from .plotting import save_figure as _save_figure
 from .posterior import _build_posterior_functions
 from .posterior import _trace_phase_0_likelihood
 from .priors import assign_logpriors
@@ -299,8 +301,8 @@ def _enrich_results_with_eccentricity(results, outroot, requested_parameter_name
     eps1, eps2 = samples["EPS1"], samples["EPS2"]
     summary = eccentricity_summary(eps1, eps2)
     results.update(summary)
-    plot_eccentricity_posterior(eps1, eps2, fname=outroot + "_eccentricity.jpg", summary=summary)
-    plot_orbit_summary(samples, fname=outroot + "_orbit.jpg", summary=summary)
+    plot_eccentricity_posterior(eps1, eps2, fname=outroot + "_eccentricity", summary=summary)
+    plot_orbit_summary(samples, fname=outroot + "_orbit", summary=summary)
     logging.info(f"Eccentricity: {summary['ECC_summary']}")
     return results
 
@@ -378,7 +380,7 @@ def _prepare_templates_and_phase_priors(
             profile[i],
             nharm=nharm,
             final_nbin=200,
-            imagefile=get_outroot(i) + "_template_raw.jpg",
+            imagefile=get_outroot(i) + "_template_raw",
         )
 
         if use_weight:
@@ -386,7 +388,7 @@ def _prepare_templates_and_phase_priors(
                 profile_weight[i],
                 nharm=nharm,
                 final_nbin=200,
-                imagefile=get_outroot(i) + "_template.jpg",
+                imagefile=get_outroot(i) + "_template",
             )
             template = _undilute_template(template, weights[i])
         else:
@@ -465,14 +467,13 @@ def _build_profiles_and_weights(
         # iterative refinement calls this repeatedly.
         with _plot_style_context():
             for i, (p, pw) in enumerate(zip(profile, profile_weight)):
-                fig = plt.figure(figsize=(3.5, 2.65))
+                fig = plt.figure(figsize=_figure_size("column"), layout="constrained")
                 plt.plot(np.concatenate((p, p)) / p.max(), label="unweighted")
                 plt.plot(np.concatenate((pw, pw)) / pw.max(), label="weighted")
                 plt.xlabel("Phase bin (two cycles)")
                 plt.ylabel("Normalized counts")
                 plt.legend()
-                plt.savefig(get_outroot(i) + "_weighted_profile_comparison.jpg")
-                plt.close(fig)
+                _save_figure(fig, get_outroot(i) + "_weighted_profile_comparison")
     else:
         profile_weight = profile
 

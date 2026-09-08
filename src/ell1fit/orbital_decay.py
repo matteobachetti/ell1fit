@@ -22,6 +22,7 @@ import numpy as np
 
 from .limits import DEFAULT_UPPER_LIMIT_LEVEL, signed_parameter_summary
 from .logging import configure_logging
+from .plotting import add_figure_format_argument, set_figure_format
 from .mcmc_utils import plot_mcmc_comparison
 from .orbital_decay_data import (
     OrbitalModelCompatibilityError,
@@ -42,7 +43,6 @@ from .orbital_decay_sampling import (
     laplace_cross_check,
     run_seed_scatter,
 )
-
 
 __all__ = ["fit_orbital_decay", "main"]
 
@@ -125,61 +125,91 @@ def _derivative_summary(
     return summary
 
 
-def _write_diagnostic_plot(x, y, yerrn, yerrp, baseline_days, m0_result, m1_result, fname):
+def _write_diagnostic_plot(
+    x, y, yerrn, yerrp, baseline_days, m0_result, m1_result, fname, units="hour"
+):
     """delta_tasc(t) data with both models' median curves and posterior-draw
     fans overlaid, distinguishably colored, with a residual panel.
 
-    Uses ``constrained_layout`` rather than this package's other plots' hand-
-    tuned ``figure.subplot.*`` margins (see :mod:`ell1fit.plotting`): those
-    were tuned for one paper's fixed-size single-model corner plots, and
-    break under this plot's now-required legend and two-model overlay.
+    Two panels stacked inside one journal column, so the figure needs the room
+    that ``"column-tall"`` gives it; margins come from ``constrained_layout``,
+    which leaves the width exactly a column (see :mod:`ell1fit.plotting`).
+
+    The residual panel stays in seconds whatever ``units`` the data panel is
+    drawn in: the residuals of a fit that worked are several orders of magnitude
+    smaller than the signal, and rescaling both by the same factor would print
+    the lower axis as a row of zeros.
     """
     import matplotlib.pyplot as plt
+    from astropy import units as u
+
+    from .plotting import DATA_COLOR, GUIDE_COLOR, figure_size, plot_style_context, save_figure
+
+    factor = u.s.to(units)
 
     x_smooth = np.linspace(x.min(), x.max(), 400)
 
-    fig, (ax_data, ax_resid) = plt.subplots(
-        2, 1, sharex=True, figsize=(7, 5.5), height_ratios=[3, 1], constrained_layout=True
-    )
+    with plot_style_context():
+        fig, (ax_data, ax_resid) = plt.subplots(
+            2,
+            1,
+            sharex=True,
+            figsize=figure_size("column-tall"),
+            height_ratios=[3, 1.5],
+            layout="constrained",
+        )
 
-    ax_data.errorbar(
-        x, y, yerr=[yerrn, yerrp], fmt="o", color="black", ms=4, capsize=2, label="data", zorder=5
-    )
+        data_handle = ax_data.errorbar(
+            x,
+            y * factor,
+            yerr=[yerrn * factor, yerrp * factor],
+            fmt="o",
+            color=DATA_COLOR,
+            ms=3.5,
+            zorder=5,
+        )
+        handles, labels = [data_handle], ["data"]
 
-    models = [("M0 (PBDOT)", m0_result, "C0", "-"), ("M1 (PBDOT+PBDDOT)", m1_result, "C1", "--")]
-    for name, result, color, linestyle in models:
-        draws = result["flat_samples"]
-        n_draws = min(200, draws.shape[0])
-        draw_idx = np.random.default_rng(0).choice(draws.shape[0], n_draws, replace=False)
-        for i in draw_idx:
-            ax_data.plot(
+        models = [
+            ("M0 (PBDOT)", m0_result, "C0", "-"),
+            ("M1 (PBDOT+PBDDOT)", m1_result, "C1", "--"),
+        ]
+        for name, result, color, linestyle in models:
+            draws = result["flat_samples"]
+            n_draws = min(200, draws.shape[0])
+            draw_idx = np.random.default_rng(0).choice(draws.shape[0], n_draws, replace=False)
+            for i in draw_idx:
+                ax_data.plot(
+                    x_smooth,
+                    delta_tasc_model(draws[i], x_smooth, baseline_days) * factor,
+                    color=color,
+                    alpha=0.02,
+                    zorder=1,
+                )
+            beta_median = np.median(draws, axis=0)
+            (line,) = ax_data.plot(
                 x_smooth,
-                delta_tasc_model(draws[i], x_smooth, baseline_days),
+                delta_tasc_model(beta_median, x_smooth, baseline_days) * factor,
                 color=color,
-                alpha=0.02,
-                zorder=1,
+                linestyle=linestyle,
+                zorder=4,
             )
-        beta_median = np.median(draws, axis=0)
-        ax_data.plot(
-            x_smooth,
-            delta_tasc_model(beta_median, x_smooth, baseline_days),
-            color=color,
-            linestyle=linestyle,
-            label=name,
-            zorder=4,
-        )
-        residual = y - delta_tasc_model(beta_median, x, baseline_days)
-        ax_resid.errorbar(
-            x, residual, yerr=[yerrn, yerrp], fmt="o", color=color, ms=3, capsize=2, alpha=0.7
-        )
+            handles.append(line)
+            labels.append(name)
+            residual = y - delta_tasc_model(beta_median, x, baseline_days)
+            ax_resid.errorbar(
+                x, residual, yerr=[yerrn, yerrp], fmt="o", color=color, ms=2.5, alpha=0.7
+            )
 
-    ax_resid.axhline(0, color="grey", linewidth=0.8, linestyle=":")
-    ax_data.set_ylabel(r"$\Delta$TASC (s)")
-    ax_resid.set_ylabel("residual (s)")
-    ax_resid.set_xlabel("days since reference epoch")
-    ax_data.legend(loc="best", frameon=False)
-    fig.savefig(fname, dpi=200)
-    plt.close(fig)
+        ax_resid.axhline(0, color=GUIDE_COLOR, linewidth=0.8, linestyle=":")
+        ax_data.set_ylabel(rf"$\Delta$TASC ({units})")
+        ax_resid.set_ylabel("residual (s)")
+        ax_resid.set_xlabel("days since reference epoch")
+        # Handles are ordered by hand: matplotlib collects plain lines before
+        # errorbar containers, which would list the data last in a legend whose
+        # first entry should be what was measured.
+        ax_data.legend(handles, labels, loc="best")
+        return save_figure(fig, fname)
 
 
 def _write_parfile(ref_model, m0_result, baseline_days, pb0_days, outroot):
@@ -310,10 +340,10 @@ def fit_orbital_decay(
         [m0_result["flat_samples"], m1_result["flat_samples"]],
         [["b0", "b1", "b2"], ["b0", "b1", "b2", "b3"]],
         ["M0", "M1"],
-        outroot + "_comparison.jpg",
+        outroot + "_comparison",
     )
     _write_diagnostic_plot(
-        x, y, yerrn, yerrp, baseline_days, m0_result, m1_result, outroot + "_data.jpg"
+        x, y, yerrn, yerrp, baseline_days, m0_result, m1_result, outroot + "_data"
     )
 
     beta_16_0, beta_50_0, beta_84_0 = np.percentile(m0_result["flat_samples"], [16, 50, 84], axis=0)
@@ -475,9 +505,11 @@ def main(args=None):
         dest="write_parfile",
         help="Do not write {outroot}.par",
     )
+    add_figure_format_argument(parser)
     parsed = parser.parse_args(args)
 
     configure_logging()
+    set_figure_format(parsed.figure_format)
 
     try:
         fit_orbital_decay(

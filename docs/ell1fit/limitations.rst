@@ -177,7 +177,11 @@ Testing
   ``events1.par`` are byte-identical, so the CLI tests that pass two files
   exercise no multi-epoch behaviour. Multi-epoch coverage comes from the
   synthetic generator in :mod:`ell1fit.tests.datagen`.
-- **Figures are not verified.** Nothing in the test suite or in
-  ``tools/refactor_net.py`` inspects a plot, so a diagnostic that silently stops
-  being informative will not be caught automatically. One such regression has
-  already happened.
+- **Figures are not verified.** ``test_plotting.py`` checks the shared
+  conventions of :doc:`figures` -- sizes, the grid, how fonts are embedded --
+  and the figures whose width is part of their contract assert it. Nothing,
+  though, inspects what a plot actually *shows*, so a diagnostic that silently
+  stops being informative will not be caught automatically. Two such
+  regressions have already happened: a profile comparison that was drawn but
+  never saved, and a template plot whose legend call was missing its
+  parentheses and so drew no legend for as long as the figure existed.

@@ -18,6 +18,8 @@ percent, so the tolerances below are set by the estimator and not fitted to the
 answer.
 """
 
+import os
+
 import numpy as np
 import pytest
 from astropy.table import Table
@@ -36,6 +38,7 @@ from ..eccentricity import (
 )
 from ..mcmc_utils import SAMPLES_SUFFIX, load_flat_samples, save_flat_samples
 from ..pipeline import _enrich_results_with_eccentricity
+from ..plotting import figure_path
 
 
 SEED = 20260903
@@ -474,9 +477,6 @@ def test_plot_marks_the_interval_when_detected(tmp_path):
 
 def test_the_panel_can_be_drawn_into_an_axis_the_caller_owns(tmp_path):
     """Same panel, someone else's figure: nothing is created and nothing saved."""
-    import matplotlib
-
-    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     eps1, eps2 = _eps_samples(ecc=20 * SIGMA, omega_deg=71.0, size=20_000)
@@ -495,9 +495,6 @@ def test_the_panel_can_be_drawn_into_an_axis_the_caller_owns(tmp_path):
 
 def test_the_panel_reuses_a_summary_it_is_handed():
     """No recomputation, so the panel and the table can never disagree."""
-    import matplotlib
-
-    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     eps1, eps2 = _eps_samples(ecc=0.0, size=20_000)
@@ -551,7 +548,7 @@ def test_pipeline_enrichment_adds_eccentricity_columns(tmp_path):
     assert "ECC_summary" in enriched
     assert enriched["ECC_detected"]
     assert enriched["ECC_50"] > 0
-    assert (tmp_path / "run_eccentricity.jpg").exists()
+    assert os.path.exists(figure_path(str(tmp_path / "run_eccentricity")))
 
 
 def test_pipeline_enrichment_adds_the_component_columns(tmp_path):
@@ -619,7 +616,7 @@ def test_pipeline_enrichment_draws_the_orbit_summary(tmp_path):
 
     _enrich_results_with_eccentricity(results, outroot, ["EPS1", "EPS2"])
 
-    assert (tmp_path / "run_orbit.jpg").exists()
+    assert os.path.exists(figure_path(str(tmp_path / "run_orbit")))
 
 
 def test_the_orbit_summary_gets_every_orbital_parameter_that_was_fitted(tmp_path, monkeypatch):
@@ -672,5 +669,5 @@ def test_ell1ecc_cli_names_both_plots_after_the_output_root(tmp_path, capsys):
 
     ell1ecc_main([results_file])
 
-    assert (tmp_path / "run_eccentricity.jpg").exists()
-    assert (tmp_path / "run_orbit.jpg").exists()
+    assert os.path.exists(figure_path(str(tmp_path / "run_eccentricity")))
+    assert os.path.exists(figure_path(str(tmp_path / "run_orbit")))

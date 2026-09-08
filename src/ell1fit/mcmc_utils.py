@@ -8,7 +8,7 @@ import emcee
 import numpy as np
 from astropy.time import Time
 
-from .plotting import plot_style_context
+from .plotting import plot_style_context, save_figure
 from .scaling import TARGET_LOCAL_SIGMA
 
 
@@ -141,7 +141,7 @@ def plot_mcmc_results(
     backend=None,
     flat_samples=None,
     labels=None,
-    fname="results.jpg",
+    fname="results",
     **plot_kwargs,
 ):
     """Create a corner plot from posterior samples.
@@ -164,7 +164,7 @@ def plot_mcmc_results(
 
     with plot_style_context():
         fig = corner.corner(flat_samples, labels=labels, quantiles=[0.16, 0.5, 0.84], **plot_kwargs)
-        fig.savefig(fname, dpi=300)
+        return save_figure(fig, fname)
 
 
 def plot_mcmc_comparison(samples_list, labels_list, names, fname, colors=None, **corner_kwargs):
@@ -218,9 +218,8 @@ def plot_mcmc_comparison(samples_list, labels_list, names, fname, colors=None, *
                 for i in range(len(names))
             ],
             loc="upper right",
-            frameon=False,
         )
-        fig.savefig(fname, dpi=300)
+        return save_figure(fig, fname)
 
 
 def default_moves():
@@ -501,13 +500,11 @@ def safe_run_sampler(
             )
         if sampler.iteration % 1000 == 0:
             result_dict, flat_samples = calculate_result_array_from_samples(sampler, labels)
-            logging.info(
-                f"Checkpointing intermediate results to {outroot + '_corner_incomplete.jpg'}"
-            )
+            logging.info(f"Checkpointing intermediate results to {outroot}_corner_incomplete")
             plot_mcmc_results(
                 flat_samples=flat_samples,
                 labels=labels,
-                fname=outroot + "_corner_incomplete.jpg",
+                fname=outroot + "_corner_incomplete",
                 backend=backend,
             )
         if converged:
@@ -544,7 +541,7 @@ def safe_run_sampler(
     plot_mcmc_results(
         flat_samples=flat_samples,
         labels=labels,
-        fname=outroot + "_corner.jpg",
+        fname=outroot + "_corner",
         backend=backend,
     )
 

@@ -24,6 +24,7 @@ what it is, then :doc:`pipeline` for how a fit actually proceeds.
    :maxdepth: 2
    :caption: Reference
 
+   figures
    performance
    limitations
    design

@@ -145,7 +145,7 @@ def run_one_nested_fit(
     if outroot is not None:
         from .mcmc_utils import plot_mcmc_results
 
-        plot_mcmc_results(flat_samples=flat_samples, labels=labels, fname=outroot + "_corner.jpg")
+        plot_mcmc_results(flat_samples=flat_samples, labels=labels, fname=outroot + "_corner")
 
     return {
         "log_evidence": float(results.logz[-1]),
@@ -251,7 +251,7 @@ def run_seed_scatter(loglikelihood, bounds, labels, n_seeds=3, nlive=500, dlogz=
         from .mcmc_utils import plot_mcmc_results
 
         plot_mcmc_results(
-            flat_samples=runs[0]["flat_samples"], labels=labels, fname=outroot + "_corner.jpg"
+            flat_samples=runs[0]["flat_samples"], labels=labels, fname=outroot + "_corner"
         )
 
     return {

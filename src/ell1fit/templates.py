@@ -30,7 +30,11 @@ from ._numba_compat import njit, prange
 from scipy.interpolate import interp1d, make_interp_spline
 
 from .phase_utils import phases_around_zero, phases_from_zero_to_one
+from .plotting import DATA_COLOR as _DATA_COLOR
+from .plotting import GUIDE_COLOR as _GUIDE_COLOR
+from .plotting import figure_size as _figure_size
 from .plotting import plot_style_context as _plot_style_context
+from .plotting import save_figure as _save_figure
 
 
 __all__ = [
@@ -45,7 +49,7 @@ __all__ = [
 
 def create_template_from_profile_harm(
     profile,
-    imagefile="template.png",
+    imagefile="template",
     nharm=None,
     final_nbin=None,
     plot=True,
@@ -132,8 +136,14 @@ def create_template_from_profile_harm(
         return template * final_nbin / nbin, additional_phase
 
     with _plot_style_context():
-        fig = plt.figure(figsize=(3.5, 2.65))
-        plt.plot(np.arange(0.5 / nbin, 1, 1 / nbin), profile, drawstyle="steps-mid", label="data")
+        fig = plt.figure(figsize=_figure_size("column"), layout="constrained")
+        plt.plot(
+            np.arange(0.5 / nbin, 1, 1 / nbin),
+            profile,
+            drawstyle="steps-mid",
+            color=_DATA_COLOR,
+            label="data",
+        )
         plt.plot(phas[:final_nbin], template, label="template values", ls="--", lw=2)
         plt.plot(
             phas[:final_nbin],
@@ -148,10 +158,13 @@ def create_template_from_profile_harm(
             label="template aligned",
             lw=3,
         )
-        plt.axvline(phases_from_zero_to_one(additional_phase))
-        plt.legend
-        plt.savefig(imagefile)
-        plt.close(fig)
+        plt.axvline(phases_from_zero_to_one(additional_phase), color=_GUIDE_COLOR, ls=":", lw=0.8)
+        plt.xlabel("Pulse phase")
+        plt.ylabel("Counts")
+        # This read ``plt.legend`` -- the function object, never called -- so the
+        # four ``label=`` arguments above drew nothing at all.
+        plt.legend()
+        _save_figure(fig, imagefile)
     return template * final_nbin / nbin, additional_phase
 
 
