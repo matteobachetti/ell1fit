@@ -7,7 +7,10 @@ malformed input being refused rather than guessed at.
 
 import numpy as np
 import pytest
+from astropy.table import Table
 from scipy.stats import norm
+
+from ell1fit.cli import main as main_ell1fit
 
 from ell1fit.prior_transform import transform_spec_for_prior
 from ell1fit.priors import assign_logpriors, parse_prior_spec, parse_prior_specs
@@ -185,3 +188,33 @@ def test_the_starting_walkers_fit_inside_a_narrow_prior(dataset):
 
     assert np.isfinite(logp(centre - spread))
     assert np.isfinite(logp(centre + spread))
+
+
+def test_cli_reports_a_malformed_prior_as_a_usage_error():
+    """A typo must stop the run at once, not after the events are loaded."""
+    with pytest.raises(SystemExit):
+        main_ell1fit(["nonexistent.nc", "--prior", "F1:lorentzian:0,1"])
+
+
+def test_end_to_end_a_narrow_prior_constrains_the_chain(dataset, tmp_path):
+    """The whole path: a ``--prior`` on the command line bounds the posterior.
+
+    ``A1`` is measured here to about 1e-4 lt-s, so a prior 1e-6 wide dominates
+    it completely and the posterior must fit inside the prior. The chain also
+    has to move at all, which is what fails when the walkers are started on the
+    heuristic scale instead of the prior's.
+    """
+    outroot = str(tmp_path / "narrow")
+    main_ell1fit(
+        list(dataset["event_files"])
+        + ["-p"]
+        + list(dataset["par_files"])
+        + ["-P", "F0,A1", "--nsteps", "300", "-o", outroot, "--prior", "A1:uniform:+-1e-6"]
+    )
+
+    row = Table.read(outroot + "_A1_F0_results.ecsv")[-1]
+    width = (row["dA1_99"] - row["dA1_1"]) * row["dA1_factor"]
+
+    assert width < 2e-6
+    # Not a chain frozen at its starting point either: it explored the prior.
+    assert width > 2e-7

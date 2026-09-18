@@ -285,6 +285,9 @@ def parse_prior_spec(text):
 def parse_prior_specs(texts):
     """Parse a list of prior overrides, rejecting duplicate parameter names.
 
+    Already-parsed :class:`PriorSpec` entries pass through, so a caller using
+    :func:`ell1fit.pipeline.ell1fit` directly can hand over either form.
+
     A repeated name is an error rather than a last-one-wins: two ``--prior``
     options for the same parameter mean the command line disagrees with itself,
     and picking one silently would make the fit answer a question nobody asked.
@@ -292,7 +295,7 @@ def parse_prior_specs(texts):
     if not texts:
         return []
 
-    specs = [parse_prior_spec(text) for text in texts]
+    specs = [t if isinstance(t, PriorSpec) else parse_prior_spec(t) for t in texts]
     seen = {}
     for spec in specs:
         if spec.name in seen:

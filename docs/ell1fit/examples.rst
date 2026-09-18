@@ -30,6 +30,17 @@ weighting, and self-consistent templates::
 A run can be extended simply by asking for more steps: the chain is stored in
 ``<outroot>.h5`` and sampling resumes from where it stopped.
 
+Stating a prior explicitly, instead of letting the rules in
+:mod:`ell1fit.priors` pick one::
+
+    ell1fit obs1.nc -p obs1.par -P F0,F1 --sampler nested \
+        --prior F1:uniform:-1e-10,1e-10
+
+Here it is doing two jobs at once: it says what is actually believed about
+``F1``, and it makes the prior proper, which nested sampling requires before it
+will report an evidence. ``--prior`` may be repeated, once per parameter. See
+:ref:`setting-a-prior-by-hand` for the syntax.
+
 Turning a fit back into an ephemeris::
 
     ell1par campaign_A1_F0_PB_TASC_results.ecsv -p obs1.par

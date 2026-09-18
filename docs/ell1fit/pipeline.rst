@@ -103,6 +103,39 @@ The requested parameter names are expanded into the per-file set actually
 fitted (``F0`` becomes ``F0_0``, ``F0_1``, …), priors are attached
 (:mod:`ell1fit.priors`) and scaling factors computed (:mod:`ell1fit.scaling`).
 
+.. _setting-a-prior-by-hand:
+
+Setting a prior by hand
+~~~~~~~~~~~~~~~~~~~~~~~
+
+The priors above are rules, and a rule is sometimes the wrong answer: a
+parameter the parfile quotes no uncertainty for gets a deliberately broad
+uniform, which for a spin derivative is unbounded. ``--prior`` replaces the rule
+for one parameter::
+
+    --prior F1:uniform:-1e-10,1e-10
+    --prior TASC:normal:+-1e-6
+
+The shape is ``uniform`` or ``normal``. What follows is either two numbers —
+the bounds of a uniform, or the mean and standard deviation of a normal — or
+``+-WIDTH``, which centres the prior on the value the parfile gives. Numbers are
+in the parfile's own units, so ``TASC`` is in days and ``A1`` in light-seconds.
+A bare spin-parameter name covers every file: ``F1`` sets the prior on ``F1_0``,
+``F1_1``, … alike, and ``F1_0`` overrides it for that one file. Naming a
+parameter that is not being fitted is an error rather than a silent no-op.
+
+Two things happen behind one option. The prior itself is replaced, and so is
+that parameter's local scale when the prior is the tighter of the two — the
+scales are otherwise derived from uncertainty heuristics that know nothing about
+the priors, and an ensemble started on the heuristic scale would put most of its
+walkers outside a narrow prior, where the posterior is :math:`-\infty` and
+nothing can move. See :func:`ell1fit.priors.user_prior_sigmas`.
+
+A bounded uniform also makes a parameter usable with ``--sampler nested``, which
+refuses an improper prior outright: an infinitely wide uniform has no evidence to
+integrate, and inventing a box for it would make that box set the answer. See
+:mod:`ell1fit.prior_transform`.
+
 Everything from here on works in **local coordinates**:
 
 .. math::

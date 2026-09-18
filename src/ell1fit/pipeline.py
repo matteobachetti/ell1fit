@@ -55,7 +55,7 @@ from .plotting import plot_style_context as _plot_style_context
 from .plotting import save_figure as _save_figure
 from .posterior import _build_posterior_functions
 from .posterior import _trace_phase_0_likelihood
-from .priors import assign_logpriors, user_prior_sigmas
+from .priors import assign_logpriors, parse_prior_specs, user_prior_sigmas
 from .templates import create_template_from_profile_harm
 from .templates import estimate_weighted_profile_std
 from .templates import get_template_func
@@ -562,6 +562,7 @@ def ell1fit(
     use_pi=False,
     ignore_uncertainties=False,
     template_iterations=1,
+    priors=None,
     sampler="emcee",
     nlive=1000,
     dlogz=0.1,
@@ -617,6 +618,12 @@ def ell1fit(
         that. ``1`` (the default) disables refinement entirely and is
         bit-identical to not having the feature. See
         :mod:`ell1fit.refinement`.
+    priors : list, optional
+        Prior overrides, each either a ``"NAME:SHAPE:ARGS"`` string or an
+        already-parsed :class:`ell1fit.priors.PriorSpec`. Each one replaces the
+        rule :func:`ell1fit.priors.assign_logpriors` would otherwise apply, and
+        also sets that parameter's local scale when it is the tighter of the
+        two. See :func:`ell1fit.priors.parse_prior_spec` for the syntax.
     sampler : {"emcee", "nuts", "nested"}, optional
         Posterior-exploration backend -- see
         :func:`ell1fit.fitting.optimize_solution`.
@@ -741,6 +748,7 @@ def ell1fit(
         template_funcs=template_func,
         weights=weights if use_weight else None,
         tolerance=tolerance,
+        user_priors=parse_prior_specs(priors),
     )
 
     outroots = _get_outroots(get_outroot, n_files)
