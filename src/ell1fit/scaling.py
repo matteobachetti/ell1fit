@@ -318,11 +318,27 @@ def precondition_factors(posterior_func, factors, n_parameters, target=TARGET_LO
     return rescaled
 
 
-def get_factors(fit_parameter_names, model, observation_length, parameters_with_unc=None):
+def get_factors(
+    fit_parameter_names,
+    model,
+    observation_length,
+    parameters_with_unc=None,
+    extra_uncertainties=None,
+):
     """Compute parameter scaling factors for numerically stable local fitting.
 
     The factors set the size of local parameter variations sampled by the
     optimizer/MCMC, based on spin/orbital sensitivity heuristics.
+
+    ``extra_uncertainties`` is an optional ``{name: sigma}`` mapping of scales
+    asserted from outside the heuristics -- in practice the widths of the
+    ``--prior`` overrides, via
+    :func:`ell1fit.priors.user_prior_sigmas`. It joins the other candidates and
+    wins only when it is the tightest of them, which is exactly the case that
+    matters: a prior narrower than the heuristic scale would otherwise start
+    the walkers outside its own support. Preconditioning cannot repair that
+    afterwards, because a hard bound is precisely what stops it measuring the
+    curvature it would need (:func:`precondition_factors`).
     """
     zoom = []
     Pd = model[0].PBDOT.value
@@ -358,6 +374,9 @@ def get_factors(fit_parameter_names, model, observation_length, parameters_with_
         # For zoom purposes, we prefer the most optimistic uncertainty (to avoid high
         # rejection ratios). For prior purposes, we prefer the most conservative
         # uncertainty (to avoid overconfidence).
+        if extra_uncertainties is not None and par in extra_uncertainties:
+            possible_uncertainties.append(extra_uncertainties[par])
+            sources.append("prior")
         if parameters_with_unc is not None and par in parameters_with_unc:
             possible_uncertainties.append(parameters_with_unc[par][1])
             sources.append("uncertainty")
@@ -390,7 +409,9 @@ def get_factors(fit_parameter_names, model, observation_length, parameters_with_
 
         zoom.append(zoom_factor)
 
-        if source.startswith("uncertainty"):
+        if source.startswith("prior"):
+            logging.info(f"Zoom factor for {par} from --prior width: {zoom_factor} (unc={unc})")
+        elif source.startswith("uncertainty"):
             logging.info(
                 f"Zoom factor for {par} from uncertainty: {zoom_factor} "
                 f"(unc={unc}, local_sigma={TARGET_LOCAL_SIGMA})"

@@ -11,6 +11,10 @@ from scipy.stats import norm
 
 from ell1fit.prior_transform import transform_spec_for_prior
 from ell1fit.priors import assign_logpriors, parse_prior_spec, parse_prior_specs
+from ell1fit.scaling import TARGET_LOCAL_SIGMA
+
+from .datagen import make_multi_epoch_dataset
+from .helpers import build_pipeline_state
 
 
 #: A minimal ``{name: [value, uncertainty]}`` dictionary covering the parameters
@@ -131,3 +135,53 @@ def test_a_prior_on_an_unfitted_parameter_is_refused():
     spec = parse_prior_spec("F2:uniform:-1e-10,1e-10")
     with pytest.raises(ValueError, match="not being fitted"):
         assign_logpriors(["F1_0"], PARAMETERS, user_priors=[spec])
+
+
+@pytest.fixture(scope="module")
+def dataset(tmp_path_factory):
+    """One short single-epoch observation, enough to build a real fit setup."""
+    return make_multi_epoch_dataset(
+        str(tmp_path_factory.mktemp("priors")),
+        epoch_offsets=(0.0,),
+        n_events=3000,
+        phase0=(0.35,),
+        prefix="prio",
+    )
+
+
+def test_a_narrow_prior_sets_the_local_scale(dataset):
+    """A prior tighter than the heuristic scale must shrink the sampler's step.
+
+    The factors are derived from uncertainty heuristics that know nothing about
+    the priors, so without this the walkers would be spread over a region the
+    prior excludes.
+    """
+    _, plain = build_pipeline_state(dataset, fit_parameters=("F0", "A1"), nharm=2)
+    spec = parse_prior_spec("A1:uniform:+-1e-6")
+    _, narrowed = build_pipeline_state(
+        dataset, fit_parameters=("F0", "A1"), nharm=2, user_priors=[spec]
+    )
+
+    index = plain.parameter_names.index("A1")
+    assert narrowed.factors[index] < plain.factors[index]
+
+
+def test_the_starting_walkers_fit_inside_a_narrow_prior(dataset):
+    """The initial ensemble is one local sigma wide, and must land in the support.
+
+    A walker starting outside its own prior sees ``-inf`` and never moves, so
+    this is the property that decides whether a tight ``--prior`` produces a
+    chain at all.
+    """
+    spec = parse_prior_spec("A1:uniform:+-1e-6")
+    _, setup = build_pipeline_state(
+        dataset, fit_parameters=("F0", "A1"), nharm=2, user_priors=[spec]
+    )
+
+    index = setup.parameter_names.index("A1")
+    logp = setup.logprior_funcs[index]
+    spread = setup.factors[index] * TARGET_LOCAL_SIGMA
+    centre = setup.baseline_values[index]
+
+    assert np.isfinite(logp(centre - spread))
+    assert np.isfinite(logp(centre + spread))

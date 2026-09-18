@@ -29,6 +29,7 @@ def build_pipeline_state(
     nharm=2,
     tolerance=1e-8,
     likelihood_func=pletsch_clarke_likelihood,
+    user_priors=None,
 ):
     """Build ``(observations, setup)`` from a generated dataset.
 
@@ -42,6 +43,8 @@ def build_pipeline_state(
         Harmonics retained in the pulse templates.
     tolerance : float, optional
         Deorbiting tolerance, in seconds.
+    user_priors : list of PriorSpec, optional
+        Prior overrides, as ``--prior`` would supply them.
     likelihood_func : callable, optional
         Statistic to fit with. This is not merely stored: it decides which
         parameters are free. ``_collect_parameter_names`` only adds the per-file
@@ -100,5 +103,6 @@ def build_pipeline_state(
         template_funcs=template_funcs,
         weights=None,
         tolerance=tolerance,
+        user_priors=user_priors,
     )
     return observations, setup

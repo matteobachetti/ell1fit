@@ -55,7 +55,7 @@ from .plotting import plot_style_context as _plot_style_context
 from .plotting import save_figure as _save_figure
 from .posterior import _build_posterior_functions
 from .posterior import _trace_phase_0_likelihood
-from .priors import assign_logpriors
+from .priors import assign_logpriors, user_prior_sigmas
 from .templates import create_template_from_profile_harm
 from .templates import estimate_weighted_profile_std
 from .templates import get_template_func
@@ -490,8 +490,14 @@ def _prepare_fit_setup(
     template_funcs=None,
     weights=None,
     tolerance=1e-8,
+    user_priors=None,
 ):
     """Collect fit parameters, priors, factors, and initial fit values.
+
+    ``user_priors`` is a list of :class:`ell1fit.priors.PriorSpec` overrides. It
+    feeds both the priors and the scaling: see
+    :func:`ell1fit.priors.user_prior_sigmas` for why a prior that does not also
+    set the local scale would start the walkers outside itself.
 
     Returns
     -------
@@ -511,12 +517,16 @@ def _prepare_fit_setup(
         fit_parameter_names,
         parameters_with_unc,
         obs_length=observation_length,
+        user_priors=user_priors,
     )
     factors = get_factors(
         fit_parameter_names,
         model,
         observation_length,
         parameters_with_unc=parameters_with_unc,
+        extra_uncertainties=user_prior_sigmas(
+            fit_parameter_names, parameters_with_unc, user_priors
+        ),
     )
 
     try:

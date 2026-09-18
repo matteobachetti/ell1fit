@@ -17,6 +17,7 @@ __all__ = [
     "parse_prior_spec",
     "parse_prior_specs",
     "PriorSpec",
+    "user_prior_sigmas",
 ]
 
 
@@ -363,6 +364,40 @@ def _build_user_logprior(spec, par, parameters_with_unc):
         norm(loc=mean, scale=sigma).logpdf,
         f"normal with mean {mean} and std {sigma:.6g}",
     )
+
+
+def user_prior_sigmas(fit_parameter_names, parameters_with_unc, user_priors):
+    """Report the standard deviation of each overridden prior, for parameter scaling.
+
+    The local coordinates the sampler works in -- and hence the width of the
+    ball of starting walkers -- come from a per-parameter uncertainty estimate
+    (:func:`ell1fit.scaling.get_factors`) that knows nothing about the priors.
+    An override narrower than that estimate would start most walkers outside
+    its own support, where the log-posterior is ``-inf`` and nothing can move.
+    Reporting the prior's own width closes that gap.
+
+    A uniform's standard deviation is its width over ``sqrt(12)``, not its
+    half-width: a factor 1.7, which mostly disappears into the
+    order-of-magnitude rounding downstream, but only one of the two is a sigma.
+
+    Returns
+    -------
+    dict
+        ``{name: sigma}`` for the fitted parameters that carry an override.
+        Parameters without one are absent, not NaN, so the caller can tell
+        "no opinion" from "an opinion worth nothing".
+    """
+    sigmas = {}
+    for par in fit_parameter_names:
+        spec = _resolve_user_prior(par, user_priors or [])
+        if spec is None:
+            continue
+        first, second = _user_prior_arguments(spec, parameters_with_unc[par][0])
+        if spec.shape == "uniform":
+            sigmas[par] = (second - first) / np.sqrt(12.0)
+        else:
+            sigmas[par] = second
+    return sigmas
 
 
 def _check_specs_are_used(fit_parameter_names, specs):
