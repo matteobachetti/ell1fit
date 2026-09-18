@@ -22,6 +22,12 @@ from .helpers import build_pipeline_state
 
 #: A minimal ``{name: [value, uncertainty]}`` dictionary covering the parameters
 #: the prior rules need to look up (``PB`` is read when wrapping ``TASC``).
+#:
+#: Every uncertainty is NaN, which exercises the rules' unset branches. The
+#: pipeline does not always get here: :func:`ell1fit.models._get_par_dict` fills
+#: in heuristic defaults for ``F<n>`` and ``PB``, so those two reach
+#: :func:`assign_logpriors` with a width even when the parfile gives none. The
+#: tests that care about what a real run does build a real fit setup instead.
 PARAMETERS = {
     "F0_0": [0.5, np.nan],
     "F1_0": [-1e-12, np.nan],
@@ -86,7 +92,10 @@ def test_tasc_override_stays_periodic():
 
 
 def test_override_beats_the_rule_it_replaces():
-    """Without an override F1 gets the improper catch-all uniform; with one it does not."""
+    """A parameter with no width anywhere falls through to an improper uniform.
+
+    The override replaces it with something a sampler can work with.
+    """
     (default,) = assign_logpriors(["F1_0"], PARAMETERS)
     assert default.phys_bounds == (-np.inf, np.inf)
 
@@ -95,8 +104,14 @@ def test_override_beats_the_rule_it_replaces():
     assert np.all(np.isfinite(overridden.phys_bounds))
 
 
-def test_a_bounded_override_makes_nested_sampling_possible():
-    """An improper prior has no evidence; bounding F1 from the command line fixes that."""
+def test_a_bounded_override_rescues_an_improper_prior_for_nested_sampling():
+    """An improper prior has no evidence at all, and an override is the way out.
+
+    This is the catch-all branch, not what a spin derivative normally gets --
+    see ``test_the_default_f1_prior_is_a_wide_gaussian_not_an_unbounded_uniform``
+    for that. The point either way is that a nested run integrates against the
+    prior, so its width is never a detail.
+    """
     (default,) = assign_logpriors(["F1_0"], PARAMETERS)
     with pytest.raises(ValueError, match="improper"):
         transform_spec_for_prior(default)
@@ -218,3 +233,51 @@ def test_end_to_end_a_narrow_prior_constrains_the_chain(dataset, tmp_path):
     assert width < 2e-6
     # Not a chain frozen at its starting point either: it explored the prior.
     assert width > 2e-7
+
+
+def test_the_default_f1_prior_is_a_wide_gaussian_not_an_unbounded_uniform(dataset):
+    """What ``--prior`` on a spin derivative actually replaces.
+
+    :func:`ell1fit.models._get_par_dict` fills in a heuristic uncertainty for
+    every ``F<n>`` the parfile leaves unset, so a spin derivative never reaches
+    the improper catch-all uniform: it gets a Gaussian, whose width is the
+    heuristic's and not anybody's belief.
+    """
+    _, setup = build_pipeline_state(
+        dataset, fit_parameters=("F0", "F1"), nharm=2, ignore_uncertainties=True
+    )
+
+    logp = setup.logprior_funcs[setup.parameter_names.index("F1_0")]
+    assert logp.__self__.kwds["scale"] > 1e-9
+    assert np.isfinite(logp(0.0))
+
+
+@pytest.mark.parametrize("ignore_uncertainties", [False, True])
+def test_a_prior_override_wins_over_ignore_uncertainties(dataset, ignore_uncertainties):
+    """``--prior`` and ``--ignore-uncertainties`` compose; the explicit prior wins.
+
+    The flag acts earlier, on the parfile uncertainties, and it does not merely
+    unset them -- ``A1`` is left unset and falls through to a broad uniform,
+    while ``F1`` is given a heuristic width. An override has to replace both
+    outcomes, and to leave the same prior either way.
+    """
+    specs = parse_prior_specs(["F1:uniform:-1e-10,1e-10", "A1:uniform:+-1e-6"])
+    _, setup = build_pipeline_state(
+        dataset,
+        fit_parameters=("F0", "F1", "A1"),
+        nharm=2,
+        user_priors=specs,
+        ignore_uncertainties=ignore_uncertainties,
+    )
+
+    f1 = setup.logprior_funcs[setup.parameter_names.index("F1_0")]
+    a1_index = setup.parameter_names.index("A1")
+    a1 = setup.logprior_funcs[a1_index]
+
+    assert f1.phys_bounds == (-1e-10, 1e-10)
+    assert a1.phys_bounds == pytest.approx((22.215 - 1e-6, 22.215 + 1e-6))
+
+    # The scale must follow the prior under the flag too, or the walkers start
+    # outside it exactly as they would without the flag.
+    spread = setup.factors[a1_index] * TARGET_LOCAL_SIGMA
+    assert np.isfinite(a1(setup.baseline_values[a1_index] - spread))

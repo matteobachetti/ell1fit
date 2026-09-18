@@ -36,10 +36,11 @@ Stating a prior explicitly, instead of letting the rules in
     ell1fit obs1.nc -p obs1.par -P F0,F1 --sampler nested \
         --prior F1:uniform:-1e-10,1e-10
 
-Here it is doing two jobs at once: it says what is actually believed about
-``F1``, and it makes the prior proper, which nested sampling requires before it
-will report an evidence. ``--prior`` may be repeated, once per parameter. See
-:ref:`setting-a-prior-by-hand` for the syntax.
+Without it, an ``F1`` the parfile gives no uncertainty for is handed an invented
+width, which a nested run then charges as an Occam factor against the evidence.
+Stating the prior puts that number where it can be argued about. ``--prior`` may
+be repeated, once per parameter, and works alongside ``--ignore-uncertainties``.
+See :ref:`setting-a-prior-by-hand` for the syntax.
 
 Turning a fit back into an ephemeris::
 

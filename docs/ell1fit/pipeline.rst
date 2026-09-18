@@ -108,10 +108,12 @@ fitted (``F0`` becomes ``F0_0``, ``F0_1``, …), priors are attached
 Setting a prior by hand
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-The priors above are rules, and a rule is sometimes the wrong answer: a
-parameter the parfile quotes no uncertainty for gets a deliberately broad
-uniform, which for a spin derivative is unbounded. ``--prior`` replaces the rule
-for one parameter::
+The priors above are rules, and a rule is sometimes the wrong answer. A spin
+derivative the parfile quotes no uncertainty for is the clearest case: it does
+not go unconstrained, but :func:`ell1fit.models._get_par_dict` invents a width
+for it from the orbit and the observation length, and the resulting Gaussian can
+be many orders of magnitude wider than anything credible. ``--prior`` replaces
+the rule for one parameter::
 
     --prior F1:uniform:-1e-10,1e-10
     --prior TASC:normal:+-1e-6
@@ -131,10 +133,20 @@ the priors, and an ensemble started on the heuristic scale would put most of its
 walkers outside a narrow prior, where the posterior is :math:`-\infty` and
 nothing can move. See :func:`ell1fit.priors.user_prior_sigmas`.
 
-A bounded uniform also makes a parameter usable with ``--sampler nested``, which
-refuses an improper prior outright: an infinitely wide uniform has no evidence to
-integrate, and inventing a box for it would make that box set the answer. See
-:mod:`ell1fit.prior_transform`.
+It matters most under ``--sampler nested``, which does not merely evaluate the
+prior but integrates against it. The width of a prior is then part of the
+answer, through the Occam factor it imposes, so a heuristic width is a heuristic
+contribution to the evidence. (Nested sampling also refuses an improper prior
+outright, since an infinitely wide uniform has no evidence at all, and inventing
+a box for it would make that box set the result. See
+:mod:`ell1fit.prior_transform`.)
+
+``--prior`` composes with ``--ignore-uncertainties`` rather than competing with
+it. That flag acts earlier, on the parfile uncertainties, and it does not simply
+unset them: ``A1`` and ``TASC`` fall through to broad uniforms, while ``F<n>``
+and ``PB`` are given the invented widths above. An explicit prior replaces
+whichever of those outcomes would have applied, so the same ``--prior`` gives
+the same prior with or without the flag.
 
 Everything from here on works in **local coordinates**:
 

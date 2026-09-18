@@ -30,6 +30,7 @@ def build_pipeline_state(
     tolerance=1e-8,
     likelihood_func=pletsch_clarke_likelihood,
     user_priors=None,
+    ignore_uncertainties=False,
 ):
     """Build ``(observations, setup)`` from a generated dataset.
 
@@ -45,6 +46,10 @@ def build_pipeline_state(
         Deorbiting tolerance, in seconds.
     user_priors : list of PriorSpec, optional
         Prior overrides, as ``--prior`` would supply them.
+    ignore_uncertainties : bool, optional
+        Discard the parfiles' uncertainties, as ``--ignore-uncertainties``
+        would. Note this does not leave them unset: see
+        :func:`ell1fit.models._get_par_dict`.
     likelihood_func : callable, optional
         Statistic to fit with. This is not merely stored: it decides which
         parameters are free. ``_collect_parameter_names`` only adds the per-file
@@ -78,7 +83,9 @@ def build_pipeline_state(
         observation_length=obs_length,
     )
 
-    parameters_with_unc, parameters = _build_parameters_from_models(models, ref_model, obs_length)
+    parameters_with_unc, parameters = _build_parameters_from_models(
+        models, ref_model, obs_length, ignore_uncertainties=ignore_uncertainties
+    )
 
     nbin = max(32, nharm * 8)
     profiles = folded_profile(times, parameters, nbin=nbin, tolerance=tolerance)
