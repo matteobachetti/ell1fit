@@ -103,6 +103,51 @@ The requested parameter names are expanded into the per-file set actually
 fitted (``F0`` becomes ``F0_0``, ``F0_1``, …), priors are attached
 (:mod:`ell1fit.priors`) and scaling factors computed (:mod:`ell1fit.scaling`).
 
+.. _setting-a-prior-by-hand:
+
+Setting a prior by hand
+~~~~~~~~~~~~~~~~~~~~~~~
+
+The priors above are rules, and a rule is sometimes the wrong answer. A spin
+derivative the parfile quotes no uncertainty for is the clearest case: it does
+not go unconstrained, but :func:`ell1fit.models._get_par_dict` invents a width
+for it from the orbit and the observation length, and the resulting Gaussian can
+be many orders of magnitude wider than anything credible. ``--prior`` replaces
+the rule for one parameter::
+
+    --prior F1:uniform:-1e-10,1e-10
+    --prior TASC:normal:+-1e-6
+
+The shape is ``uniform`` or ``normal``. What follows is either two numbers —
+the bounds of a uniform, or the mean and standard deviation of a normal — or
+``+-WIDTH``, which centres the prior on the value the parfile gives. Numbers are
+in the parfile's own units, so ``TASC`` is in days and ``A1`` in light-seconds.
+A bare spin-parameter name covers every file: ``F1`` sets the prior on ``F1_0``,
+``F1_1``, … alike, and ``F1_0`` overrides it for that one file. Naming a
+parameter that is not being fitted is an error rather than a silent no-op.
+
+Two things happen behind one option. The prior itself is replaced, and so is
+that parameter's local scale when the prior is the tighter of the two — the
+scales are otherwise derived from uncertainty heuristics that know nothing about
+the priors, and an ensemble started on the heuristic scale would put most of its
+walkers outside a narrow prior, where the posterior is :math:`-\infty` and
+nothing can move. See :func:`ell1fit.priors.user_prior_sigmas`.
+
+It matters most under ``--sampler nested``, which does not merely evaluate the
+prior but integrates against it. The width of a prior is then part of the
+answer, through the Occam factor it imposes, so a heuristic width is a heuristic
+contribution to the evidence. (Nested sampling also refuses an improper prior
+outright, since an infinitely wide uniform has no evidence at all, and inventing
+a box for it would make that box set the result. See
+:mod:`ell1fit.prior_transform`.)
+
+``--prior`` composes with ``--ignore-uncertainties`` rather than competing with
+it. That flag acts earlier, on the parfile uncertainties, and it does not simply
+unset them: ``A1`` and ``TASC`` fall through to broad uniforms, while ``F<n>``
+and ``PB`` are given the invented widths above. An explicit prior replaces
+whichever of those outcomes would have applied, so the same ``--prior`` gives
+the same prior with or without the flag.
+
 Everything from here on works in **local coordinates**:
 
 .. math::
@@ -113,8 +158,8 @@ The reason is conditioning. The fitted quantities span wildly different
 magnitudes — ``F0`` in Hz to fifteen significant digits alongside ``A1`` in
 light-seconds — and an optimizer or MCMC walker that steps the same distance in
 every direction only behaves sensibly if those directions have comparable
-scale. The convention is that **one standard deviation is** ``1e-6`` **local
-units** for every parameter.
+scale. The convention is that **one standard deviation is one local unit** for
+every parameter (:data:`ell1fit.scaling.TARGET_LOCAL_SIGMA`).
 
 5. Conditioning the scales
 --------------------------
@@ -177,7 +222,13 @@ updated parfiles, so a fit can serve as the ephemeris for the next one.
 
 Diagnostic figures are written alongside: light curves, templates, likelihood
 traces over each ``Phase_i``, a corner plot, and side-by-side phaseograms
-comparing the starting solution against the fitted one.
+comparing the starting solution against the fitted one. All of them follow
+the conventions in :doc:`figures`, and ``--figure-format`` changes the format
+they are written in. A fit that varied both
+``EPS1`` and ``EPS2`` also gets ``<outroot>_eccentricity.pdf`` and
+``<outroot>_orbit.pdf``, the latter pairing a corner plot of the orbital
+parameters *in physical units* with the eccentricity they imply; see
+:doc:`eccentricity`.
 
 .. note::
 

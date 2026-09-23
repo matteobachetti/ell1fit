@@ -26,6 +26,10 @@ except ImportError:
 
 __all__ = ["__version__"]
 
+from .logging import logger as _logger
+
+_logger.info("ell1fit version %s", __version__)
+
 
 def splitext_improved(path):
     """

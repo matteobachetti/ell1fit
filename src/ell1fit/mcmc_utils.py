@@ -8,7 +8,8 @@ import emcee
 import numpy as np
 from astropy.time import Time
 
-from .plotting import plot_style_context
+from .plotting import plot_style_context, save_figure
+from .scaling import TARGET_LOCAL_SIGMA
 
 
 __all__ = [
@@ -140,7 +141,7 @@ def plot_mcmc_results(
     backend=None,
     flat_samples=None,
     labels=None,
-    fname="results.jpg",
+    fname="results",
     **plot_kwargs,
 ):
     """Create a corner plot from posterior samples.
@@ -163,7 +164,7 @@ def plot_mcmc_results(
 
     with plot_style_context():
         fig = corner.corner(flat_samples, labels=labels, quantiles=[0.16, 0.5, 0.84], **plot_kwargs)
-        fig.savefig(fname, dpi=300)
+        return save_figure(fig, fname)
 
 
 def plot_mcmc_comparison(samples_list, labels_list, names, fname, colors=None, **corner_kwargs):
@@ -217,9 +218,8 @@ def plot_mcmc_comparison(samples_list, labels_list, names, fname, colors=None, *
                 for i in range(len(names))
             ],
             loc="upper right",
-            frameon=False,
         )
-        fig.savefig(fname, dpi=300)
+        return save_figure(fig, fname)
 
 
 def default_moves():
@@ -229,23 +229,37 @@ def default_moves():
     walkers, so its steps line up with whatever direction the ensemble is
     currently spread over. On a correlated posterior that is the ridge itself,
     where the stretch move -- which only walks toward one other walker -- makes
-    far less use of the same information. The 0.8/0.2 mix with the snooker
-    variant is emcee's own recommendation for correlated targets.
+    far less use of the same information.
 
-    Measured on three benchmark posteriors with
-    ``tools/sampler_bench.py``, three seeds each, effective samples **per
-    step**: 0.212 to 0.689 at fixture scale, 0.158 to 0.425 at production
-    scale, and 0.075 to 0.307 on a ten-parameter fit with eccentricity free.
-    The cost per step did not move -- both moves make exactly one posterior
-    evaluation per walker per step -- so the gain is the proposals, not
-    arithmetic. Credible intervals agreed with the stretch move's within the
-    Monte Carlo error on every parameter.
+    Measured on three benchmark posteriors with ``tools/sampler_bench.py``,
+    three seeds each, effective samples **per step** against the stretch move:
+    0.212 to 0.689 at fixture scale, 0.158 to 0.425 at production scale, and
+    0.075 to 0.307 on a ten-parameter fit with eccentricity free. The cost per
+    step did not move -- both moves make exactly one posterior evaluation per
+    walker per step -- so the gain is the proposals, not arithmetic. Credible
+    intervals agreed with the stretch move's within the Monte Carlo error on
+    every parameter.
+
+    **No snooker.** emcee's own recommendation for correlated targets is to mix
+    in ``DESnookerMove`` at 0.2, and that is what this returned until it was
+    measured rather than assumed. On ``P1`` at 16000 steps over three seeds,
+    all converged, the mix gives 0.717 effective samples per step against
+    **0.919** for ``DEMove`` alone -- the fifth of proposals spent on the
+    snooker move is worse than not proposing at all, costing 1.28x.
+
+    Part of that was a scale bug, since fixed: ``DESnookerMove`` builds its
+    direction as ``delta / sqrt(|delta|)``, which is not a unit vector, so its
+    step goes as the *square* of the coordinate scale, and at the old
+    ``TARGET_LOCAL_SIGMA = 1e-6`` it moved walkers two millionths of a posterior
+    width and accepted ~100% because it never went anywhere. One sigma per local
+    unit revives it to 0.861 -- real, and still short of dropping it. The
+    recommendation is sound in general; it does not hold on these posteriors.
 
     Acceptance runs lower than the stretch move's, around 0.32 against 0.57.
     That is what a bolder proposal looks like and not a fault; it stays well
     clear of the thresholds that report a struggling chain below.
     """
-    return [(emcee.moves.DEMove(), 0.8), (emcee.moves.DESnookerMove(), 0.2)]
+    return [(emcee.moves.DEMove(), 1.0)]
 
 
 def safe_run_sampler(
@@ -284,7 +298,10 @@ def safe_run_sampler(
     # We'll track how the average autocorrelation time estimate changes
     starting_pars = np.asarray(starting_pars)
     ndim = len(starting_pars)
-    initial_jitter = 1e-6
+    # One standard deviation, by the local-coordinate convention: the starting
+    # ball should be about as wide as the posterior in every direction. This
+    # used to be a bare 1e-6 that had to match TARGET_LOCAL_SIGMA by hand.
+    initial_jitter = TARGET_LOCAL_SIGMA
 
     def _parameter_damage_report(coords, log_probs, param_labels, top_n=3):
         """Heuristic report of parameters most associated with poor walkers."""
@@ -483,13 +500,11 @@ def safe_run_sampler(
             )
         if sampler.iteration % 1000 == 0:
             result_dict, flat_samples = calculate_result_array_from_samples(sampler, labels)
-            logging.info(
-                f"Checkpointing intermediate results to {outroot + '_corner_incomplete.jpg'}"
-            )
+            logging.info(f"Checkpointing intermediate results to {outroot}_corner_incomplete")
             plot_mcmc_results(
                 flat_samples=flat_samples,
                 labels=labels,
-                fname=outroot + "_corner_incomplete.jpg",
+                fname=outroot + "_corner_incomplete",
                 backend=backend,
             )
         if converged:
@@ -526,7 +541,7 @@ def safe_run_sampler(
     plot_mcmc_results(
         flat_samples=flat_samples,
         labels=labels,
-        fname=outroot + "_corner.jpg",
+        fname=outroot + "_corner",
         backend=backend,
     )
 

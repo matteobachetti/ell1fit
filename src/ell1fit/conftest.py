@@ -10,6 +10,14 @@ get picked up when running the tests inside an interpreter using
 import os
 
 
+# Every figure this package draws is written to a file; none is ever shown. A
+# test run that picks up an interactive backend opens windows on somebody's
+# desktop and can hang in CI, so the backend is pinned here rather than in each
+# test module that happens to remember. Set before matplotlib is imported
+# anywhere, which is why it lives in conftest and not in a fixture.
+os.environ.setdefault("MPLBACKEND", "agg")
+
+
 try:
     from pytest_astropy_header.display import PYTEST_HEADER_MODULES, TESTED_VERSIONS
 

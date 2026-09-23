@@ -32,7 +32,22 @@ detection out of nothing.
 excludes the origin -- see :func:`zero_eccentricity_exclusion` -- and quotes an
 upper limit when it does not. The limit is the 95th percentile of :math:`e`
 over the posterior samples, the same convention this package already uses for
-``A1DOT``.
+``A1DOT``. A three-sigma limit, the 99.73rd percentile, is reported alongside
+it and is reported whether or not the eccentricity is detected -- beside a
+measurement it is a cross-check rather than a competing claim.
+
+The two components are summarized too
+-------------------------------------
+
+:func:`eps_component_summary` reports ``EPS1`` and ``EPS2`` themselves in
+physical units: percentiles, the 16--50 and 50--84 error bars, and a
+three-sigma limit on the **magnitude**. The magnitude is the point --
+:math:`\epsilon_1 = e\sin\omega` may be either sign, so a bound on the signed
+value says nothing unless the sign is already known, and in a non-detection it
+is not. On a posterior sitting at the origin the magnitude limit reduces to
+exactly three sigma, the half-normal point, which is a different number from
+the Rayleigh :math:`3.44\,\sigma` the eccentricity gets: the radius of a
+two-dimensional noise cloud is not one of its components.
 
 What prior this is under
 ------------------------
@@ -58,20 +73,32 @@ import os
 
 import numpy as np
 from astropy.table import Table
-from scipy.special import ndtri_exp
+from scipy.special import erf, ndtri_exp
 
 from .mcmc_utils import SAMPLES_SUFFIX
-from .plotting import plot_style_context
+from .plotting import (
+    SUMMARY_TITLE_SIZE,
+    add_figure_format_argument,
+    figure_size,
+    plot_style_context,
+    save_figure,
+    set_figure_format,
+)
 
 
 __all__ = [
+    "ParameterNotSampled",
     "default_chain_file",
+    "draw_eccentricity_posterior",
     "eccentricity_and_omega",
     "eccentricity_summary",
     "eccentricity_summary_from_run",
+    "eps_component_summary",
     "eps_samples_from_chain",
     "load_eps_samples",
+    "load_orbital_samples",
     "output_root",
+    "physical_samples_from_chain",
     "plot_eccentricity_posterior",
     "zero_eccentricity_exclusion",
 ]
@@ -89,6 +116,15 @@ DEFAULT_UPPER_LIMIT_LEVEL = 0.95
 #: Below this equivalent-Gaussian significance the eccentricity is reported as
 #: an upper limit rather than a measurement.
 DEFAULT_DETECTION_SIGMA = 3.0
+
+#: The credible level that stands in for "three sigma": the probability a
+#: Gaussian puts inside plus or minus three standard deviations. Using the
+#: *two-sided* content for a one-sided limit is the usual convention in this
+#: corner of the literature, and it is the one already implied by the 95%
+#: default above, which is the two-sided content of two sigma to within a
+#: rounding. It is worth being explicit, because the one-sided alternative,
+#: 99.865%, gives a noticeably looser limit and the two are easy to confuse.
+THREE_SIGMA_LEVEL = float(erf(3.0 / np.sqrt(2.0)))
 
 #: Tolerance of :func:`_column_for_parameter`, in units of the parameter's own
 #: recorded 16--84 width. A chain column belongs to a parameter when its
@@ -239,6 +275,101 @@ def _circular_summary(omega_deg, weights=None):
     }
 
 
+def _prior_weights(eccentricity, flat_in_e_prior):
+    r"""Sample weights that undo the :math:`p(e) \propto e` implied prior.
+
+    ``None`` when no reweighting is asked for, which every consumer here reads
+    as "use the samples as drawn".
+    """
+    if not flat_in_e_prior:
+        return None
+    # 1/e diverges at the origin; clip at a value far below any sample the
+    # posterior actually places there, so one unlucky draw cannot carry the
+    # whole weighted CDF.
+    floor = 1e-6 * np.median(eccentricity)
+    weights = 1.0 / np.clip(eccentricity, floor, None)
+    return weights / np.sum(weights)
+
+
+def _quantiles(values, levels, weights):
+    """Quantiles at fractional ``levels``, weighted or not."""
+    if weights is None:
+        return np.percentile(values, [100 * level for level in levels])
+    return _weighted_quantile(values, levels, weights)
+
+
+def eps_component_summary(eps1, eps2, weights=None, upper_limit_level=THREE_SIGMA_LEVEL):
+    r"""Summarize the ``EPS1`` and ``EPS2`` marginals: values, errors, limits.
+
+    These are the *marginals*, and they are not a route to the eccentricity --
+    see the warning in the module docstring, and
+    :func:`eccentricity_summary`, which uses the joint samples. What they are
+    good for is quoting the two fitted components themselves, which a parfile
+    carries but the result table previously recorded only in the sampler's
+    local coordinates.
+
+    The upper limit is on the **magnitude**. ``EPS1`` is :math:`e\sin\omega`
+    and can be either sign, so "less than" is only a statement about a signed
+    value if the sign is already known, which in a non-detection it is not.
+    :math:`|\epsilon_1| < x` says what a non-detection actually establishes,
+    and reduces to the familiar half-normal limit when the posterior sits on
+    the origin: at :data:`THREE_SIGMA_LEVEL` it is exactly three sigma.
+
+    Parameters
+    ----------
+    eps1, eps2 : array-like
+        Paired posterior samples, in physical units.
+    weights : array-like, optional
+        Sample weights from :func:`_prior_weights`. Passing the same weights
+        the eccentricity used keeps the whole summary under one prior.
+    upper_limit_level : float
+        Credible level of the magnitude limits. Defaults to
+        :data:`THREE_SIGMA_LEVEL`.
+
+    Returns
+    -------
+    dict
+        Per component: ``EPS1_<percentile>`` for each of :data:`PERCENTILES`,
+        ``EPS1_err_lo`` and ``EPS1_err_hi`` (the 16--50 and 50--84 half-widths),
+        ``EPS1_err`` (the larger of the two, which is the symmetric uncertainty
+        :mod:`ell1fit.create_parfile` writes into a parfile), and
+        ``EPS1_abs_upper_limit``. Plus ``EPS_abs_upper_limit_level`` and
+        ``EPS_summary``, the one-line form.
+    """
+    eps1 = np.asarray(eps1, dtype=float)
+    eps2 = np.asarray(eps2, dtype=float)
+    if eps1.shape != eps2.shape:
+        raise ValueError("eps1 and eps2 must be paired: same number of samples in each.")
+
+    results = {}
+    for par, values in (("EPS1", eps1), ("EPS2", eps2)):
+        quantiles = _quantiles(values, [p / 100 for p in PERCENTILES], weights)
+        results.update({f"{par}_{p:g}": float(q) for p, q in zip(PERCENTILES, quantiles)})
+        low, median, high = (results[f"{par}_{p:g}"] for p in (16, 50, 84))
+        results[f"{par}_err_lo"] = median - low
+        results[f"{par}_err_hi"] = high - median
+        results[f"{par}_err"] = max(median - low, high - median)
+        results[f"{par}_abs_upper_limit"] = float(
+            _quantiles(np.abs(values), [upper_limit_level], weights)[0]
+        )
+
+    results["EPS_abs_upper_limit_level"] = float(upper_limit_level)
+    results["EPS_summary"] = "; ".join(
+        [
+            ", ".join(
+                f"{par} = {results[f'{par}_50']:.4g} "
+                f"(+{results[f'{par}_err_hi']:.2g} -{results[f'{par}_err_lo']:.2g}, 68%)"
+                for par in ("EPS1", "EPS2")
+            ),
+            ", ".join(
+                f"|{par}| < {results[f'{par}_abs_upper_limit']:.3g}" for par in ("EPS1", "EPS2")
+            )
+            + f" ({100 * upper_limit_level:.4g}%, 3 sigma)",
+        ]
+    )
+    return results
+
+
 def eccentricity_summary(
     eps1,
     eps2,
@@ -273,11 +404,14 @@ def eccentricity_summary(
         ``ECC_<percentile>`` for each of :data:`PERCENTILES`;
         ``ECC_upper_limit`` and ``ECC_upper_limit_level`` (the limit is ``nan``
         when the eccentricity is detected, since a limit is then not the thing
-        to quote); ``ECC_detected``; ``ECC_zero_credibility`` and
-        ``ECC_significance_sigma`` from
+        to quote); ``ECC_upper_limit_3sigma`` and its ``_level``, which unlike
+        the above are reported either way; ``ECC_detected``;
+        ``ECC_zero_credibility`` and ``ECC_significance_sigma`` from
         :func:`zero_eccentricity_exclusion`; the ``OM_deg_*`` fields of
-        :func:`_circular_summary`; ``ECC_nsamples``; ``ECC_prior``; and
-        ``ECC_summary``, the one-line form to paste into a paper draft.
+        :func:`_circular_summary`; every field of
+        :func:`eps_component_summary`, under this same prior;
+        ``ECC_nsamples``; ``ECC_prior``; and ``ECC_summary``, the one-line form
+        to paste into a paper draft.
     """
     if np.shape(eps1) != np.shape(eps2):
         raise ValueError("eps1 and eps2 must be paired: same number of samples in each.")
@@ -286,27 +420,25 @@ def eccentricity_summary(
     credibility, sigma = zero_eccentricity_exclusion(eps1, eps2)
     detected = bool(sigma >= detection_sigma)
 
-    if flat_in_e_prior:
-        # 1/e diverges at the origin; clip at a value far below any sample the
-        # posterior actually places there, so one unlucky draw cannot carry the
-        # whole weighted CDF.
-        floor = 1e-6 * np.median(eccentricity)
-        weights = 1.0 / np.clip(eccentricity, floor, None)
-        weights /= np.sum(weights)
-        quantiles = _weighted_quantile(eccentricity, [p / 100 for p in PERCENTILES], weights)
-        limit = float(_weighted_quantile(eccentricity, [upper_limit_level], weights)[0])
-    else:
-        weights = None
-        quantiles = np.percentile(eccentricity, PERCENTILES)
-        limit = float(np.percentile(eccentricity, 100 * upper_limit_level))
+    weights = _prior_weights(eccentricity, flat_in_e_prior)
+    quantiles = _quantiles(eccentricity, [p / 100 for p in PERCENTILES], weights)
+    limit = float(_quantiles(eccentricity, [upper_limit_level], weights)[0])
 
     results = {f"ECC_{p:g}": float(value) for p, value in zip(PERCENTILES, quantiles)}
     results.update(_circular_summary(omega_deg, weights))
+    results.update(eps_component_summary(eps1, eps2, weights=weights))
     results["ECC_detected"] = detected
     results["ECC_zero_credibility"] = credibility
     results["ECC_significance_sigma"] = sigma
     results["ECC_upper_limit"] = np.nan if detected else limit
     results["ECC_upper_limit_level"] = float(upper_limit_level)
+    # Unlike the one above, this is reported whether or not the eccentricity is
+    # detected: beside a measurement it is a cross-check rather than a claim,
+    # and having to refit to get it would be a poor trade for the one column.
+    results["ECC_upper_limit_3sigma"] = float(
+        _quantiles(eccentricity, [THREE_SIGMA_LEVEL], weights)[0]
+    )
+    results["ECC_upper_limit_3sigma_level"] = THREE_SIGMA_LEVEL
     results["ECC_nsamples"] = int(eccentricity.size)
     results["ECC_prior"] = "flat in e" if flat_in_e_prior else "flat in the EPS1-EPS2 plane"
 
@@ -326,6 +458,17 @@ def eccentricity_summary(
         )
 
     return results
+
+
+class ParameterNotSampled(ValueError):
+    """A requested parameter is not among the columns of this chain.
+
+    Kept distinct from the other :class:`ValueError` raised here, which means
+    the table and the chain disagree about a parameter they *both* contain --
+    that is a corrupted pairing of files and must never be silently skipped.
+    "Not fitted" is a perfectly ordinary thing for a caller that asks for every
+    orbital parameter and takes whichever were explored.
+    """
 
 
 def _colnames(results_row):
@@ -352,9 +495,9 @@ def _column_for_parameter(flat_chain, results_row, par, tolerance=COLUMN_MATCH_T
     available = _colnames(results_row)
     missing = [key for key in keys if key not in available]
     if missing:
-        raise ValueError(
+        raise ParameterNotSampled(
             f"{par} was not a fitted parameter in these results: {missing[0]} is missing. "
-            "Refit including EPS1 and EPS2 among the fitted parameters."
+            f"Refit including {par} among the fitted parameters."
         )
 
     target = np.array([float(results_row[key]) for key in keys])
@@ -388,9 +531,9 @@ def _column_from_labels(labels, par, flat_chain, results_row, tolerance=COLUMN_M
             column = labels.index(candidate)
             break
     else:
-        raise ValueError(
+        raise ParameterNotSampled(
             f"{par} is not among the sampled parameters {labels}. "
-            "Refit including EPS1 and EPS2 among the fitted parameters."
+            f"Refit including {par} among the fitted parameters."
         )
 
     keys = [f"d{par}_{perc:g}" for perc in (16, 50, 84)]
@@ -408,17 +551,39 @@ def _column_from_labels(labels, par, flat_chain, results_row, tolerance=COLUMN_M
 
 
 def eps_samples_from_chain(results_row, flat_chain, labels=None):
-    r"""Turn a flattened chain into physical ``EPS1``/``EPS2`` samples.
+    r"""Physical ``EPS1``/``EPS2`` samples, paired sample by sample.
+
+    The eccentricity-specific face of :func:`physical_samples_from_chain`,
+    which documents the conversion. Both parameters are required here: without
+    the pair there is no eccentricity to speak of.
+    """
+    samples = physical_samples_from_chain(results_row, flat_chain, ("EPS1", "EPS2"), labels=labels)
+    return samples["EPS1"], samples["EPS2"]
+
+
+def _local_scaling(results_row, par):
+    """The ``initial`` and ``factor`` that map local coordinates to physical."""
+    keys = [f"d{par}_initial", f"d{par}_factor"]
+    for key in keys:
+        if key not in _colnames(results_row):
+            raise ParameterNotSampled(
+                f"{par} has no recorded scaling in these results: {key} is missing, "
+                "so its samples cannot be put back into physical units."
+            )
+    return float(results_row[keys[0]]), float(results_row[keys[1]])
+
+
+def physical_samples_from_chain(results_row, flat_chain, parameters, labels=None, strict=True):
+    r"""Turn a flattened chain into physical samples of the named parameters.
 
     The sampler works in local coordinates: column ``i`` of the chain holds
-    ``dEPS1``, the offset from the starting value in units of that parameter's
-    preconditioned scale. The fit records both numbers needed to undo that,
-    ``dEPS1_initial`` and ``dEPS1_factor``, so that
+    ``dA1``, say, the offset from the starting value in units of that
+    parameter's preconditioned scale. The fit records both numbers needed to
+    undo that, ``dA1_initial`` and ``dA1_factor``, so that
 
     .. math::
 
-       \epsilon_1 = \epsilon_1^{\mathrm{initial}}
-                    + \mathrm{d}\epsilon_1 \times \mathrm{factor}.
+       A1 = A1^{\mathrm{initial}} + \mathrm{d}A1 \times \mathrm{factor}.
 
     Parameters
     ----------
@@ -426,28 +591,44 @@ def eps_samples_from_chain(results_row, flat_chain, labels=None):
         One row of a ``*_results.ecsv`` table.
     flat_chain : np.ndarray
         Flattened chain, shape ``(nsamples, ndim)``, in local coordinates.
+    parameters : iterable of str
+        Physical parameter names, e.g. ``("A1", "EPS1", "EPS2")``.
     labels : list of str, optional
         Parameter name per column, as saved by
         :func:`ell1fit.mcmc_utils.save_flat_samples`. When absent -- an HDF5
         chain carries no names -- the columns are identified by their recorded
         percentiles instead.
+    strict : bool
+        Whether a parameter that was not fitted is an error. ``True``, the
+        default, suits a caller that needs a specific parameter and has nothing
+        to say without it. ``False`` suits one that offers a menu -- the orbital
+        summary plot asks for all five orbital parameters and draws whichever
+        the chain actually explored. Either way, a chain that *disagrees* with
+        the table about a parameter both contain still raises: that means the
+        two files are from different fits, which is never something to skip.
 
     Returns
     -------
-    eps1, eps2 : np.ndarray
-        Physical posterior samples, paired sample by sample.
+    dict
+        ``{parameter: np.ndarray}``, in the order requested, holding the
+        physical posterior samples. Parameters skipped under ``strict=False``
+        are simply absent.
     """
     flat_chain = np.atleast_2d(np.asarray(flat_chain, dtype=float))
-    samples = []
-    for par in ("EPS1", "EPS2"):
-        if labels is None:
-            column = _column_for_parameter(flat_chain, results_row, par)
-        else:
-            column = _column_from_labels(list(labels), par, flat_chain, results_row)
-        initial = float(results_row[f"d{par}_initial"])
-        factor = float(results_row[f"d{par}_factor"])
-        samples.append(initial + flat_chain[:, column] * factor)
-    return samples[0], samples[1]
+    samples = {}
+    for par in parameters:
+        try:
+            if labels is None:
+                column = _column_for_parameter(flat_chain, results_row, par)
+            else:
+                column = _column_from_labels(list(labels), par, flat_chain, results_row)
+            initial, factor = _local_scaling(results_row, par)
+        except ParameterNotSampled:
+            if strict:
+                raise
+            continue
+        samples[par] = initial + flat_chain[:, column] * factor
+    return samples
 
 
 RESULTS_SUFFIX = "_results.ecsv"
@@ -511,6 +692,12 @@ def load_eps_samples(results_file, chain_file=None, row=-1):
             ".h5 as chain_file."
         )
 
+    results_row, flat_chain, labels = _read_run(results_file, chain_file, row)
+    return eps_samples_from_chain(results_row, flat_chain, labels=labels)
+
+
+def _read_run(results_file, chain_file, row):
+    """The results row and the flattened chain that goes with it."""
     table = Table.read(results_file)
     results_row = table[row]
 
@@ -528,8 +715,39 @@ def load_eps_samples(results_file, chain_file=None, row=-1):
         labels = None
 
     logging.info(f"Read {flat_chain.shape[0]} samples from {chain_file}")
+    return results_row, flat_chain, labels
 
-    return eps_samples_from_chain(results_row, flat_chain, labels=labels)
+
+def load_orbital_samples(results_file, chain_file=None, row=-1):
+    """Physical samples of whichever orbital parameters a finished run explored.
+
+    The same load as :func:`load_eps_samples`, widened to every parameter of
+    :data:`ell1fit.orbit_plot.ORBITAL_PARAMETERS`. Parameters that were held
+    fixed are simply absent from the result rather than an error, since which
+    of them a given fit varied is the user's choice and not a fault.
+
+    Parameters
+    ----------
+    results_file : str
+        Path to the ``*_results.ecsv`` written by the fit.
+    chain_file : str, optional
+        Path to the samples. Defaults to :func:`default_chain_file`.
+    row : int
+        Which row of the table to use; the default is the most recent fit.
+
+    Returns
+    -------
+    dict
+        ``{parameter: np.ndarray}`` of physical posterior samples.
+    """
+    from .orbit_plot import ORBITAL_PARAMETERS
+
+    if chain_file is None:
+        chain_file = default_chain_file(results_file)
+    results_row, flat_chain, labels = _read_run(results_file, chain_file, row)
+    return physical_samples_from_chain(
+        results_row, flat_chain, ORBITAL_PARAMETERS, labels=labels, strict=False
+    )
 
 
 def eccentricity_summary_from_run(results_file, chain_file=None, row=-1, **kwargs):
@@ -541,15 +759,67 @@ def eccentricity_summary_from_run(results_file, chain_file=None, row=-1, **kwarg
     return eccentricity_summary(eps1, eps2, **kwargs)
 
 
-def plot_eccentricity_posterior(eps1, eps2, fname="eccentricity.jpg", summary=None, bins=80):
-    """Plot the eccentricity posterior, marking either the interval or the limit.
+def draw_eccentricity_posterior(ax, eps1, eps2, summary=None, bins=80):
+    """Draw the eccentricity posterior into an existing axis.
+
+    The drawing half of :func:`plot_eccentricity_posterior`, split out so that
+    a caller assembling a multi-panel figure gets the *same* panel rather than
+    a second implementation of it that can drift.
+
+    Parameters
+    ----------
+    ax : matplotlib.axes.Axes
+        Where to draw. Its figure, style and layout are the caller's business.
+    eps1, eps2 : array-like
+        Paired posterior samples, in physical units.
+    summary : dict, optional
+        Output of :func:`eccentricity_summary`; recomputed with the defaults if
+        not given.
+    bins : int
+        Histogram bins.
+
+    Returns
+    -------
+    dict
+        The summary used, whether passed in or computed here.
+    """
+    if summary is None:
+        summary = eccentricity_summary(eps1, eps2)
+    eccentricity, _ = eccentricity_and_omega(eps1, eps2)
+
+    ax.hist(eccentricity, bins=bins, histtype="stepfilled", color="grey", alpha=0.4)
+    if summary["ECC_detected"]:
+        ax.axvline(summary["ECC_50"], color="k", label="median")
+        ax.axvspan(
+            summary["ECC_16"], summary["ECC_84"], color="k", alpha=0.12, label="68% interval"
+        )
+    else:
+        ax.axvline(
+            summary["ECC_upper_limit"],
+            color="k",
+            ls="--",
+            label=f"{100 * summary['ECC_upper_limit_level']:g}% upper limit",
+        )
+    ax.set_xlabel("Eccentricity")
+    ax.set_ylabel("Posterior samples")
+    ax.set_xlim(0, None)
+    ax.legend(loc="upper right")
+    # The summary line is too long for one 3.5-inch title: break it at the
+    # semicolons and give the top margin back the room it needs.
+    ax.set_title(summary["ECC_summary"].replace("; ", "\n"), fontsize=SUMMARY_TITLE_SIZE)
+    return summary
+
+
+def plot_eccentricity_posterior(eps1, eps2, fname="eccentricity", summary=None, bins=80):
+    """Plot the eccentricity posterior on its own, marking the interval or limit.
 
     Parameters
     ----------
     eps1, eps2 : array-like
         Paired posterior samples, in physical units.
     fname : str
-        Output image path.
+        Output root, or a complete file name; see
+        :func:`ell1fit.plotting.figure_path`.
     summary : dict, optional
         Output of :func:`eccentricity_summary`; recomputed with the defaults if
         not given.
@@ -559,41 +829,16 @@ def plot_eccentricity_posterior(eps1, eps2, fname="eccentricity.jpg", summary=No
     Returns
     -------
     str
-        ``fname``, for convenience.
+        The path written.
     """
     import matplotlib.pyplot as plt
 
-    if summary is None:
-        summary = eccentricity_summary(eps1, eps2)
-    eccentricity, _ = eccentricity_and_omega(eps1, eps2)
-
     with plot_style_context():
-        fig, ax = plt.subplots()
-        ax.hist(eccentricity, bins=bins, histtype="stepfilled", color="grey", alpha=0.4)
-        if summary["ECC_detected"]:
-            ax.axvline(summary["ECC_50"], color="k", label="median")
-            ax.axvspan(
-                summary["ECC_16"], summary["ECC_84"], color="k", alpha=0.12, label="68% interval"
-            )
-        else:
-            ax.axvline(
-                summary["ECC_upper_limit"],
-                color="k",
-                ls="--",
-                label=f"{100 * summary['ECC_upper_limit_level']:g}% upper limit",
-            )
-        ax.set_xlabel("Eccentricity")
-        ax.set_ylabel("Posterior samples")
-        ax.set_xlim(0, None)
-        ax.legend(loc="upper right")
-        # The summary line is too long for one 3.5-inch title: break it at the
-        # semicolons and give the top margin back the room it needs.
-        ax.set_title(summary["ECC_summary"].replace("; ", "\n"), fontsize=5)
-        fig.subplots_adjust(top=0.88)
-        fig.savefig(fname, dpi=300)
-        plt.close(fig)
-
-    return fname
+        # Square: a posterior histogram has no natural aspect, and the
+        # two-line numerical summary above it needs the vertical room.
+        fig, ax = plt.subplots(figsize=figure_size("column-square"), layout="constrained")
+        draw_eccentricity_posterior(ax, eps1, eps2, summary=summary, bins=bins)
+        return save_figure(fig, fname)
 
 
 def main(args=None):
@@ -627,26 +872,49 @@ def main(args=None):
     parser.add_argument(
         "--plot",
         default=None,
-        help="Output plot path (default: <outroot>_eccentricity.jpg)",
+        help="Output plot path (default: <outroot>_eccentricity)",
     )
+    parser.add_argument(
+        "--orbit-plot",
+        default=None,
+        dest="orbit_plot",
+        help=(
+            "Output path for the orbital summary: the orbital parameters this fit "
+            "explored, in physical units, beside the eccentricity they imply "
+            "(default: <outroot>_orbit)"
+        ),
+    )
+    add_figure_format_argument(parser)
     parsed = parser.parse_args(args)
 
     configure_logging()
+    set_figure_format(parsed.figure_format)
 
-    eps1, eps2 = load_eps_samples(
+    samples = load_orbital_samples(
         parsed.results_file,
         chain_file=parsed.chain_file,
         row=parsed.row,
     )
+    eps1, eps2 = samples["EPS1"], samples["EPS2"]
     summary = eccentricity_summary(eps1, eps2, flat_in_e_prior=parsed.flat_in_e)
 
     print(summary["ECC_summary"])
+    print(f"e < {summary['ECC_upper_limit_3sigma']:.3g} (3 sigma upper limit)")
+    print(summary["EPS_summary"])
     for key in sorted(summary):
-        if key != "ECC_summary":
+        if key not in ("ECC_summary", "EPS_summary"):
             print(f"  {key}: {summary[key]}")
 
     plot_path = parsed.plot
     if plot_path is None:
-        plot_path = output_root(parsed.results_file) + "_eccentricity.jpg"
+        plot_path = output_root(parsed.results_file) + "_eccentricity"
     plot_eccentricity_posterior(eps1, eps2, fname=plot_path, summary=summary)
     print(f"\nPlot saved to {plot_path}")
+
+    from .orbit_plot import plot_orbit_summary
+
+    orbit_path = parsed.orbit_plot
+    if orbit_path is None:
+        orbit_path = output_root(parsed.results_file) + "_orbit"
+    plot_orbit_summary(samples, fname=orbit_path, summary=summary)
+    print(f"Orbit summary saved to {orbit_path}")

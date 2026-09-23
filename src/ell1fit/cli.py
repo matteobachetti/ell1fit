@@ -11,6 +11,8 @@ from .likelihoods import pletsch_clarke_likelihood
 from .likelihoods import rayleigh_as_likelihood
 from .logging import configure_logging
 from .pipeline import ell1fit
+from .plotting import add_figure_format_argument, set_figure_format
+from .priors import parse_prior_specs
 
 
 __all__ = [
@@ -112,6 +114,21 @@ def main(args=None):
     )
     parser.add_argument("--ignore-uncertainties", action="store_true", default=False)
     parser.add_argument(
+        "--prior",
+        action="append",
+        default=None,
+        metavar="NAME:SHAPE:ARGS",
+        help=(
+            "Override the prior on one parameter; repeat for more. SHAPE is "
+            "uniform or normal. ARGS is either two numbers -- bounds for "
+            "uniform, mean and sigma for normal -- or +-WIDTH to centre the "
+            "prior on the parameter's input value. Values are in the same "
+            "units as the parfile. A bare spin-parameter name covers every "
+            "file (F1 means F1_0, F1_1, ...). Examples: "
+            "--prior F1:uniform:-1e-10,1e-10 --prior TASC:normal:+-1e-6"
+        ),
+    )
+    parser.add_argument(
         "--sampler",
         type=str,
         choices=["emcee", "nuts", "nested"],
@@ -151,7 +168,17 @@ def main(args=None):
         ),
     )
 
+    add_figure_format_argument(parser)
     args = parser.parse_args(args)
+
+    # Parsed here rather than deep in the pipeline so a typo is reported as a
+    # usage error in the first second, not after the events are loaded.
+    try:
+        prior_specs = parse_prior_specs(args.prior)
+    except ValueError as error:
+        parser.error(str(error))
+
+    set_figure_format(args.figure_format)
     files = args.files
     parfiles = args.parfile
 
@@ -174,6 +201,7 @@ def main(args=None):
         use_pi=args.use_pi,
         ignore_uncertainties=args.ignore_uncertainties,
         template_iterations=args.template_iterations,
+        priors=prior_specs,
         sampler=args.sampler,
         nlive=args.nlive,
         dlogz=args.dlogz,

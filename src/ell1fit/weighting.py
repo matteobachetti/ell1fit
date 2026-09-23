@@ -55,7 +55,9 @@ from matplotlib.ticker import FuncFormatter, NullFormatter
 from scipy.interpolate import BSpline
 
 from .phase_utils import _calculate_phases
+from .plotting import figure_size as _figure_size
 from .plotting import plot_style_context as _plot_style_context
+from .plotting import save_figure as _save_figure
 
 
 __all__ = [
@@ -255,9 +257,10 @@ def _plot_weight_diagnostic(filename, energies, coordinate, is_log, fit, project
         fig, (ax_spectrum, ax_weight) = plt.subplots(
             2,
             1,
-            figsize=(7, 5.5),
+            figsize=_figure_size("wide-tall"),
             sharex=True,
             gridspec_kw={"height_ratios": [1, 2.4]},
+            layout="constrained",
         )
 
         ax_spectrum.hist(energies, bins=edges, histtype="step", color="0.3", lw=0.9)
@@ -332,10 +335,10 @@ def _plot_weight_diagnostic(filename, energies, coordinate, is_log, fit, project
             inside = (ticks >= energies.min() * 0.99) & (ticks <= energies.max() * 1.01)
             ax_weight.set_xticks(ticks[inside])
 
+        # A diagnostic, so it is allowed the filename in its title; the
+        # figures meant for a paper carry none.
         fig.suptitle(os.path.basename(filename))
-        fig.tight_layout()
-        fig.savefig(f"{filename}.jpg")
-        plt.close(fig)
+        return _save_figure(fig, filename)
 
 
 def pf_weight_versus_energy(

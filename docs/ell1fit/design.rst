@@ -22,15 +22,24 @@ pulse phase of order unity. An optimizer that steps the same distance in every
 direction, or an MCMC that spreads its walkers by a fixed amount, behaves
 sensibly only if those directions are comparably scaled. In local coordinates
 the starting point is the origin and the convention is that **one standard
-deviation is** ``1e-6`` **local units** for every parameter.
+deviation is one local unit** for every parameter
+(:data:`ell1fit.scaling.TARGET_LOCAL_SIGMA`). Corner plots are drawn in these
+coordinates, so the choice is also what makes their axis labels read directly
+as sigmas rather than carrying a shared multiplier on every panel.
 
-That convention is easy to state and easy to get wrong. The refinement loop was
-written with a convergence threshold of ``0.1``, on the belief that the factors
-normalised each parameter to order unity; ``0.1`` local units is
-:math:`10^5\sigma`, so convergence was declared on essentially every first
-pass. The threshold is now expressed as a multiple of
-:data:`ell1fit.scaling.TARGET_LOCAL_SIGMA` so the units are visible at the point
-of definition.
+That convention is easy to state and easy to get wrong, and the number itself
+used to be ``1e-6``. The refinement loop was written with a convergence
+threshold of ``0.1``, on the belief that the factors normalised each parameter
+to order unity; against ``1e-6`` that was :math:`10^5\sigma`, so convergence was
+declared on essentially every first pass. The threshold is now expressed as a
+multiple of :data:`ell1fit.scaling.TARGET_LOCAL_SIGMA` so the units are visible
+at the point of definition -- which is why it survived the constant changing.
+
+Two things downstream were written in absolute terms and so were quietly tied
+to that number. ``scipy.optimize``'s finite-difference probe is one; it is now
+set explicitly, as :data:`ell1fit.scaling.OPTIMIZER_EPS`, in units of sigma.
+``emcee.moves.DESnookerMove`` is the other, and is discussed under
+:doc:`performance`.
 
 The factors are measured, not assumed
 --------------------------------------

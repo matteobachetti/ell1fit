@@ -8,6 +8,12 @@ CLI entry points call it.
 
 The handler it adds is tagged so that repeated calls do not stack up duplicate
 handlers, which would print every message several times.
+
+Because that handler sits on the root logger, chatty third-party libraries would
+otherwise print through it too. :data:`NOISY_LIBRARIES` lists the ones that
+report routine internal work at ``INFO`` -- ``fontTools`` emits a line per font
+table every time matplotlib subsets fonts for a PDF -- and they are held at
+``WARNING`` so that only real problems from them reach the console.
 """
 
 import sys
@@ -18,8 +24,17 @@ from typing import Optional, Dict
 
 __all__ = [
     "ColoredFormatter",
+    "NOISY_LIBRARIES",
     "configure_logging",
 ]
+
+
+#: Third-party loggers whose ``INFO`` output is internal bookkeeping, not news.
+NOISY_LIBRARIES = (
+    "fontTools",
+    "matplotlib",
+    "PIL",
+)
 
 
 class ColoredFormatter(logging.Formatter):
@@ -65,6 +80,10 @@ def configure_logging(level: int = logging.INFO) -> None:
 
     This leaves library imports side-effect free and only attaches a console
     handler when explicitly requested by command-line entry points.
+
+    The libraries in :data:`NOISY_LIBRARIES` are held at ``WARNING`` whatever
+    ``level`` is asked for: more detail means more detail about *this* package,
+    not about matplotlib's font machinery.
     """
     root_logger = logging.getLogger()
 
@@ -75,3 +94,6 @@ def configure_logging(level: int = logging.INFO) -> None:
         root_logger.addHandler(cli_handler)
 
     root_logger.setLevel(level)
+
+    for name in NOISY_LIBRARIES:
+        logging.getLogger(name).setLevel(logging.WARNING)

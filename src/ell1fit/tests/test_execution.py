@@ -25,6 +25,7 @@ from astropy.table import Table
 
 from ell1fit.cli import main as main_ell1fit
 from ell1fit.create_parfile import main as main_ell1par
+from ell1fit.plotting import figure_path
 
 curdir = os.path.abspath(os.path.dirname(__file__))
 datadir = os.path.join(curdir, "data")
@@ -110,7 +111,7 @@ class TestExecution:
         for ev in self.event_files:
             root = ev.replace(".nc", "")
             ecsv_res = f"{root}{label}_results.ecsv"
-            initial_phaseogram = f"{root}{label}.jpg"
+            initial_phaseogram = figure_path(f"{root}{label}")
             assert os.path.exists(ecsv_res)
             assert os.path.exists(initial_phaseogram)
 

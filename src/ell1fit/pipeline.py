@@ -50,10 +50,12 @@ from .phase_utils import _calculate_phases
 from .phase_utils import ell1_truncation_error
 from .phase_utils import folded_profile
 from .phase_utils import phases_around_zero
+from .plotting import figure_size as _figure_size
 from .plotting import plot_style_context as _plot_style_context
+from .plotting import save_figure as _save_figure
 from .posterior import _build_posterior_functions
 from .posterior import _trace_phase_0_likelihood
-from .priors import assign_logpriors
+from .priors import assign_logpriors, parse_prior_specs, user_prior_sigmas
 from .templates import create_template_from_profile_harm
 from .templates import estimate_weighted_profile_std
 from .templates import get_template_func
@@ -276,10 +278,11 @@ def _enrich_results_with_eccentricity(results, outroot, requested_parameter_name
 
     from .eccentricity import (
         eccentricity_summary,
-        eps_samples_from_chain,
+        physical_samples_from_chain,
         plot_eccentricity_posterior,
     )
     from .mcmc_utils import SAMPLES_SUFFIX, load_flat_samples
+    from .orbit_plot import ORBITAL_PARAMETERS, plot_orbit_summary
 
     samples_file = outroot + SAMPLES_SUFFIX
     if not os.path.isfile(samples_file):
@@ -289,10 +292,17 @@ def _enrich_results_with_eccentricity(results, outroot, requested_parameter_name
         return results
 
     flat_chain, labels = load_flat_samples(samples_file)
-    eps1, eps2 = eps_samples_from_chain(results, flat_chain, labels=labels)
+    # Every orbital parameter, not just the pair: whichever of them this fit
+    # varied go into the orbit summary alongside the eccentricity. strict=False
+    # because a fit is free to hold any of them fixed.
+    samples = physical_samples_from_chain(
+        results, flat_chain, ORBITAL_PARAMETERS, labels=labels, strict=False
+    )
+    eps1, eps2 = samples["EPS1"], samples["EPS2"]
     summary = eccentricity_summary(eps1, eps2)
     results.update(summary)
-    plot_eccentricity_posterior(eps1, eps2, fname=outroot + "_eccentricity.jpg", summary=summary)
+    plot_eccentricity_posterior(eps1, eps2, fname=outroot + "_eccentricity", summary=summary)
+    plot_orbit_summary(samples, fname=outroot + "_orbit", summary=summary)
     logging.info(f"Eccentricity: {summary['ECC_summary']}")
     return results
 
@@ -370,7 +380,7 @@ def _prepare_templates_and_phase_priors(
             profile[i],
             nharm=nharm,
             final_nbin=200,
-            imagefile=get_outroot(i) + "_template_raw.jpg",
+            imagefile=get_outroot(i) + "_template_raw",
         )
 
         if use_weight:
@@ -378,7 +388,7 @@ def _prepare_templates_and_phase_priors(
                 profile_weight[i],
                 nharm=nharm,
                 final_nbin=200,
-                imagefile=get_outroot(i) + "_template.jpg",
+                imagefile=get_outroot(i) + "_template",
             )
             template = _undilute_template(template, weights[i])
         else:
@@ -457,14 +467,13 @@ def _build_profiles_and_weights(
         # iterative refinement calls this repeatedly.
         with _plot_style_context():
             for i, (p, pw) in enumerate(zip(profile, profile_weight)):
-                fig = plt.figure(figsize=(3.5, 2.65))
+                fig = plt.figure(figsize=_figure_size("column"), layout="constrained")
                 plt.plot(np.concatenate((p, p)) / p.max(), label="unweighted")
                 plt.plot(np.concatenate((pw, pw)) / pw.max(), label="weighted")
                 plt.xlabel("Phase bin (two cycles)")
                 plt.ylabel("Normalized counts")
                 plt.legend()
-                plt.savefig(get_outroot(i) + "_weighted_profile_comparison.jpg")
-                plt.close(fig)
+                _save_figure(fig, get_outroot(i) + "_weighted_profile_comparison")
     else:
         profile_weight = profile
 
@@ -481,8 +490,14 @@ def _prepare_fit_setup(
     template_funcs=None,
     weights=None,
     tolerance=1e-8,
+    user_priors=None,
 ):
     """Collect fit parameters, priors, factors, and initial fit values.
+
+    ``user_priors`` is a list of :class:`ell1fit.priors.PriorSpec` overrides. It
+    feeds both the priors and the scaling: see
+    :func:`ell1fit.priors.user_prior_sigmas` for why a prior that does not also
+    set the local scale would start the walkers outside itself.
 
     Returns
     -------
@@ -502,12 +517,16 @@ def _prepare_fit_setup(
         fit_parameter_names,
         parameters_with_unc,
         obs_length=observation_length,
+        user_priors=user_priors,
     )
     factors = get_factors(
         fit_parameter_names,
         model,
         observation_length,
         parameters_with_unc=parameters_with_unc,
+        extra_uncertainties=user_prior_sigmas(
+            fit_parameter_names, parameters_with_unc, user_priors
+        ),
     )
 
     try:
@@ -543,6 +562,7 @@ def ell1fit(
     use_pi=False,
     ignore_uncertainties=False,
     template_iterations=1,
+    priors=None,
     sampler="emcee",
     nlive=1000,
     dlogz=0.1,
@@ -598,6 +618,12 @@ def ell1fit(
         that. ``1`` (the default) disables refinement entirely and is
         bit-identical to not having the feature. See
         :mod:`ell1fit.refinement`.
+    priors : list, optional
+        Prior overrides, each either a ``"NAME:SHAPE:ARGS"`` string or an
+        already-parsed :class:`ell1fit.priors.PriorSpec`. Each one replaces the
+        rule :func:`ell1fit.priors.assign_logpriors` would otherwise apply, and
+        also sets that parameter's local scale when it is the tighter of the
+        two. See :func:`ell1fit.priors.parse_prior_spec` for the syntax.
     sampler : {"emcee", "nuts", "nested"}, optional
         Posterior-exploration backend -- see
         :func:`ell1fit.fitting.optimize_solution`.
@@ -722,6 +748,7 @@ def ell1fit(
         template_funcs=template_func,
         weights=weights if use_weight else None,
         tolerance=tolerance,
+        user_priors=parse_prior_specs(priors),
     )
 
     outroots = _get_outroots(get_outroot, n_files)

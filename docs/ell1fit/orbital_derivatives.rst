@@ -1,5 +1,315 @@
-Orbital-size drift: fitting and bounding ``A1DOT``
-==================================================
+Orbital derivatives: period drift and orbital-size drift
+========================================================
+
+Two different derivatives say the orbit is evolving, and ``ell1fit`` reaches
+them by two different routes. ``PBDOT`` and ``PBDDOT`` — the orbital period's
+first and second time derivatives — are measured *across* epochs by
+``ell1decay``, from how the fitted ascending-node time ``TASC`` of each epoch
+drifts away from a constant-period ephemeris. ``A1DOT`` — the drift of the
+projected orbital size — is instead a free parameter *inside* a single
+coherent multi-file ``ell1fit`` run.
+
+Both are usually non-detections, and both are then quoted the same way: as the
+95th percentile of the parameter's magnitude over the posterior samples. This
+page covers the period derivatives first, since they are the ones most often
+asked for, and ``A1DOT`` second.
+
+Period drift: ``PBDOT`` and ``PBDDOT``
+--------------------------------------
+
+If the orbital period drifts as
+:math:`P(t) = P_b + \dot{P_b}\,t + \tfrac{1}{2}\ddot{P_b}\,t^2 + \ldots`, then
+the ascending node arrives progressively earlier or later than a fixed-period
+ephemeris predicts, by
+
+.. math::
+
+   \Delta T_{\rm asc}(t) = \frac{\dot{P_b}\,t^2}{2 P_b}
+                         + \frac{\ddot{P_b}\,t^3}{6 P_b} + \ldots
+
+``ell1decay`` takes one ``ell1fit`` result file per epoch, forms
+:math:`\Delta T_{\rm asc}` for each, and fits that curve. The per-epoch
+``TASC`` uncertainties are generally asymmetric, so the likelihood is a
+split-normal one, picking the negative or positive error bar per point
+according to which side of the model the point falls on.
+
+Three models, two Bayes factors
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Three nested models are always fit, never one in isolation:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 12 40 48
+
+   * - Model
+     - Terms in :math:`\Delta T_{\rm asc}(t)`
+     - What it represents
+   * - ``MLIN``
+     - constant + linear
+     - No period derivative at all. The constant absorbs a reference ``TASC``
+       that was not exactly the data's own mean; the linear term absorbs a
+       plain ``PB`` *miscalibration*, which is not a ``PB`` derivative.
+   * - ``M0``
+     - ``MLIN`` plus a quadratic term
+     - Adds ``PBDOT``.
+   * - ``M1``
+     - ``M0`` plus a cubic term
+     - Adds ``PBDDOT``.
+
+Each model's evidence :math:`\log Z` comes from nested sampling, repeated over
+several seeds because the scatter across seeds is a fairer error on
+:math:`\log Z` than any single run's own quoted one. Comparing neighbours in
+that ladder gives one Bayes factor per derivative:
+
+- ``bayes_factor_pbdot`` — ``M0`` over ``MLIN``: does the data need ``PBDOT``?
+- ``bayes_factor_pbddot`` — ``M1`` over ``M0``: does it need ``PBDDOT``?
+
+Each comparison differs by exactly one parameter, which is what makes it a
+question about that one derivative rather than about the shape of the curve in
+general.
+
+Measurement or upper limit
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A derivative is reported as a **measurement** when its own Bayes factor
+reaches :math:`\ln \mathrm{BF} \ge 1`, and as an **upper limit** otherwise.
+That threshold is not a new invention: :math:`2\ln\mathrm{BF} = 2` is exactly
+where the Kass & Raftery (1995) grading stops calling the evidence
+inconclusive. Change it with ``--detection-ln-bf`` if a paper wants a
+different bar.
+
+The limit itself is **the 95th percentile of the parameter's magnitude** over
+the posterior samples, the same convention used for ``A1DOT`` below and for
+the eccentricity. It says what an upper limit should say — that fraction of
+the posterior mass lies below the quoted magnitude — and it is deliberately
+*not* the more extreme end of the two-sided interval, which for a posterior
+sitting off-centre is a larger and different statement. Use
+``--upper-limit-level`` for a level other than 95%.
+
+A **three-sigma limit is always reported as well**, at 99.73% — the mass a
+Gaussian carries within three standard deviations — since that is how a
+non-detection is often quoted. It is unaffected by ``--upper-limit-level``,
+which moves only the headline number.
+
+It comes with a caveat the 95% limit does not have. A 99.73% quantile is
+determined by the outermost 0.27% of the chain, and the chain is built by
+``resample_equal``, which draws *with replacement* — so the number of
+genuinely independent points out in that tail is smaller than
+``PBDOT_nsamples`` suggests. Bootstrapping the chain of a nine-epoch fit
+measures what that costs:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 14 20 22 22 22
+
+   * - ``--nlive``
+     - Samples
+     - Beyond the 3 sigma limit
+     - Scatter, 95% limit
+     - Scatter, 3 sigma limit
+   * - 200
+     - 885
+     - ~2
+     - 2.5%
+     - 7.8%
+   * - 500 (default)
+     - 2151
+     - ~6
+     - 2.1%
+     - 1.6%
+   * - 2000
+     - 8526
+     - ~23
+     - 1.2%
+     - 2.6%
+
+At the default ``--nlive 500`` the three-sigma limit is good to a few percent,
+which is fine for a bound quoted to two significant figures. At ``--nlive
+200`` it rests on about two samples and is not worth quoting. Raising
+``--nlive`` past the default buys more samples but not obviously more
+accuracy — the central value itself moved by about 3% between these three
+runs, comparable to the scatter within any one of them, so **do not quote a
+three-sigma limit to more than two significant figures**. The 95% limit is
+stable throughout and needs no such care.
+
+Because a magnitude limit throws away the sign, **two-sided credible intervals
+are always reported alongside it**, whether or not the parameter was detected,
+at the credible levels a Gaussian one, two and three sigma carry (68.27%,
+95.45% and 99.73%) rather than the rounded 16/84 and 2.5/97.5. A reader who
+needs one number for a table reads the limit; a reader who needs to know
+whether the drift leans positive or negative reads the interval.
+
+One number in the output is a diagnostic and nothing more:
+``PBDOT_significance_sigma`` is the distance of zero from the posterior in
+units of its own standard deviation — a Gaussian approximation, quoted only so
+the numbers are comparable with what ``ell1ecc`` prints. Nothing switches on
+it. If it disagrees sharply with the Bayes factor, that is a sign the
+posterior is not the near-Gaussian shape the approximation assumes, and the
+corner plot is worth a look.
+
+What the limit rests on, and what it does not
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The two halves of the answer have very different sensitivities to the prior
+box, and it is worth being clear about which is which. Measured on a synthetic
+nine-epoch dataset with no injected derivative, varying the prior half-width
+on the quadratic and cubic coefficients over a factor of 100 (the default is
+200 times the data's own residual spread):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 20 20 19 19
+
+   * - Prior half-width
+     - :math:`\ln\mathrm{BF}` ``PBDOT``
+     - :math:`\ln\mathrm{BF}` ``PBDDOT``
+     - ``PBDOT`` limit
+     - ``PBDDOT`` limit
+   * - 20 × spread
+     - -1.80
+     - -0.63
+     - 1.90e-10
+     - 2.38e-10
+   * - 200 × spread (default)
+     - -4.06
+     - -2.88
+     - 1.84e-10
+     - 2.23e-10
+   * - 2000 × spread
+     - -5.80
+     - -6.15
+     - 1.78e-10
+     - 2.48e-10
+
+**The limits are prior-insensitive.** They move by under about 10% over that
+whole range, and not even monotonically — that is nested-sampling scatter, not
+a prior dependence. The box is far wider than the data can constrain, so the
+posterior is likelihood-dominated and its percentiles are a statement about
+the data.
+
+**The detection gate is not the same kind of statement.** Both Bayes factors
+shift by roughly 2.3 per decade of prior width — which is :math:`\ln 10`,
+exactly the Occam factor, since the box width is set from the data's own
+residual spread and not from a physical bound. Widening the prior by a factor
+of three moves :math:`\ln\mathrm{BF}` by more than the entire detection
+threshold.
+
+The ``A1DOT`` half of this page argues against using a Bayes factor to *set a
+limit* for precisely this reason, and that argument still stands. It is not
+contradicted here, because the Bayes factor decides only **whether to quote a
+value or a limit**, never how large the limit is. In the measurement above the
+verdict happens to be the same at every width — everything is far below the
+threshold — but a genuinely marginal derivative sitting near
+:math:`\ln\mathrm{BF} \approx 1` could be flipped by a factor-of-three
+change in the box. If a result turns on that verdict, vary
+``--detection-ln-bf`` and check whether the conclusion survives.
+
+Can the limits be cross-checked against the 1-sigma error?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Tempting, and usually wrong. For a Gaussian posterior *centred on zero* the
+99.73% magnitude limit really is three times the one-sigma half-width (and the
+95% one is 1.960 times it, not two — 95% is not 95.45%). Neither condition
+generally holds here, for two independent reasons.
+
+**The posterior is rarely centred on zero.** A non-detection means the
+posterior is *consistent* with zero, not centred on it; in practice it sits
+one to two sigma away. Once it does, :math:`|x|` is folded-normal and its
+high quantiles run well above the interval half-width. Across eight
+symmetric-error test posteriors the direct three-sigma limit came out 19% to
+42% larger than three times the one-sigma half-width. The one case that
+happened to land near zero (:math:`\mu/s = -0.20`) agreed to 0.8%.
+
+**With asymmetric TASC errors the posterior is not Gaussian at all.** This is
+the case that matters, since real ``ell1fit`` output has asymmetric error
+bars — it is why the likelihood is split-normal in the first place. That
+likelihood picks each point's sigma from the *sign* of its residual, so the
+log-likelihood is piecewise quadratic, with a kink wherever a residual crosses
+zero. With equal error bars the curvature is constant and the posterior is
+exactly Gaussian; with unequal ones the curvature jumps in magnitude and sign.
+Measured on five asymmetric-error datasets, the ratio
+:math:`h_{3\sigma}/h_{1\sigma}` ranged from **2.32 to 4.01** against the
+Gaussian 3.000, with excess kurtosis from −0.94 to +1.27 — and it is not
+sampler noise: on one dataset the ratio held at 1.66/2.32 through
+``--nlive`` 500, 2000 and 6000 (3k to 40k samples).
+
+So the deviation is real, large, and specific to each dataset — there is no
+correction factor to apply. This is precisely why the reported limits are
+**empirical quantiles of the chain**, which assume nothing about the shape,
+rather than anything derived from a one-sigma error. If a cross-check is
+wanted, the honest one is to compare the quoted limit against the
+folded-normal quantile implied by the chain's own mean and standard deviation:
+on the symmetric-error runs, where the posterior really is Gaussian, that
+agreed to a few percent every time, and a sharp disagreement is a useful
+signal that the posterior is skewed or kinked.
+
+Reading the output
+~~~~~~~~~~~~~~~~~~
+
+``{outroot}_results.json`` holds a block per model. Inside ``M0`` (for
+``PBDOT``) and ``M1`` (for ``PBDDOT``) each derivative carries:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 38 62
+
+   * - Key
+     - Meaning
+   * - ``PBDOT_50``
+     - Posterior median.
+   * - ``PBDOT_1sigma_lo`` / ``_hi``
+     - Two-sided 68.27% credible interval.
+   * - ``PBDOT_2sigma_lo`` / ``_hi``
+     - Two-sided 95.45% credible interval.
+   * - ``PBDOT_3sigma_lo`` / ``_hi``
+     - Two-sided 99.73% credible interval.
+   * - ``PBDOT_upper_limit``
+     - Headline magnitude limit, or ``NaN`` when the parameter is detected.
+   * - ``PBDOT_upper_limit_level``
+     - Credible level of that limit (0.95 unless overridden).
+   * - ``PBDOT_upper_limit_3sigma``
+     - Magnitude limit at 99.73%, also ``NaN`` when detected. Estimated from
+       the chain's tail — see the caveat above.
+   * - ``PBDOT_upper_limit_3sigma_level``
+     - 0.9973, always.
+   * - ``PBDOT_detected``
+     - Whether the Bayes factor cleared the threshold.
+   * - ``PBDOT_ln_bf`` / ``_ln_bf_err``
+     - The Bayes factor the decision was made on.
+   * - ``PBDOT_significance_sigma``
+     - Gaussian-approximation exclusion of zero. Diagnostic only.
+   * - ``PBDOT_nsamples``
+     - Posterior samples the summary was built from. Relevant to how well the
+       three-sigma limit is resolved.
+   * - ``PBDOT_summary``
+     - The one-line form, ready to paste into a draft.
+
+``PBDDOT`` is reported in :math:`\mathrm{yr}^{-1}`; ``PBDOT``, being a period
+over a time, is dimensionless. The summary lines are also written to the log,
+and read like this:
+
+.. code-block:: text
+
+   PBDOT = 2.996e-08 (+7.58e-11 -7.55e-11, 1 sigma); zero excluded at 384.3 sigma
+   |PBDDOT| < 2.54e-10 1/yr (95% upper limit), < 3.29e-10 1/yr (99.73%, 3
+   sigma); 2 sigma interval -1.53e-10 to 2.82e-10 1/yr; zero excluded only at
+   0.62 sigma, so this is a limit and not a measurement
+
+A typical invocation:
+
+.. code-block:: console
+
+   $ ell1decay epoch*.ecsv -o decay --upper-limit-level 0.95
+
+Note that ``{outroot}.par`` records ``M0``'s **median** ``PBDOT`` even when
+that parameter is only an upper limit. That is deliberate: an ephemeris needs
+a number, and "this is a limit rather than a measurement" is a statement for
+the paper, not for the parameter file. ``M1`` is never adopted into the
+ephemeris regardless of its Bayes factor.
+
+Orbital-size drift: bounding ``A1DOT``
+--------------------------------------
 
 ``A1DOT`` (:math:`\dot{x}`, light-seconds per second) is the rate at which the
 projected semi-major axis of the orbit changes. It is the orbital-size
@@ -16,12 +326,12 @@ bounding it away — tests whether the observed orbital decay really is the
 orbit shrinking, rather than something in the companion (a quadrupole cycle,
 say) that moves ``PB`` without moving the orbital size in step.
 
-This page covers how ``ell1fit`` fits ``A1DOT``, how to turn a fit into an
+This section covers how ``ell1fit`` fits ``A1DOT``, how to turn a fit into an
 upper limit, what will silently spoil that limit, and how to forecast in
 advance whether a given dataset can reach an interesting number at all.
 
 How ``A1DOT`` enters the model
-------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The pipeline holds one binary shared across all files, referenced to a single
 epoch, and gives each file a fixed offset carrying that solution to its own
@@ -65,7 +375,7 @@ of the posterior carry the same expression, and a test compares them
 (``test_jax_posterior_follows_a1dot_like_the_numba_one``).
 
 Fitting it
-----------
+~~~~~~~~~~
 
 ``A1DOT`` is requested like any other parameter::
 
@@ -102,7 +412,7 @@ how the observations are *spaced* rather than how long they are.
    candidates are now filtered to the finite positive ones before choosing.
 
 The prior
----------
+~~~~~~~~~
 
 With no uncertainty in the parfile, ``A1DOT`` gets a flat prior symmetric about
 the parfile value, of half-width
@@ -120,7 +430,7 @@ can integrate against it, at the cost of an Occam factor that a Bayes factor on
 ``A1DOT`` would feel.
 
 Setting an upper limit
-----------------------
+~~~~~~~~~~~~~~~~~~~~~~
 
 Fit ``A1DOT`` as a global free parameter in the multi-file fit, with the flat
 symmetric prior above, and quote **the 95th percentile of** :math:`|\dot{x}|`
@@ -139,7 +449,7 @@ symmetric prior above, and quote **the 95th percentile of** :math:`|\dot{x}|`
   limit must never err.
 
 What will spoil the limit
--------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **Template smearing biases the drift toward zero.** Each file's pulse template
 is built by folding *that file's own events* with the current solution. An
@@ -189,7 +499,7 @@ seen to disagree about it at the 0.2% level. Mixing them makes
 :math:`\Delta t_i` inconsistent between files.
 
 Forecasting the sensitivity
----------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Before spending a fit, it is worth knowing what precision the data can reach.
 The obvious tool is the Fisher matrix — take the Hessian of the log-posterior
@@ -243,7 +553,7 @@ instead of a full chain.
    of freedom as there are epoch amplitudes to fit.
 
 Recipe
-~~~~~~
+^^^^^^
 
 1. Build the fit setup exactly as the pipeline does — load, fold, weight,
    build templates, trace ``Phase_i``, precondition, **refine** — and stop
@@ -256,7 +566,7 @@ Recipe
    bound, read the crossing at :math:`\Delta \log p = 1.92`.
 
 The M82 X-2 dataset
--------------------
+~~~~~~~~~~~~~~~~~~~
 
 Fifteen NuSTAR epochs, :math:`2.67\times10^{6}` events, spanning MJD 56683 to
 60659 (10.9 yr), fitting ``F0_i``, ``F1_i`` and ``Phase_i`` per epoch plus a
@@ -312,3 +622,214 @@ against the 180 kyr the measured ``PBDOT`` implies.
    profile. On the two-epoch fixture it errs the other way, by a factor of two.
    Neither direction is reproducible, which is the point: on this posterior the
    inverse-Hessian marginal is not a usable forecast. Profile.
+
+Forecasting a future campaign
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A profile likelihood costs a few dozen local optimizations — half an hour for
+the dataset above — which is cheap for one answer and too expensive for the
+question that follows it: *would more observations, or a bigger telescope,
+change the verdict?* For screening candidate epoch lists there is a linear
+model that costs nothing, provided it is calibrated once against a real profile
+run.
+
+.. warning::
+
+   Do **not** read :math:`\sigma_{A1}` from a fit with ``A1DOT`` held at zero
+   as the drift sensitivity. On the M82 X-2 set that fit reports
+   :math:`\sigma_{A1} = 5.8` ms, but the drift the same data can resolve over
+   its own 12.35-yr span is :math:`\sigma_{\dot{x}} \times T_{\rm span} = 68`
+   ms — twelve times larger. The gap is the price of the ``A1``/``A1DOT``
+   degeneracy plus the fact that the useful lever arm is 3.2 yr, not 12.4. One
+   number is the precision on the *average* ``A1``; the other is the precision
+   on the *difference* between the ends, and only the second one is the
+   measurement.
+
+The cheap model
+^^^^^^^^^^^^^^^
+
+Treat each epoch as an independent measurement of ``A1`` with weight
+:math:`w_i`, and :math:`(A1, \dot{x})` as a straight-line fit through them:
+
+.. math::
+
+   \sigma_{\dot{x}} = \kappa \left[\sum_i w_i (t_i - \bar{t}_w)^2\right]^{-1/2},
+   \qquad \bar{t}_w = \frac{\sum_i w_i t_i}{\sum_i w_i}.
+
+Two things make it usable:
+
+**The weights come out of the results table.** Phase precision goes as the
+square root of the pulsed signal-to-noise, so :math:`w_i \propto Z^2_{1,i} - 2`
+— the per-file ``Z21_i`` column the pipeline already writes, minus the two
+degrees of freedom of its noise floor. Only the shape matters; normalise the
+set so that :math:`(\sum_i w_i)^{-1/2}` equals the :math:`\sigma_{A1}` the
+pipeline actually reported for that dataset.
+
+**One constant absorbs everything the model ignores** — the curved
+``A1``/``A1DOT`` degeneracy, the per-epoch ``F0``/``F1``/``Phase`` covariance,
+the template smearing. Fit :math:`\kappa` by running the model on the same
+epochs a profile likelihood has already been run on. On the M82 X-2 dataset
+:math:`\kappa = 3.0`; the uncalibrated model is three times too optimistic,
+which is the same disease as the Fisher matrix and the same reason not to
+trust either raw. :math:`\kappa` is **not** universal — re-derive it against
+one profile run before forecasting on a different source, and treat the output
+as good to a factor of ~1.5.
+
+Applied to the 14-epoch set that includes the 2026 epoch, the model forecasts
+:math:`\sigma_{\dot{x}} = 1.7\times10^{-10}` lt-s/s, a shortfall of 45 against
+the Kepler expectation — the 2026 epoch having bought a little over the 52 the
+15-epoch profile run measured.
+
+What the scalings say
+^^^^^^^^^^^^^^^^^^^^^
+
+.. math::
+
+   \sigma_{\dot{x}} \propto \frac{1}{\sqrt{N_{\rm ep} A}\; T_{\rm rms}},
+
+with :math:`A` the effective area and :math:`T_{\rm rms}` the weighted spread
+of the epochs. Collecting area enters under a square root and the baseline
+enters linearly, which sets the terms of trade: **a mission with ten times
+NuSTAR's area buys a factor of 3.2, and nothing more.** Monitoring at a fixed
+cadence makes :math:`N_{\rm ep} \propto T`, so time is worth
+:math:`T^{3/2}` — closing the remaining factor of 14 on M82 X-2 needs six times
+the present baseline, about seventy years. Two epochs a year from 2032 with a
+10x instrument crosses one sigma around 2100.
+
+Angular resolution is the underrated axis. :math:`Z^2_1` is the squared pulsed
+counts over the *total* counts in the aperture, so resolving the target out of
+its neighbours cuts the denominator directly. If M82 X-2 is a third of what
+NuSTAR's aperture collects, separating it is worth another :math:`\sqrt{3}` —
+comparable to a factor of three in area, for free.
+
+The anchor floor
+^^^^^^^^^^^^^^^^
+
+No future instrument improves the *early* end of an existing lever arm. Once
+the earliest block of data is fixed, its own ``A1`` precision bounds everything
+downstream:
+
+.. math::
+
+   \sigma_{\dot{x}} \;\geq\; \kappa\, \frac{\sigma_{A1}^{\rm (anchor)}}{T_{\rm span}}.
+
+The 2014 NuSTAR block — seven epochs inside one month — reaches
+:math:`\sigma_{A1} = 6.5` ms together, and that number is now permanent:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 35 35
+
+   * - span from 2014
+     - floor on :math:`\sigma_{\dot{x}}`
+     - shortfall vs Kepler
+   * - 12.4 yr (today)
+     - :math:`5.0\times10^{-11}`
+     - 13x
+   * - 30 yr
+     - :math:`2.1\times10^{-11}`
+     - 5.3x
+   * - 50 yr
+     - :math:`1.2\times10^{-11}`
+     - 3.2x
+   * - 160 yr
+     - :math:`3.9\times10^{-12}`
+     - 1.0x
+
+A perfect telescope launched tomorrow reaches one sigma on this source in the
+twenty-second century. That is the honest ceiling, and it is why the section
+above says to quote the bound rather than chase the detection.
+
+Short observations barely constrain ``A1`` at all
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The obvious way to buy lever arm cheaply is an archival epoch from long before
+the campaign started. It is worth checking, but the arithmetic is unforgiving,
+and for a reason that is easy to miss: within one epoch the fit is free in
+``Phase_i``, ``F0_i`` and ``F1_i``, which between them absorb the constant,
+linear and quadratic parts of the orbital delay over that window. What is left
+to constrain ``A1`` is the cubic and higher terms of
+:math:`x \sin(2\pi t / P_b)`, so for :math:`\Delta T \ll P_b` the usable signal
+falls as :math:`(\Delta T / P_b)^3` — verified numerically as a log-log slope
+of 2.99.
+
+Taking the rms of :math:`\sin(2\pi t/P_b)` orthogonalised against
+:math:`\{1, t, t^2\}` over a window of length :math:`\Delta T`, averaged over
+the starting orbital phase, and normalising to a NuSTAR pointing spanning a
+full 2.53-d orbit:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 20 25 25
+
+   * - window
+     - :math:`\Delta T / P_b`
+     - leverage on ``A1``
+     - relative
+   * - 2.5 d (full orbit)
+     - 0.99
+     - :math:`3.2\times10^{-1}`
+     - 1
+   * - 1.5 d
+     - 0.59
+     - :math:`9.1\times10^{-2}`
+     - 1/4
+   * - 100 ks
+     - 0.46
+     - :math:`4.4\times10^{-2}`
+     - 1/7
+   * - 50 ks
+     - 0.23
+     - :math:`5.8\times10^{-3}`
+     - 1/55
+   * - 30 ks
+     - 0.14
+     - :math:`1.3\times10^{-3}`
+     - 1/252
+
+A single 30-ks snapshot is 250 times worse at measuring ``A1`` than an
+orbit-spanning pointing with the same photons. **An archival epoch is worth
+having only if it spans a decent fraction of an orbit** — how long it is
+matters far more than how many counts it collected, and no amount of effective
+area compensates.
+
+The gain, when the epoch does qualify, is real but bounded. Adding one epoch in
+2001 to the M82 X-2 set — 13.4 yr before the 2014 block — gives:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 25 25 25 25
+
+   * - its share of the total ``A1`` weight
+     - required single-epoch :math:`\sigma_{A1}`
+     - gain
+     - shortfall
+   * - 0.03
+     - 33 ms
+     - 1.3x
+     - 36x
+   * - 0.1
+     - 18 ms
+     - 1.7x
+     - 27x
+   * - 1.0
+     - 6 ms
+     - 3.4x
+     - 13x
+   * - :math:`\infty`
+     - 0
+     - 4.6x
+     - 10x
+
+Even an infinitely good 2001 epoch stops at 4.6x, because the *other* end of
+the lever arm then becomes the anchor. A 4.6x tighter published bound is a
+result worth having; a detection is not on the table.
+
+One last thing such an epoch must clear: the pulse has to be findable. M82
+X-2's spin is not extrapolatable backwards — ``F0`` runs from 0.72876 Hz in
+2014 to 0.71166 Hz in 2026, a mean :math:`\dot{F_0}` of
+:math:`-4.3\times10^{-11}` Hz/s, but wandering by :math:`\sim 3\times10^{-3}`
+Hz about any smooth trend, and spinning *up* between 2020 and 2021. Reaching
+back thirteen years means a blind search over several times that scatter, with
+an orbital acceleration search inside it, and the trials penalty comes straight
+off the detection threshold.

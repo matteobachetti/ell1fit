@@ -752,7 +752,7 @@ def run_nuts(
     plot_mcmc_results(
         flat_samples=flat_samples,
         labels=corner_labels or labels,
-        fname=outroot + "_corner.jpg",
+        fname=outroot + "_corner",
     )
 
     return result_dict

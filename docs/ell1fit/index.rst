@@ -24,6 +24,7 @@ what it is, then :doc:`pipeline` for how a fit actually proceeds.
    :maxdepth: 2
    :caption: Reference
 
+   figures
    performance
    limitations
    design
@@ -66,6 +67,8 @@ Reference/API
 .. automodapi:: ell1fit.update_binary
    :no-inheritance-diagram:
 .. automodapi:: ell1fit.eccentricity
+   :no-inheritance-diagram:
+.. automodapi:: ell1fit.orbit_plot
    :no-inheritance-diagram:
 .. automodapi:: ell1fit.mcmc_utils
    :no-inheritance-diagram:

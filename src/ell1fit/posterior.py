@@ -28,7 +28,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from .phase_utils import NonInvertibleOrbitError, _calculate_phases
+from .plotting import DATA_COLOR as _DATA_COLOR
+from .plotting import GUIDE_COLOR as _GUIDE_COLOR
+from .plotting import figure_size as _figure_size
 from .plotting import plot_style_context as _plot_style_context
+from .plotting import save_figure as _save_figure
 
 __all__ = [
     "_build_posterior_functions",
@@ -64,14 +68,16 @@ def _trace_phase_0_likelihood(observations, setup, outroot):
         best_phase = phase_values[np.nanargmax(ll_values)]
 
         with _plot_style_context():
-            fig = plt.figure("trace_" + parameter)
-            plt.plot(phase_values, ll_values, color="black")
-            plt.axvline(parameters[parameter], color="k", alpha=0.5, ls="--")
-            plt.axvline(best_phase, color="r", ls="--")
+            fig = plt.figure(
+                "trace_" + parameter, figsize=_figure_size("column"), layout="constrained"
+            )
+            plt.plot(phase_values, ll_values, color=_DATA_COLOR)
+            plt.axvline(parameters[parameter], color=_GUIDE_COLOR, ls="--", label="current")
+            plt.axvline(best_phase, color="C1", ls="--", label="best")
             plt.xlabel(parameter)
             plt.ylabel("log likelihood")
-            plt.savefig(outroot + f"_trace_{parameter}.jpg")
-            plt.close(fig)
+            plt.legend()
+            _save_figure(fig, outroot + f"_trace_{parameter}")
 
         ll_values_clean = [
             ll for ll in list(results_trace.values()) if not np.isnan(ll) and not np.isinf(ll)

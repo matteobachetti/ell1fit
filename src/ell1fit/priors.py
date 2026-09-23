@@ -1,4 +1,10 @@
-"""Prior helper utilities for ell1fit parameter inference."""
+"""Prior helper utilities for ell1fit parameter inference.
+
+Priors are rule-based by default: :func:`assign_logpriors` picks a shape per
+parameter from its name and from whether the parfile quoted an uncertainty. A
+caller can override any of those rules with a :class:`PriorSpec`, which is what
+``ell1fit --prior`` builds; see :func:`parse_prior_spec` for the syntax.
+"""
 
 import logging
 
@@ -8,6 +14,10 @@ from scipy.stats import norm
 
 __all__ = [
     "assign_logpriors",
+    "parse_prior_spec",
+    "parse_prior_specs",
+    "PriorSpec",
+    "user_prior_sigmas",
 ]
 
 
@@ -129,7 +139,288 @@ def _periodic_normal_logprior(center, sigma, period):
     return _PeriodicNormalLogPrior(center, sigma, period)
 
 
-def assign_logpriors(fit_parameter_names, parameters_with_unc, obs_length=1):
+#: Prior shapes an override may ask for, and the aliases accepted for each.
+_SHAPE_ALIASES = {
+    "uniform": "uniform",
+    "flat": "uniform",
+    "normal": "normal",
+    "gaussian": "normal",
+}
+
+#: What a relative specification (``+-w``) is introduced by.
+_RELATIVE_PREFIXES = ("+-", "\u00b1")
+
+_SPEC_SYNTAX = (
+    "Expected NAME:SHAPE:ARGS, with SHAPE one of "
+    f"{', '.join(sorted(set(_SHAPE_ALIASES)))} and ARGS either two "
+    "comma-separated numbers (bounds for uniform, mean and sigma for normal) "
+    "or +-WIDTH to centre the prior on the parameter's input value."
+)
+
+
+class PriorSpec:
+    """One command-line prior override, parsed but not yet built.
+
+    Kept separate from the log-prior objects themselves because a spec is
+    resolved against the fit *before* it becomes a prior: ``F1`` has to be
+    matched to the per-file ``F1_0``, ``F1_1``, ... that are actually fitted,
+    and a relative width needs the parameter's input value, which this object
+    does not carry.
+
+    Attributes
+    ----------
+    name : str
+        Parameter the override applies to. A bare per-file name (``F1``)
+        applies to every expansion of it (``F1_0``, ``F1_1``); a full name
+        (``F1_0``) applies to that one only and wins over the bare form.
+    shape : {'uniform', 'normal'}
+        Normalised shape name.
+    relative : bool
+        True for the ``+-WIDTH`` form, which is centred on the parameter's
+        input value rather than stating absolute numbers.
+    args : tuple of float
+        ``(low, high)`` or ``(mean, sigma)`` when absolute, ``(width,)`` when
+        relative.
+    text : str
+        The original string, quoted back in error messages.
+    """
+
+    def __init__(self, name, shape, relative, args, text=None):
+        self.name = name
+        self.shape = shape
+        self.relative = relative
+        self.args = tuple(float(a) for a in args)
+        self.text = text if text is not None else f"{name}:{shape}"
+
+    def __repr__(self):  # pragma: no cover - debugging aid
+        return f"PriorSpec({self.text!r})"
+
+    def matches(self, par):
+        """Whether this spec applies to fit parameter ``par``.
+
+        Uses the same bare-name convention as
+        :func:`ell1fit.pipeline._collect_parameter_names`: ``F1`` covers
+        ``F1_0``, ``F1_1``, ... as well as a global ``F1``.
+        """
+        return par == self.name or par.startswith(f"{self.name}_")
+
+    def is_exact(self, par):
+        """Whether this spec names ``par`` outright rather than by its bare name."""
+        return par == self.name
+
+
+def parse_prior_spec(text):
+    """Parse one ``NAME:SHAPE:ARGS`` prior override.
+
+    Parameters
+    ----------
+    text : str
+        For example ``F1:uniform:-1e-10,1e-10`` (absolute bounds),
+        ``F1:uniform:+-1e-10`` (input value plus or minus a width),
+        ``PB:normal:16003.2,0.5`` or ``TASC:normal:+-1e-6``.
+
+    Returns
+    -------
+    PriorSpec
+
+    Raises
+    ------
+    ValueError
+        For any malformed spec. Nothing is guessed: a prior that silently
+        became something other than what was asked for would change the answer
+        and leave no trace in the output.
+    """
+    original = text
+    parts = text.split(":")
+    if len(parts) != 3:
+        raise ValueError(f"Cannot parse prior {original!r}: {_SPEC_SYNTAX}")
+
+    name, shape_text, args_text = (part.strip() for part in parts)
+    if not name:
+        raise ValueError(f"Cannot parse prior {original!r}: no parameter name. {_SPEC_SYNTAX}")
+
+    shape = _SHAPE_ALIASES.get(shape_text.lower())
+    if shape is None:
+        raise ValueError(
+            f"Cannot parse prior {original!r}: unknown shape {shape_text!r}. {_SPEC_SYNTAX}"
+        )
+
+    relative = args_text.startswith(_RELATIVE_PREFIXES)
+    if relative:
+        for prefix in _RELATIVE_PREFIXES:
+            if args_text.startswith(prefix):
+                args_text = args_text[len(prefix) :]
+                break
+
+    try:
+        values = [float(chunk) for chunk in args_text.split(",")]
+    except ValueError:
+        raise ValueError(
+            f"Cannot parse prior {original!r}: {args_text!r} is not numeric. {_SPEC_SYNTAX}"
+        ) from None
+
+    expected = 1 if relative else 2
+    if len(values) != expected:
+        raise ValueError(
+            f"Cannot parse prior {original!r}: expected {expected} number(s) after the "
+            f"shape, got {len(values)}. {_SPEC_SYNTAX}"
+        )
+    if not all(np.isfinite(values)):
+        raise ValueError(f"Cannot parse prior {original!r}: bounds must be finite. {_SPEC_SYNTAX}")
+
+    if relative and values[0] <= 0:
+        raise ValueError(f"Cannot parse prior {original!r}: the +- width must be positive.")
+    if not relative and shape == "uniform" and values[0] >= values[1]:
+        raise ValueError(
+            f"Cannot parse prior {original!r}: the lower bound must be below the upper one."
+        )
+    if not relative and shape == "normal" and values[1] <= 0:
+        raise ValueError(
+            f"Cannot parse prior {original!r}: the standard deviation must be positive."
+        )
+
+    return PriorSpec(name, shape, relative, values, text=original)
+
+
+def parse_prior_specs(texts):
+    """Parse a list of prior overrides, rejecting duplicate parameter names.
+
+    Already-parsed :class:`PriorSpec` entries pass through, so a caller using
+    :func:`ell1fit.pipeline.ell1fit` directly can hand over either form.
+
+    A repeated name is an error rather than a last-one-wins: two ``--prior``
+    options for the same parameter mean the command line disagrees with itself,
+    and picking one silently would make the fit answer a question nobody asked.
+    """
+    if not texts:
+        return []
+
+    specs = [t if isinstance(t, PriorSpec) else parse_prior_spec(t) for t in texts]
+    seen = {}
+    for spec in specs:
+        if spec.name in seen:
+            raise ValueError(
+                f"Two priors given for {spec.name}: {seen[spec.name].text!r} and {spec.text!r}."
+            )
+        seen[spec.name] = spec
+    return specs
+
+
+def _resolve_user_prior(par, specs):
+    """Find the override that applies to ``par``, preferring an exact name."""
+    matching = [spec for spec in specs if spec.matches(par)]
+    if not matching:
+        return None
+    for spec in matching:
+        if spec.is_exact(par):
+            return spec
+    return matching[0]
+
+
+def _user_prior_arguments(spec, center):
+    """Turn a spec into ``(low, high)`` for a uniform, or ``(mean, sigma)`` for a normal."""
+    if not spec.relative:
+        return spec.args
+    width = spec.args[0]
+    if spec.shape == "uniform":
+        return (center - width, center + width)
+    return (center, width)
+
+
+def _build_user_logprior(spec, par, parameters_with_unc):
+    """Build the log-prior an override asks for, and a line describing it.
+
+    ``TASC`` keeps its periodic wrapping whatever the override says: the
+    parameter is an epoch defined modulo one orbit, and a prior that does not
+    wrap lets a walker settle a whole orbit away from where it was aimed.
+    """
+    center = parameters_with_unc[par][0]
+    first, second = _user_prior_arguments(spec, center)
+
+    is_tasc = par == "TASC"
+    period = parameters_with_unc["PB"][0] / 86400.0 if is_tasc else None
+
+    if spec.shape == "uniform":
+        low, high = first, second
+        if is_tasc:
+            tasc_center = 0.5 * (low + high)
+            half_width = 0.5 * (high - low)
+            if half_width > 0.5 * period:
+                logging.warning(
+                    f"Prior {spec.text!r} is wider than one orbital period; "
+                    f"clipping it to one full cycle ({period:.6g} d)."
+                )
+                half_width = 0.5 * period
+            return (
+                _periodic_uniform_logprior(tasc_center, period, half_width=half_width),
+                f"periodic uniform within +-{half_width:.6g} d of {tasc_center}",
+            )
+        return _flat_logprior(low, high), f"uniform between {low:.6g} and {high:.6g}"
+
+    mean, sigma = first, second
+    if is_tasc:
+        return (
+            _periodic_normal_logprior(mean, sigma, period),
+            f"periodic normal with mean {mean} d, std {sigma:.6g} d, period {period:.6g} d",
+        )
+    return (
+        norm(loc=mean, scale=sigma).logpdf,
+        f"normal with mean {mean} and std {sigma:.6g}",
+    )
+
+
+def user_prior_sigmas(fit_parameter_names, parameters_with_unc, user_priors):
+    """Report the standard deviation of each overridden prior, for parameter scaling.
+
+    The local coordinates the sampler works in -- and hence the width of the
+    ball of starting walkers -- come from a per-parameter uncertainty estimate
+    (:func:`ell1fit.scaling.get_factors`) that knows nothing about the priors.
+    An override narrower than that estimate would start most walkers outside
+    its own support, where the log-posterior is ``-inf`` and nothing can move.
+    Reporting the prior's own width closes that gap.
+
+    A uniform's standard deviation is its width over ``sqrt(12)``, not its
+    half-width: a factor 1.7, which mostly disappears into the
+    order-of-magnitude rounding downstream, but only one of the two is a sigma.
+
+    Returns
+    -------
+    dict
+        ``{name: sigma}`` for the fitted parameters that carry an override.
+        Parameters without one are absent, not NaN, so the caller can tell
+        "no opinion" from "an opinion worth nothing".
+    """
+    sigmas = {}
+    for par in fit_parameter_names:
+        spec = _resolve_user_prior(par, user_priors or [])
+        if spec is None:
+            continue
+        first, second = _user_prior_arguments(spec, parameters_with_unc[par][0])
+        if spec.shape == "uniform":
+            sigmas[par] = (second - first) / np.sqrt(12.0)
+        else:
+            sigmas[par] = second
+    return sigmas
+
+
+def _check_specs_are_used(fit_parameter_names, specs):
+    """Reject an override that names a parameter the fit does not contain.
+
+    Silently dropping it is the same failure mode ``-P TSAC`` used to have: the
+    fit stays internally consistent, runs to completion, and answers a
+    different question than the one asked.
+    """
+    unused = [
+        spec.text for spec in specs if not any(spec.matches(par) for par in fit_parameter_names)
+    ]
+    if unused:
+        raise ValueError(
+            f"Prior(s) {', '.join(repr(u) for u in unused)} name parameters that are not "
+            f"being fitted. Fitted parameters: {', '.join(fit_parameter_names)}."
+        )
+
+
+def assign_logpriors(fit_parameter_names, parameters_with_unc, obs_length=1, user_priors=None):
     """Assign per-parameter log-prior functions from values and uncertainties.
 
     Priors are rule-based: bounded uniforms for orbital-shape/phase parameters,
@@ -145,6 +436,10 @@ def assign_logpriors(fit_parameter_names, parameters_with_unc, obs_length=1):
         did not provide one, which selects the broad-uniform branch below.
     obs_length : array-like, optional
         Per-file observation durations in seconds.
+    user_priors : list of PriorSpec, optional
+        Overrides from ``ell1fit --prior``. Each one replaces the rule that
+        would otherwise apply to the parameter it names, and a spec naming a
+        parameter that is not being fitted raises rather than being ignored.
 
     Returns
     -------
@@ -156,8 +451,19 @@ def assign_logpriors(fit_parameter_names, parameters_with_unc, obs_length=1):
     logps = []
     logging.info("Setting up priors")
 
+    user_priors = list(user_priors) if user_priors else []
+    _check_specs_are_used(fit_parameter_names, user_priors)
+
     for par in fit_parameter_names:
         log_line = f"{par}: "
+
+        spec = _resolve_user_prior(par, user_priors)
+        if spec is not None:
+            logprior, description = _build_user_logprior(spec, par, parameters_with_unc)
+            logps.append(logprior)
+            logging.info(log_line + description + " (from --prior)")
+            continue
+
         if par == "TASC":
             period = parameters_with_unc["PB"][0] / 86400.0
             tasc_center = parameters_with_unc["TASC"][0]

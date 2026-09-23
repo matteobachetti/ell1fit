@@ -18,6 +18,8 @@ percent, so the tolerances below are set by the estimator and not fitted to the
 answer.
 """
 
+import os
+
 import numpy as np
 import pytest
 from astropy.table import Table
@@ -25,6 +27,7 @@ from astropy.table import Table
 from ..eccentricity import (
     RESULTS_SUFFIX,
     default_chain_file,
+    draw_eccentricity_posterior,
     eccentricity_and_omega,
     eccentricity_summary,
     eccentricity_summary_from_run,
@@ -35,6 +38,7 @@ from ..eccentricity import (
 )
 from ..mcmc_utils import SAMPLES_SUFFIX, load_flat_samples, save_flat_samples
 from ..pipeline import _enrich_results_with_eccentricity
+from ..plotting import figure_path
 
 
 SEED = 20260903
@@ -165,6 +169,103 @@ def test_a_borderline_case_reports_a_limit_unless_the_threshold_is_lowered():
 def test_summary_rejects_unpaired_samples():
     with pytest.raises(ValueError, match="paired"):
         eccentricity_summary(np.zeros(10), np.zeros(11))
+
+
+#: 99.73rd percentiles, in units of SIGMA, of the two distributions a pure-noise
+#: EPS pair produces: |EPS1| is half-normal, so exactly 3; the eccentricity is
+#: Rayleigh, so sqrt(-2 ln 0.0027) = 3.4394. Neither is the other, which is the
+#: whole reason both numbers are worth reporting.
+HALF_NORMAL_3SIGMA = 3.0
+RAYLEIGH_3SIGMA = 3.439354
+
+
+def test_the_components_are_summarized_in_physical_units():
+    """16/50/84 of a Gaussian marginal recover the mean and the width."""
+    eps1, eps2 = _eps_samples(ecc=20 * SIGMA, omega_deg=90.0)
+
+    summary = eccentricity_summary(eps1, eps2)
+
+    # omega = 90 deg puts all the eccentricity in EPS1 and none in EPS2.
+    assert np.isclose(summary["EPS1_50"], 20 * SIGMA, rtol=0.02)
+    assert np.isclose(summary["EPS2_50"], 0.0, atol=0.05 * SIGMA)
+    assert np.isclose(summary["EPS1_84"] - summary["EPS1_50"], SIGMA, rtol=0.02)
+
+
+def test_the_component_errors_are_the_one_sigma_half_widths():
+    eps1, eps2 = _eps_samples(ecc=20 * SIGMA, omega_deg=71.0)
+
+    summary = eccentricity_summary(eps1, eps2)
+
+    for par in ("EPS1", "EPS2"):
+        assert np.isclose(summary[f"{par}_err_lo"], SIGMA, rtol=0.02)
+        assert np.isclose(summary[f"{par}_err_hi"], SIGMA, rtol=0.02)
+        # The parfile convention: the larger of the two sides.
+        assert summary[f"{par}_err"] == max(summary[f"{par}_err_lo"], summary[f"{par}_err_hi"])
+
+
+def test_the_component_limits_are_the_half_normal_three_sigma_point():
+    """Pure noise: |EPS1| is half-normal, whose 99.73rd percentile is 3 sigma."""
+    eps1, eps2 = _eps_samples(ecc=0.0)
+
+    summary = eccentricity_summary(eps1, eps2)
+
+    for par in ("EPS1", "EPS2"):
+        assert np.isclose(summary[f"{par}_abs_upper_limit"] / SIGMA, HALF_NORMAL_3SIGMA, rtol=0.05)
+    assert np.isclose(summary["EPS_abs_upper_limit_level"], 0.9973, atol=1e-4)
+
+
+def test_a_component_limit_is_on_the_magnitude_not_the_signed_value():
+    """A component sitting well below zero still gets a positive limit."""
+    eps1, eps2 = _eps_samples(ecc=20 * SIGMA, omega_deg=180.0)
+
+    summary = eccentricity_summary(eps1, eps2)
+
+    # omega = 180 deg puts EPS2 at -20 sigma. Its magnitude limit is 23 sigma.
+    assert summary["EPS2_50"] < 0
+    assert np.isclose(summary["EPS2_abs_upper_limit"] / SIGMA, 23.0, rtol=0.02)
+
+
+def test_the_three_sigma_eccentricity_limit_is_the_rayleigh_point():
+    eps1, eps2 = _eps_samples(ecc=0.0)
+
+    summary = eccentricity_summary(eps1, eps2)
+
+    assert np.isclose(summary["ECC_upper_limit_3sigma"] / SIGMA, RAYLEIGH_3SIGMA, rtol=0.05)
+    assert summary["ECC_upper_limit_3sigma"] > summary["ECC_upper_limit"]
+
+
+def test_the_three_sigma_limits_are_reported_even_for_a_detection():
+    """A limit beside a measurement is a cross-check, not a contradiction."""
+    eps1, eps2 = _eps_samples(ecc=20 * SIGMA, omega_deg=71.0)
+
+    summary = eccentricity_summary(eps1, eps2)
+
+    assert summary["ECC_detected"]
+    # The 95% limit is deliberately nan on a detection; the 3 sigma one is not.
+    assert np.isnan(summary["ECC_upper_limit"])
+    assert np.isfinite(summary["ECC_upper_limit_3sigma"])
+    assert np.isfinite(summary["EPS1_abs_upper_limit"])
+
+
+def test_the_component_summary_line_carries_values_errors_and_limits():
+    eps1, eps2 = _eps_samples(ecc=20 * SIGMA, omega_deg=71.0)
+
+    line = eccentricity_summary(eps1, eps2)["EPS_summary"]
+
+    assert "EPS1 =" in line and "EPS2 =" in line
+    assert "|EPS1| <" in line and "|EPS2| <" in line
+    assert "3 sigma" in line
+
+
+def test_the_flat_in_e_prior_reweights_the_components_too():
+    """One prior for the whole answer: the marginals cannot be under another."""
+    eps1, eps2 = _eps_samples(ecc=0.0)
+
+    plain = eccentricity_summary(eps1, eps2)
+    reweighted = eccentricity_summary(eps1, eps2, flat_in_e_prior=True)
+
+    assert reweighted["EPS1_abs_upper_limit"] < plain["EPS1_abs_upper_limit"]
+    assert reweighted["ECC_upper_limit_3sigma"] < plain["ECC_upper_limit_3sigma"]
 
 
 def _results_row(eps1_local, eps2_local, initial, factor, extra_column=None):
@@ -374,6 +475,39 @@ def test_plot_marks_the_interval_when_detected(tmp_path):
     assert (tmp_path / "ecc_detected.jpg").exists()
 
 
+def test_the_panel_can_be_drawn_into_an_axis_the_caller_owns(tmp_path):
+    """Same panel, someone else's figure: nothing is created and nothing saved."""
+    import matplotlib.pyplot as plt
+
+    eps1, eps2 = _eps_samples(ecc=20 * SIGMA, omega_deg=71.0, size=20_000)
+    fig, ax = plt.subplots()
+
+    summary = draw_eccentricity_posterior(ax, eps1, eps2)
+
+    assert summary["ECC_detected"]
+    assert ax.get_xlabel() == "Eccentricity"
+    # The median line and the 68% span, on top of the histogram.
+    assert len(ax.lines) == 1
+    assert fig.axes == [ax]
+    assert not list(tmp_path.iterdir())
+    plt.close(fig)
+
+
+def test_the_panel_reuses_a_summary_it_is_handed():
+    """No recomputation, so the panel and the table can never disagree."""
+    import matplotlib.pyplot as plt
+
+    eps1, eps2 = _eps_samples(ecc=0.0, size=20_000)
+    summary = eccentricity_summary(eps1, eps2, upper_limit_level=0.99)
+    fig, ax = plt.subplots()
+
+    returned = draw_eccentricity_posterior(ax, eps1, eps2, summary=summary)
+
+    assert returned is summary
+    assert "99% upper limit" in ax.get_legend().get_texts()[-1].get_text()
+    plt.close(fig)
+
+
 # --- Pipeline integration: _enrich_results_with_eccentricity ----------------
 
 
@@ -414,7 +548,26 @@ def test_pipeline_enrichment_adds_eccentricity_columns(tmp_path):
     assert "ECC_summary" in enriched
     assert enriched["ECC_detected"]
     assert enriched["ECC_50"] > 0
-    assert (tmp_path / "run_eccentricity.jpg").exists()
+    assert os.path.exists(figure_path(str(tmp_path / "run_eccentricity")))
+
+
+def test_pipeline_enrichment_adds_the_component_columns(tmp_path):
+    """The physical EPS1/EPS2 values, errors and limits reach the result table."""
+    results, outroot = _mock_results_and_samples(tmp_path, ecc=20 * SIGMA, omega_deg=71.0)
+    enriched = _enrich_results_with_eccentricity(results, outroot, ["EPS1", "EPS2"])
+
+    for par in ("EPS1", "EPS2"):
+        assert np.isfinite(enriched[f"{par}_50"])
+        assert enriched[f"{par}_err"] > 0
+        assert enriched[f"{par}_abs_upper_limit"] > 0
+    assert np.isfinite(enriched["ECC_upper_limit_3sigma"])
+    # The physical value, not the local coordinate the chain is in.
+    assert enriched["EPS1_50"] != enriched["dEPS1_50"]
+
+    # And they survive the trip into an astropy table, strings included.
+    row = Table(rows=[enriched])[0]
+    assert np.isclose(row["EPS1_abs_upper_limit"], enriched["EPS1_abs_upper_limit"])
+    assert "|EPS1| <" in row["EPS_summary"]
 
 
 def test_pipeline_enrichment_skips_without_both_eps(tmp_path):
@@ -436,6 +589,53 @@ def test_pipeline_enrichment_upper_limit_for_null(tmp_path):
     assert np.isfinite(enriched["ECC_upper_limit"])
 
 
+def _mock_orbital_run(tmp_path, ecc=20 * SIGMA, omega_deg=71.0, size=20_000):
+    """A run that varied A1 and PB as well as the eccentricity pair."""
+    results, outroot = _mock_results_and_samples(tmp_path, ecc=ecc, omega_deg=omega_deg, size=size)
+    eps_chain, labels = load_flat_samples(outroot + SAMPLES_SUFFIX)
+
+    rng = np.random.default_rng(SEED + 1)
+    extra = {"A1": (22.225, 1e-6), "PB": (218668.4, 1e-3)}
+    columns, names = [], []
+    for name, (initial, factor) in extra.items():
+        local = rng.normal(0.0, 300.0, eps_chain.shape[0])
+        columns.append(local)
+        names.append("d" + name)
+        for perc in (16, 50, 84):
+            results[f"d{name}_{perc}"] = float(np.percentile(local, perc))
+        results[f"d{name}_initial"] = initial
+        results[f"d{name}_factor"] = factor
+
+    save_flat_samples(outroot, np.column_stack(columns + [eps_chain]), names + list(labels))
+    return results, outroot
+
+
+def test_pipeline_enrichment_draws_the_orbit_summary(tmp_path):
+    """The eccentricity hook is where the orbit summary is written too."""
+    results, outroot = _mock_results_and_samples(tmp_path, ecc=20 * SIGMA, omega_deg=71.0)
+
+    _enrich_results_with_eccentricity(results, outroot, ["EPS1", "EPS2"])
+
+    assert os.path.exists(figure_path(str(tmp_path / "run_orbit")))
+
+
+def test_the_orbit_summary_gets_every_orbital_parameter_that_was_fitted(tmp_path, monkeypatch):
+    """Not just the EPS pair: A1 and PB were sampled, so they get panels too."""
+    from matplotlib.figure import Figure
+
+    # The hook saves the standalone eccentricity plot first and the summary
+    # second, so it is the last figure that is the one to look at.
+    saved = []
+    monkeypatch.setattr(Figure, "savefig", lambda self, *a, **k: saved.append(self))
+
+    results, outroot = _mock_orbital_run(tmp_path)
+    _enrich_results_with_eccentricity(results, outroot, ["A1", "PB", "EPS1", "EPS2"])
+
+    # A1, PB, EPS1, EPS2 -> a 4x4 corner block, plus the eccentricity panel.
+    assert len(saved) == 2
+    assert len(saved[-1].axes) == 4 * 4 + 1
+
+
 # --- CLI entry point --------------------------------------------------------
 
 
@@ -448,8 +648,26 @@ def test_ell1ecc_cli_prints_summary(tmp_path, capsys):
     Table(rows=[results]).write(results_file)
 
     plot_path = str(tmp_path / "ecc_cli.jpg")
-    ell1ecc_main([results_file, "--plot", plot_path])
+    orbit_path = str(tmp_path / "orbit_cli.jpg")
+    ell1ecc_main([results_file, "--plot", plot_path, "--orbit-plot", orbit_path])
 
     captured = capsys.readouterr()
     assert "e =" in captured.out or "e <" in captured.out
+    assert "(3 sigma upper limit)" in captured.out
+    assert "|EPS1| <" in captured.out
     assert (tmp_path / "ecc_cli.jpg").exists()
+    assert (tmp_path / "orbit_cli.jpg").exists()
+
+
+def test_ell1ecc_cli_names_both_plots_after_the_output_root(tmp_path, capsys):
+    """With no explicit paths, both figures land beside the result table."""
+    from ..eccentricity import main as ell1ecc_main
+
+    results, outroot = _mock_orbital_run(tmp_path)
+    results_file = outroot + "_results.ecsv"
+    Table(rows=[results]).write(results_file)
+
+    ell1ecc_main([results_file])
+
+    assert os.path.exists(figure_path(str(tmp_path / "run_eccentricity")))
+    assert os.path.exists(figure_path(str(tmp_path / "run_orbit")))
