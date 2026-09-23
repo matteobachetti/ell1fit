@@ -365,12 +365,29 @@ def torque_luminosity(f1, f1_err, rate, index=DEFAULT_TORQUE_INDEX, index_grid=T
     summary["free_index"] = {
         "index": float(index_grid[best]),
         "index_interval": [float(inside.min()), float(inside.max())],
-        "interval_at_grid_edge": bool(
-            inside.min() <= index_grid[0] or inside.max() >= index_grid[-1]
-        ),
+        "interval_open": _open_side(inside.min() <= index_grid[0], inside.max() >= index_grid[-1]),
         **coefficients(coeffs, cov),
     }
     return summary
+
+
+def _open_side(at_lower, at_upper):
+    """Which end(s) of a profiled interval hit the edge of the grid: ``None``,
+    ``"below"`` (an upper limit), ``"above"`` (a lower limit) or ``"both"``."""
+    return {(False, False): None, (True, False): "below", (False, True): "above"}.get(
+        (bool(at_lower), bool(at_upper)), "both"
+    )
+
+
+def _describe_free_index(free):
+    """``alpha = 0.9 [0.6, 1.2]``, ``alpha < 0.56``, ``alpha > 2.1`` or ``alpha unconstrained``."""
+    low, high = free["index_interval"]
+    return {
+        None: f"alpha = {free['index']:.2f} [{low:.2f}, {high:.2f}]",
+        "below": f"alpha < {high:.2f}",
+        "above": f"alpha > {low:.2f}",
+        "both": "alpha unconstrained",
+    }[free["interval_open"]]
 
 
 def _plot_torque(table, rates, torque, fname):
@@ -402,9 +419,7 @@ def _plot_torque(table, rates, torque, fname):
                 + (
                     " (fixed)"
                     if key == "fixed_index"
-                    else " (free, unconstrained)"
-                    if fit["interval_at_grid_edge"]
-                    else " (free)"
+                    else f" (free: {_describe_free_index(fit)})".replace("alpha", r"$\alpha$")
                 ),
             )
         _errorbars_by_label(
@@ -716,9 +731,7 @@ def spin_statistics(
             f"(p = {torque['spearman_p']:.2g}); at index {fixed['index']:.2f}, "
             f"F1 = {fixed['B'][0]:.2e} + {fixed['A'][0]:.2e} "
             f"(R/{torque['reference_rate']:.3g})^index; "
-            f"free index {free['index']:.2f} "
-            f"[{free['index_interval'][0]:.2f}, {free['index_interval'][1]:.2f}]"
-            + (" (interval reaches the grid edge)" if free["interval_at_grid_edge"] else "")
+            f"free index: {_describe_free_index(free)} (Delta chi2 = 1)"
         )
 
     periodicity_results = {}

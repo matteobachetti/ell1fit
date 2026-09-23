@@ -189,3 +189,13 @@ def test_torque_luminosity_recovers_relation():
     assert abs(fixed["B"][0] + 5e-11) < 3 * fixed["B"][1]
     assert free["index_interval"][0] < 6 / 7 < free["index_interval"][1]
     assert result["spearman_rho"] > 0.5
+
+
+def test_free_index_interval_edges_are_reported_as_limits():
+    """An interval hitting only the lower grid edge is an upper limit, not
+    "unconstrained"; one hitting both edges is unconstrained."""
+    from ..spin_stats import _describe_free_index, _open_side
+
+    free = {"index": 0.05, "index_interval": [0.05, 0.56], "interval_open": _open_side(True, False)}
+    assert _describe_free_index(free) == "alpha < 0.56"
+    assert _open_side(True, True) == "both" and _open_side(False, False) is None

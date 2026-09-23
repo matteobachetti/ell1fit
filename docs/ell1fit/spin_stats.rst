@@ -51,9 +51,10 @@ Torque and luminosity
     ``--torque-index`` (default 6/7, disc accretion onto a magnetised star)
     and free, with the ``Delta chi2 = 1`` interval from a chi-squared profile
     with the intrinsic scatter held at its fixed-index value. That interval is
-    slightly narrow (61% coverage in simulations, rather than 68%), and is
-    flagged when it reaches the edge of the profiled range (0.05-5), i.e. when
-    ``alpha`` is unconstrained. ``--rate-exclude`` applies here too.
+    slightly narrow (61% coverage in simulations, rather than 68%). When it
+    reaches an edge of the profiled range (0.05-5), it is reported as an upper
+    or lower limit (``interval_open`` is ``"below"`` or ``"above"``), or as
+    unconstrained (``"both"``). ``--rate-exclude`` applies here too.
 
 The secular and local ``F1`` are compared (``secular_minus_local_sigma``). In an accreting source
 they need not agree: local ``F1`` follows the torque at the time of each
