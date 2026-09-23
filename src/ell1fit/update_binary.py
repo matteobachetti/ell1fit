@@ -13,6 +13,7 @@ the result is re-referenced to its own ``PEPOCH``.
 
 import copy
 import logging
+import os
 
 from pint.models import get_model
 from pint.models.parameter import funcParameter
@@ -79,7 +80,9 @@ def main(args=None):
 
         local_model = get_model(fname)
         new_model = update_binary_model(local_model, reference_model)
-        new_model_text = new_model.as_parfile()
+        # The info header calls getpass.getuser(), which needs the Unix-only
+        # ``pwd`` module when no user variable is set (e.g. under tox on Windows).
+        new_model_text = new_model.as_parfile(include_info=os.name != "nt")
         with open(out_fname, "w") as fobj:
             print(new_model_text, file=fobj)
 
