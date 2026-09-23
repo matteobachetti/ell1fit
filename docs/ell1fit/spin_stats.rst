@@ -26,9 +26,10 @@ several) needs ``MJD``, ``F0`` and ``F0_err`` columns, and may add ``F1``,
 ``F1_err``, ``pulsed_rate`` and ``label``. Points are grouped by ``label`` in
 the plots; every ``ell1fit`` point is labelled ``ell1fit``.
 
-The ``Start``/``Stop`` columns of result files are not used: ``ell1fit``
-copies them from the input parfile's ``START``/``STOP`` when present, and these
-are often stale.
+The ``Start``/``Stop`` columns of result files are not used: before this was
+fixed, ``ell1fit`` copied ``Start`` from the input parfile's ``START``, which is
+often stale, so older result files cannot be trusted. ``PEPOCH`` is used
+instead.
 
 What it computes
 ----------------

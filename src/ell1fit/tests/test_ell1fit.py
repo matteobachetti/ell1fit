@@ -663,19 +663,19 @@ def test_jax_posterior_follows_a1dot_like_the_numba_one(tmp_path):
 
 
 def _model_with_stale_start_stop(tmp_path):
-    """The test parfile plus START/STOP far from any data, with STOP before START."""
+    """The test parfile plus START/FINISH far from any data, with FINISH before START."""
     from pint.models import get_model
 
     datadir = os.path.join(os.path.dirname(__file__), "data")
     parfile = str(tmp_path / "stale.par")
     text = open(os.path.join(datadir, "events0.par")).read()
-    open(parfile, "w").write(text + "START 50000\nSTOP 49000\n")
+    open(parfile, "w").write(text + "START 50000\nFINISH 49000\n")
     return get_model(parfile)
 
 
 def test_results_start_stop_are_the_data_span(tmp_path):
     """Start/Stop in the results are the first and last event, even when the parfile
-    carries START/STOP inherited from an old ephemeris."""
+    carries START/FINISH inherited from an old ephemeris."""
     from ..pipeline import _enrich_results_with_observation_metadata
 
     model = _model_with_stale_start_stop(tmp_path)
@@ -686,3 +686,19 @@ def test_results_start_stop_are_the_data_span(tmp_path):
     )
     assert results["Start_0"] == pytest.approx(pepoch - 3000 / 86400, abs=1e-9)
     assert results["Stop_0"] == pytest.approx(pepoch + 5000 / 86400, abs=1e-9)
+
+
+def test_parfile_start_stop_follow_the_results(tmp_path):
+    """The written parfile's START/FINISH (PINT's name for the stop time) are the results'
+    data span, so a stale span in the input parfile is not carried forward to the next fit."""
+    from pint.models import get_model
+    from ..create_parfile import update_model
+
+    model = _model_with_stale_start_stop(tmp_path)
+    row = {"PEPOCH": model.PEPOCH.value, "Start": 56356.5, "Stop": 56357.5}
+    written = str(tmp_path / "out.par")
+    with open(written, "w") as fobj:
+        fobj.write(update_model(model, row, include_info=False).as_parfile(include_info=False))
+    reread = get_model(written)
+    assert reread.START.value == pytest.approx(56356.5, abs=1e-9)
+    assert reread.FINISH.value == pytest.approx(56357.5, abs=1e-9)
