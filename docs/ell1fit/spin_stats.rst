@@ -72,6 +72,16 @@ are each searched for a sinusoid within that range
 * The spectral window (the periodogram of the sampling alone) is plotted
   under the data: a data peak where the window peaks is suspect.
 
+* A joint search looks for one period shared by local ``F1`` and the pulsed
+  rate, over the epochs where both are measured. Each quantity keeps its own
+  mean, amplitude and phase, so a lag between torque and luminosity is allowed;
+  the lag of the pulsed-rate maximum after the ``F1`` maximum is reported, in
+  cycles. The joint power is the mean of the two powers. The shuffles move each
+  epoch's pair of values together. A torque-luminosity relation makes the two
+  quantities correlated epoch by epoch, and correlated quantities have
+  coincident periodogram peaks whether or not anything is periodic;
+  shuffling them independently would call every such coincidence significant.
+
 ``--rate-exclude PATTERN`` (repeatable, shell-style, matched against file name
 and label) leaves epochs out of the pulsed-rate search only -- for example
 another instrument's, whose count rates are not comparable.
@@ -113,7 +123,9 @@ Outputs
     the secular ``F1``.
 ``{outroot}_periodogram``
     With a periodicity search: power against period for each quantity, with the
-    shuffled-data detection threshold, over the spectral windows.
+    shuffled-data detection threshold, the joint power, and the spectral windows.
 ``{outroot}_folded``
-    With a periodicity search: each quantity folded at its best period, with
-    the best-fit sinusoid.
+    With a periodicity search: each quantity folded at its own best period,
+    with the best-fit sinusoid.
+``{outroot}_folded_joint``
+    With a periodicity search: both quantities folded at the joint period.

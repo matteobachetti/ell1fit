@@ -38,7 +38,7 @@ from scipy.optimize import brentq
 
 from .logging import configure_logging
 from .plotting import add_figure_format_argument, set_figure_format
-from .spin_periodicity import rate_values, search_periodicity
+from .spin_periodicity import rate_values, search_joint_periodicity, search_periodicity
 from .spin_stats_data import load_spin_table
 
 __all__ = [
@@ -309,7 +309,8 @@ PERIODICITY_QUANTITIES = (
 
 
 def _periodicity_inputs(table, local, rate_exclude=()):
-    """``{key: (t, y, var, yerr)}`` for each searchable quantity.
+    """``{key: (t, y, var, yerr)}`` for each searchable quantity, over all epochs
+    (NaN where not measured).
 
     Local F1 is weighted by its error and the intrinsic scatter in quadrature,
     as in :func:`local_f1_statistics`; the pulsed rate has no error and is
@@ -317,30 +318,43 @@ def _periodicity_inputs(table, local, rate_exclude=()):
     """
     mjd = np.asarray(table["mjd"], dtype=float)
     inputs = {}
-    f1 = np.asarray(table["f1"], dtype=float)
-    good = np.isfinite(f1)
     if local["n"] > 0:
-        err = np.asarray(_symmetric_error(table, "f1"), dtype=float)[good]
+        err = np.asarray(_symmetric_error(table, "f1"), dtype=float)
         var = err**2 + local["intrinsic_scatter"] ** 2
-        inputs["f1"] = (mjd[good], f1[good], var, err)
-    rates = rate_values(table, rate_exclude)
-    good = np.isfinite(rates)
-    inputs["pulsed_rate"] = (mjd[good], rates[good], None, None)
+        inputs["f1"] = (mjd, np.asarray(table["f1"], dtype=float), var, err)
+    inputs["pulsed_rate"] = (mjd, rate_values(table, rate_exclude), None, None)
     return inputs
 
 
+def _select(inputs, good):
+    t, y, var, yerr = inputs
+    return (
+        t[good],
+        y[good],
+        None if var is None else var[good],
+        None if yerr is None else yerr[good],
+    )
+
+
 def run_periodicity(table, local, min_period, max_period, rate_exclude=(), **search_kwargs):
-    """:func:`~ell1fit.spin_periodicity.search_periodicity` on local F1 and the pulsed rate.
+    """Periodicity searches on local F1 and the pulsed rate, each alone
+    (:func:`~ell1fit.spin_periodicity.search_periodicity`) and jointly, over
+    the epochs where both are measured
+    (:func:`~ell1fit.spin_periodicity.search_joint_periodicity`).
 
     Returns
     -------
     dict
-        ``{key: result}``, where each result also carries its input ``t``,
-        ``y`` and ``yerr`` for plotting. Quantities with fewer than
-        :data:`MIN_POINTS_FOR_PERIODICITY` points are skipped with a warning.
+        ``{key: result}`` for ``"f1"``, ``"pulsed_rate"`` and ``"joint"``. Each
+        single result also carries its input ``t``, ``y`` and ``yerr`` for
+        plotting; the joint one carries the same per quantity, at the joint
+        period, under ``components``. Searches with fewer than
+        :data:`MIN_POINTS_FOR_PERIODICITY` epochs are skipped with a warning.
     """
+    inputs = _periodicity_inputs(table, local, rate_exclude)
     results = {}
-    for key, (t, y, var, yerr) in _periodicity_inputs(table, local, rate_exclude).items():
+    for key, quantity in inputs.items():
+        t, y, var, yerr = _select(quantity, np.isfinite(quantity[1]))
         if t.size < MIN_POINTS_FOR_PERIODICITY:
             logging.warning(f"Periodicity search skipped for {key}: only {t.size} points")
             continue
@@ -355,11 +369,54 @@ def run_periodicity(table, local, min_period, max_period, rate_exclude=(), **sea
             f">= {result['detectable_amplitude']:.3g} would be detected at "
             f"false-alarm probability {result['fap_level']:g}"
         )
+
+    if len(inputs) < 2:
+        return results
+    both = np.all([np.isfinite(q[1]) for q in inputs.values()], axis=0)
+    if both.sum() < MIN_POINTS_FOR_PERIODICITY:
+        logging.warning(f"Joint periodicity search skipped: only {both.sum()} common epochs")
+        return results
+    selected = {key: _select(q, both) for key, q in inputs.items()}
+    t = next(iter(selected.values()))[0]
+    joint_kwargs = {k: v for k, v in search_kwargs.items() if k not in ("n_inject",)}
+    joint = search_joint_periodicity(
+        t,
+        [q[1] for q in selected.values()],
+        [q[2] for q in selected.values()],
+        min_period,
+        max_period,
+        **joint_kwargs,
+    )
+    joint["quantities"] = list(selected)
+    joint["components"] = {
+        key: {
+            "t": q[0],
+            "y": q[1],
+            "yerr": q[3],
+            "best_period_days": joint["best_period_days"],
+            "best_coeffs": coeffs,
+            "fap": joint["fap"],
+        }
+        for (key, q), coeffs in zip(selected.items(), joint["best_coeffs"])
+    }
+    results["joint"] = joint
+    logging.info(
+        f"joint ({' + '.join(selected)}, {t.size} epochs): best period "
+        f"{joint['best_period_days']:.2f} d, false-alarm probability {joint['fap']:.3g}; "
+        f"{list(selected)[1]} peaks {joint['phase_lags'][1]:+.2f} cycles after {list(selected)[0]}"
+    )
     return results
 
 
 def _json_ready(result):
-    return {k: v for k, v in result.items() if not isinstance(v, np.ndarray)}
+    """Drop the arrays and per-quantity plotting inputs a search result carries."""
+
+    def is_array_data(value):
+        return isinstance(value, np.ndarray) or (
+            isinstance(value, list) and any(isinstance(v, np.ndarray) for v in value)
+        )
+
+    return {k: v for k, v in result.items() if k != "components" and not is_array_data(v)}
 
 
 def _plot_periodograms(results, fname):
@@ -370,6 +427,7 @@ def _plot_periodograms(results, fname):
     from .plotting import GUIDE_COLOR, figure_size, plot_style_context, save_figure
 
     labels = dict((key, label) for key, label, _ in PERIODICITY_QUANTITIES)
+    labels["joint"] = "joint"
     with plot_style_context():
         fig, axes = plt.subplots(
             len(results) + 1, 1, sharex=True, figsize=figure_size("wide-tall"), layout="constrained"
@@ -398,7 +456,12 @@ def _plot_periodograms(results, fname):
 
 
 def _plot_folded(results, fname):
-    """Each searched quantity folded at its own best period, with the best-fit sinusoid."""
+    """Each searched quantity folded at its best period, with the best-fit sinusoid.
+
+    ``results`` is ``{key: result}`` as from :func:`run_periodicity` (without
+    ``"joint"``), or a joint result's ``components``: every quantity folded at
+    the shared period.
+    """
     import matplotlib.pyplot as plt
 
     from .plotting import DATA_COLOR, figure_size, plot_style_context, save_figure
@@ -481,7 +544,11 @@ def spin_statistics(
         _plot_f1(table, local, fit, reference_mjd, outroot + "_f1")
     if periodicity_results:
         _plot_periodograms(periodicity_results, outroot + "_periodogram")
-        _plot_folded(periodicity_results, outroot + "_folded")
+        singles = {k: r for k, r in periodicity_results.items() if k != "joint"}
+        if singles:
+            _plot_folded(singles, outroot + "_folded")
+        if "joint" in periodicity_results:
+            _plot_folded(periodicity_results["joint"]["components"], outroot + "_folded_joint")
     return summary
 
 

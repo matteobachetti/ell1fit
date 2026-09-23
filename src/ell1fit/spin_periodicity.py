@@ -30,6 +30,15 @@ Detectable amplitude
     above the false-alarm threshold) in 90% of trials is reported. With sparse
     data, this is usually the more informative number.
 
+Joint search
+    Local ``F1`` and pulsed rate can share a period
+    (:func:`search_joint_periodicity`): each keeps its own amplitude and phase,
+    so a lag between torque and luminosity is allowed and measured. The
+    shuffles keep each epoch's pair of values together; shuffling them
+    independently would make every coincidence of peaks look significant
+    whenever the two are correlated epoch by epoch, as a torque-luminosity
+    relation makes them.
+
 Coherence
     One sinusoid is fitted across the whole baseline, so a detection requires
     the period to be stable across it: for points ``T`` apart to stay in phase,
@@ -42,7 +51,9 @@ import numpy as np
 
 __all__ = [
     "floating_mean_periodogram",
+    "frequency_grid",
     "rate_values",
+    "search_joint_periodicity",
     "search_periodicity",
     "spectral_window",
 ]
@@ -95,8 +106,80 @@ def rate_values(table, exclude=()):
     return rates
 
 
-def _max_power(t, y, var, freq):
-    return floating_mean_periodogram(t, y, var, freq)[0].max()
+def frequency_grid(t, min_period, max_period, oversample=5):
+    """Trial frequencies (1/day) from ``1/max_period`` to ``1/min_period``, spaced
+    ``1 / (oversample * baseline)``."""
+    if not 0 < min_period < max_period:
+        raise ValueError("Need 0 < min_period < max_period")
+    df = 1 / (oversample * max(np.ptp(t), max_period))
+    freq = np.arange(1 / max_period, 1 / min_period + df, df)
+    return freq[freq <= 1 / min_period]
+
+
+def _combined_power(t, ys, variances, freq, order=None):
+    """Mean of the quantities' periodogram powers, and each one's coefficients.
+
+    ``order`` permutes every quantity with the *same* permutation, so values
+    measured at one epoch stay together.
+    """
+    powers, coeffs = [], []
+    for y, var in zip(ys, variances):
+        if order is not None:
+            y = y[order]
+            var = None if var is None else var[order]
+        power, coeff = floating_mean_periodogram(t, y, var, freq)
+        powers.append(power)
+        coeffs.append(coeff)
+    return np.mean(powers, axis=0), powers, coeffs
+
+
+def _calibrated_search(t, ys, variances, freq, n_shuffle, fap_level, rng):
+    """Combined periodogram, its best peak, and the shuffled-data false-alarm
+    probability and detection threshold for that peak."""
+    power, powers, coeffs = _combined_power(t, ys, variances, freq)
+    best = int(np.argmax(power))
+    max_shuffled = np.array(
+        [
+            _combined_power(t, ys, variances, freq, order=rng.permutation(t.size))[0].max()
+            for _ in range(n_shuffle)
+        ]
+    )
+    fap = (np.sum(max_shuffled >= power[best]) + 1) / (n_shuffle + 1)
+    threshold = float(np.quantile(max_shuffled, 1 - fap_level))
+    return power, powers, coeffs, best, fap, threshold
+
+
+def _as_arrays(t, ys, variances):
+    t = np.asarray(t, dtype=float)
+    ys = [np.asarray(y, dtype=float) for y in ys]
+    variances = [None if v is None else np.asarray(v, dtype=float) for v in variances]
+    return t, ys, variances
+
+
+def _search_summary(
+    t, freq, power, best, fap, threshold, n_shuffle, fap_level, min_period, max_period
+):
+    return {
+        "n": int(t.size),
+        "min_period_days": float(min_period),
+        "max_period_days": float(max_period),
+        "n_frequencies": int(freq.size),
+        "best_period_days": float(1 / freq[best]),
+        "best_power": float(power[best]),
+        "fap": float(fap),
+        "n_shuffle": int(n_shuffle),
+        "fap_level": float(fap_level),
+        "power_threshold": threshold,
+        "periods_days": 1 / freq,
+        "power": power,
+        "window": spectral_window(t, freq),
+    }
+
+
+def _phase_of_maximum(coeffs, freq):
+    """Phase (cycles, in [0, 1)) at which ``a cos(2 pi f t) + b sin(2 pi f t)`` peaks,
+    counted from ``t = 0``."""
+    return (np.arctan2(coeffs[2], coeffs[1]) / (2 * np.pi)) % 1
 
 
 def search_periodicity(
@@ -129,7 +212,7 @@ def search_periodicity(
     fap_level : float
         False-alarm probability defining a detection, for the detectable amplitude.
     n_inject : int
-        Injections per trial amplitude.
+        Injections per trial amplitude; 0 skips the detectable amplitude (NaN).
     detection_fraction : float
         Fraction of injections that must be detected at the reported amplitude.
 
@@ -140,57 +223,83 @@ def search_periodicity(
         ``window`` and ``best_coeffs`` ``(c0, a, b)``, for plotting.
     """
     rng = np.random.default_rng(rng)
-    t = np.asarray(t, dtype=float)
-    y = np.asarray(y, dtype=float)
-    var = None if var is None else np.asarray(var, dtype=float)
-    if not 0 < min_period < max_period:
-        raise ValueError("Need 0 < min_period < max_period")
-    baseline = np.ptp(t)
-    df = 1 / (oversample * max(baseline, max_period))
-    freq = np.arange(1 / max_period, 1 / min_period + df, df)
-    freq = freq[freq <= 1 / min_period]
+    t, (y,), (var,) = _as_arrays(t, [y], [var])
+    freq = frequency_grid(t, min_period, max_period, oversample)
+    power, _, (coeffs,), best, fap, threshold = _calibrated_search(
+        t, [y], [var], freq, n_shuffle, fap_level, rng
+    )
 
-    power, coeffs = floating_mean_periodogram(t, y, var, freq)
-    best = int(np.argmax(power))
+    detectable = float("nan")
+    if n_inject > 0:
+        amplitudes = np.geomspace(0.05, 20, 25) * np.std(y)
+        detected = []
+        for amplitude in amplitudes:
+            hits = 0
+            for _ in range(n_inject):
+                order = rng.permutation(t.size)
+                period = rng.uniform(min_period, max_period)
+                signal = amplitude * np.sin(2 * np.pi * t / period + rng.uniform(0, 2 * np.pi))
+                var_sh = None if var is None else var[order]
+                power_sh = floating_mean_periodogram(t, y[order] + signal, var_sh, freq)[0]
+                hits += power_sh.max() >= threshold
+            detected.append(hits / n_inject)
+        reached = np.nonzero(np.array(detected) >= detection_fraction)[0]
+        detectable = float(amplitudes[reached[0]]) if reached.size else float("inf")
 
-    def shuffled():
-        order = rng.permutation(t.size)
-        return y[order], None if var is None else var[order]
+    result = _search_summary(
+        t, freq, power, best, fap, threshold, n_shuffle, fap_level, min_period, max_period
+    )
+    result.update(
+        best_amplitude=float(np.hypot(*coeffs[best, 1:])),
+        detectable_amplitude=detectable,
+        detection_fraction=float(detection_fraction),
+        best_coeffs=coeffs[best],
+    )
+    return result
 
-    max_shuffled = np.array([_max_power(t, *shuffled(), freq) for _ in range(n_shuffle)])
-    fap = (np.sum(max_shuffled >= power[best]) + 1) / (n_shuffle + 1)
-    threshold = float(np.quantile(max_shuffled, 1 - fap_level))
 
-    amplitudes = np.geomspace(0.05, 20, 25) * np.std(y)
-    detected = []
-    for amplitude in amplitudes:
-        hits = 0
-        for _ in range(n_inject):
-            y_sh, var_sh = shuffled()
-            period = rng.uniform(min_period, max_period)
-            signal = amplitude * np.sin(2 * np.pi * t / period + rng.uniform(0, 2 * np.pi))
-            hits += _max_power(t, y_sh + signal, var_sh, freq) >= threshold
-        detected.append(hits / n_inject)
-    detected = np.array(detected)
-    reached = np.nonzero(detected >= detection_fraction)[0]
-    detectable = float(amplitudes[reached[0]]) if reached.size else float("inf")
+def search_joint_periodicity(
+    t, ys, variances, min_period, max_period, oversample=5, n_shuffle=1000, fap_level=0.01, rng=None
+):
+    """One period shared by several quantities measured at the same epochs.
 
-    return {
-        "n": int(t.size),
-        "min_period_days": float(min_period),
-        "max_period_days": float(max_period),
-        "n_frequencies": int(freq.size),
-        "best_period_days": float(1 / freq[best]),
-        "best_power": float(power[best]),
-        "best_amplitude": float(np.hypot(*coeffs[best, 1:])),
-        "fap": float(fap),
-        "n_shuffle": int(n_shuffle),
-        "fap_level": float(fap_level),
-        "power_threshold": threshold,
-        "detectable_amplitude": detectable,
-        "detection_fraction": float(detection_fraction),
-        "periods_days": 1 / freq,
-        "power": power,
-        "window": spectral_window(t, freq),
-        "best_coeffs": coeffs[best],
-    }
+    Each quantity keeps its own mean, amplitude and phase; the joint power is
+    the mean of their periodogram powers. The shuffles move all of an epoch's
+    values together, so a correlation between the quantities at each epoch --
+    which makes their periodogram peaks coincide whether or not anything is
+    periodic -- is part of the null hypothesis, not mistaken for a signal.
+
+    Parameters
+    ----------
+    t : array-like
+        Times, in days, shared by all quantities.
+    ys, variances : list of array-like
+        Values and variances (``None`` for equal weights) of each quantity.
+
+    Returns
+    -------
+    dict
+        As :func:`search_periodicity` (without the detectable amplitude),
+        plus ``best_amplitudes`` and ``phases_of_maximum`` (cycles from
+        ``t = 0``) per quantity, ``phase_lags`` of each quantity's maximum
+        after the first one's, in cycles within [-0.5, 0.5), and the arrays
+        ``powers`` and ``best_coeffs`` per quantity.
+    """
+    rng = np.random.default_rng(rng)
+    t, ys, variances = _as_arrays(t, ys, variances)
+    freq = frequency_grid(t, min_period, max_period, oversample)
+    power, powers, coeffs, best, fap, threshold = _calibrated_search(
+        t, ys, variances, freq, n_shuffle, fap_level, rng
+    )
+    phases = [float(_phase_of_maximum(c[best], freq[best])) for c in coeffs]
+    result = _search_summary(
+        t, freq, power, best, fap, threshold, n_shuffle, fap_level, min_period, max_period
+    )
+    result.update(
+        best_amplitudes=[float(np.hypot(*c[best, 1:])) for c in coeffs],
+        phases_of_maximum=phases,
+        phase_lags=[float((p - phases[0] + 0.5) % 1 - 0.5) for p in phases],
+        powers=powers,
+        best_coeffs=[c[best] for c in coeffs],
+    )
+    return result
