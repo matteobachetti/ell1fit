@@ -34,11 +34,17 @@ import logging
 from dataclasses import dataclass
 
 import numpy as np
+from astropy.table import Table
 from scipy.optimize import brentq
 
 from .logging import configure_logging
 from .plotting import add_figure_format_argument, set_figure_format
-from .spin_periodicity import rate_values, search_joint_periodicity, search_periodicity
+from .spin_periodicity import (
+    leave_one_out,
+    rate_values,
+    search_joint_periodicity,
+    search_periodicity,
+)
 from .spin_stats_data import load_spin_table
 
 __all__ = [
@@ -336,7 +342,26 @@ def _select(inputs, good):
     )
 
 
-def run_periodicity(table, local, min_period, max_period, rate_exclude=(), **search_kwargs):
+def _log_leave_one_out(key, rows):
+    periods = [r["best_period_days"] for r in rows]
+    faps = [r["fap"] for r in rows]
+    worst = rows[int(np.argmax(faps))]
+    logging.info(
+        f"{key}, leave-one-out: best period {min(periods):.2f}-{max(periods):.2f} d, "
+        f"false-alarm probability {min(faps):.3g}-{max(faps):.3g} "
+        f"(highest without MJD {worst['dropped_mjd']:.1f}, at {worst['best_period_days']:.2f} d)"
+    )
+
+
+def run_periodicity(
+    table,
+    local,
+    min_period,
+    max_period,
+    rate_exclude=(),
+    with_leave_one_out=False,
+    **search_kwargs,
+):
     """Periodicity searches on local F1 and the pulsed rate, each alone
     (:func:`~ell1fit.spin_periodicity.search_periodicity`) and jointly, over
     the epochs where both are measured
@@ -350,8 +375,11 @@ def run_periodicity(table, local, min_period, max_period, rate_exclude=(), **sea
         plotting; the joint one carries the same per quantity, at the joint
         period, under ``components``. Searches with fewer than
         :data:`MIN_POINTS_FOR_PERIODICITY` epochs are skipped with a warning.
+        With ``with_leave_one_out``, each result also has a ``leave_one_out``
+        list (see :func:`~ell1fit.spin_periodicity.leave_one_out`).
     """
     inputs = _periodicity_inputs(table, local, rate_exclude)
+    loo_kwargs = {k: v for k, v in search_kwargs.items() if k in ("oversample", "n_shuffle", "rng")}
     results = {}
     for key, quantity in inputs.items():
         t, y, var, yerr = _select(quantity, np.isfinite(quantity[1]))
@@ -369,6 +397,11 @@ def run_periodicity(table, local, min_period, max_period, rate_exclude=(), **sea
             f">= {result['detectable_amplitude']:.3g} would be detected at "
             f"false-alarm probability {result['fap_level']:g}"
         )
+        if with_leave_one_out:
+            result["leave_one_out"] = leave_one_out(
+                t, [y], [var], min_period, max_period, **loo_kwargs
+            )
+            _log_leave_one_out(key, result["leave_one_out"])
 
     if len(inputs) < 2:
         return results
@@ -405,6 +438,16 @@ def run_periodicity(table, local, min_period, max_period, rate_exclude=(), **sea
         f"{joint['best_period_days']:.2f} d, false-alarm probability {joint['fap']:.3g}; "
         f"{list(selected)[1]} peaks {joint['phase_lags'][1]:+.2f} cycles after {list(selected)[0]}"
     )
+    if with_leave_one_out:
+        joint["leave_one_out"] = leave_one_out(
+            t,
+            [q[1] for q in selected.values()],
+            [q[2] for q in selected.values()],
+            min_period,
+            max_period,
+            **loo_kwargs,
+        )
+        _log_leave_one_out("joint", joint["leave_one_out"])
     return results
 
 
@@ -537,6 +580,13 @@ def spin_statistics(
         summary["periodicity"] = {k: _json_ready(r) for k, r in periodicity_results.items()}
 
     table.write(outroot + "_epochs.ecsv", overwrite=True)
+    loo_rows = [
+        {"search": key, **row}
+        for key, result in periodicity_results.items()
+        for row in result.get("leave_one_out", [])
+    ]
+    if loo_rows:
+        Table(rows=loo_rows).write(outroot + "_leave_one_out.ecsv", overwrite=True)
     with open(outroot + "_results.json", "w") as fobj:
         json.dump(summary, fobj, indent=2)
     _plot_trend(table, fit, reference_mjd, outroot + "_trend")
@@ -609,6 +659,14 @@ def main(args=None):
             "Can be repeated."
         ),
     )
+    search.add_argument(
+        "--leave-one-out",
+        action="store_true",
+        help=(
+            "Repeat every search with each epoch left out in turn "
+            "(writes {outroot}_leave_one_out.ecsv)"
+        ),
+    )
     search.add_argument("--seed", type=int, default=None, help="Random seed for the shuffles")
     add_figure_format_argument(parser)
     parsed = parser.parse_args(args)
@@ -626,6 +684,7 @@ def main(args=None):
             "n_shuffle": parsed.n_shuffle,
             "fap_level": parsed.fap_level,
             "rng": parsed.seed,
+            "with_leave_one_out": parsed.leave_one_out,
         }
 
     configure_logging()

@@ -82,6 +82,11 @@ are each searched for a sinusoid within that range
   coincident periodogram peaks whether or not anything is periodic;
   shuffling them independently would call every such coincidence significant.
 
+* ``--leave-one-out`` repeats every search (single and joint) with each epoch
+  left out in turn, logs the range of best periods and false-alarm
+  probabilities, and writes them to ``{outroot}_leave_one_out.ecsv``. A
+  candidate carried by one or two epochs moves or fades when they are dropped.
+
 ``--rate-exclude PATTERN`` (repeatable, shell-style, matched against file name
 and label) leaves epochs out of the pulsed-rate search only -- for example
 another instrument's, whose count rates are not comparable.
@@ -94,7 +99,7 @@ Caveats
     are usually correlated -- a smooth rise within a campaign mimics part of a
     sinusoid, and shuffling breaks that smoothness -- so the false-alarm
     probability is optimistic when the data are clustered. Check a candidate
-    by dropping epochs one at a time.
+    with ``--leave-one-out``.
 
 Fitting with extra scatter
 --------------------------
@@ -129,3 +134,6 @@ Outputs
     with the best-fit sinusoid.
 ``{outroot}_folded_joint``
     With a periodicity search: both quantities folded at the joint period.
+``{outroot}_leave_one_out.ecsv``
+    With ``--leave-one-out``: for each search and each dropped epoch, the best
+    period, its power and its false-alarm probability.

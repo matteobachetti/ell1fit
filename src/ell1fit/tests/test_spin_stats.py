@@ -7,6 +7,7 @@ from astropy.table import Table
 
 from ..spin_periodicity import (
     floating_mean_periodogram,
+    leave_one_out,
     rate_values,
     search_joint_periodicity,
     search_periodicity,
@@ -62,7 +63,7 @@ def test_cli_secular_and_local_spin(tmp_path):
     outroot = str(tmp_path / "out")
     main(
         ["--extra", str(extra), "-o", outroot, "--figure-format", "png"]
-        + ["--min-period", "50", "--max-period", "70", "--n-shuffle", "50"]
+        + ["--min-period", "50", "--max-period", "70", "--n-shuffle", "20", "--leave-one-out"]
     )
 
     summary = json.load(open(outroot + "_results.json"))
@@ -80,6 +81,7 @@ def test_cli_secular_and_local_spin(tmp_path):
         "_periodogram.png",
         "_folded.png",
         "_folded_joint.png",
+        "_leave_one_out.ecsv",
     ):
         assert (tmp_path / f"out{suffix}").exists()
 
@@ -160,3 +162,13 @@ def test_joint_search_null_keeps_epochs_paired():
     y2 = y1 + rng.normal(0, 0.1, t.size)
     result = search_joint_periodicity(t, [y1, y2], [None, None], 50, 70, n_shuffle=500, rng=1)
     assert result["fap"] > 0.05
+
+
+def test_leave_one_out_keeps_a_well_supported_period():
+    """A period carried by the whole dataset survives dropping any single epoch."""
+    rng = np.random.default_rng(6)
+    t = _sparse_times(rng, n=18)
+    y = 3 * np.sin(2 * np.pi * t / 61.0) + rng.normal(0, 1, t.size)
+    rows = leave_one_out(t, [y], [None], 50, 70, n_shuffle=20, rng=rng)
+    assert [r["dropped_mjd"] for r in rows] == list(t)
+    assert all(abs(r["best_period_days"] - 61.0) < 0.5 for r in rows)

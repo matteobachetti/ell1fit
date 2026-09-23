@@ -52,6 +52,7 @@ import numpy as np
 __all__ = [
     "floating_mean_periodogram",
     "frequency_grid",
+    "leave_one_out",
     "rate_values",
     "search_joint_periodicity",
     "search_periodicity",
@@ -303,3 +304,46 @@ def search_joint_periodicity(
         best_coeffs=[c[best] for c in coeffs],
     )
     return result
+
+
+def leave_one_out(t, ys, variances, min_period, max_period, oversample=5, n_shuffle=1000, rng=None):
+    """Repeat a (single or joint) search with each epoch left out in turn.
+
+    A candidate period carried by one or two epochs moves, or loses its
+    significance, when they are dropped; one supported by the whole dataset
+    does neither.
+
+    Parameters
+    ----------
+    t, ys, variances
+        As :func:`search_joint_periodicity`; a single quantity is a one-element list.
+
+    Returns
+    -------
+    list of dict
+        One per epoch: ``dropped_mjd``, ``best_period_days``, ``best_power``, ``fap``.
+    """
+    rng = np.random.default_rng(rng)
+    t, ys, variances = _as_arrays(t, ys, variances)
+    rows = []
+    for i in range(t.size):
+        keep = np.arange(t.size) != i
+        freq = frequency_grid(t[keep], min_period, max_period, oversample)
+        power, _, _, best, fap, _ = _calibrated_search(
+            t[keep],
+            [y[keep] for y in ys],
+            [None if v is None else v[keep] for v in variances],
+            freq,
+            n_shuffle,
+            0.5,
+            rng,
+        )
+        rows.append(
+            {
+                "dropped_mjd": float(t[i]),
+                "best_period_days": float(1 / freq[best]),
+                "best_power": float(power[best]),
+                "fap": float(fap),
+            }
+        )
+    return rows
