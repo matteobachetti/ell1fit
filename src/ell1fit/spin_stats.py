@@ -7,6 +7,8 @@ extra tables, see :mod:`ell1fit.spin_stats_data`) and reports
   slope is the long-term ``F1``;
 * the **local** ``F1`` values measured within each epoch: their mean, their
   scatter, and the fraction of epochs spinning up;
+* the relation between local ``F1`` and the pulsed count rate (a proxy for
+  the torque-luminosity relation);
 * optionally, a search for a coherent periodicity in local ``F1`` and in the
   pulsed count rate within a given period range (see
   :mod:`ell1fit.spin_periodicity`).
@@ -55,6 +57,7 @@ __all__ = [
     "run_periodicity",
     "secular_spin",
     "spin_statistics",
+    "torque_luminosity",
 ]
 
 DAY = 86400.0
@@ -304,6 +307,124 @@ def _plot_f1(table, local, secular_fit, reference_mjd, fname):
         return save_figure(fig, fname)
 
 
+#: Default index of the torque-luminosity relation: disc accretion onto a
+#: magnetised star gives a spin-up rate proportional to L^(6/7).
+DEFAULT_TORQUE_INDEX = 6 / 7
+
+#: Indices the free-index torque-luminosity fit is profiled over.
+TORQUE_INDEX_GRID = np.linspace(0.05, 5, 496)
+
+
+def torque_luminosity(f1, f1_err, rate, index=DEFAULT_TORQUE_INDEX, index_grid=TORQUE_INDEX_GRID):
+    """Relation between local F1 and the pulsed count rate ``R``.
+
+    Reports the Spearman rank correlation (model-free), and fits
+    ``F1 = B + A (R / R_ref)^index``, where ``R_ref`` is the median rate: ``A +
+    B`` is F1 at ``R_ref``, and ``B`` a rate-independent term (for example a
+    spin-down torque) that lets the relation cross zero, as it must for a
+    source seen both spinning up and down. At fixed ``index`` this is a
+    straight line in ``(R / R_ref)^index``, fitted with intrinsic scatter as
+    everywhere else in this module. The free-index fit profiles chi-squared
+    over ``index_grid`` with that scatter held fixed, and reports the
+    ``Delta chi2 = 1`` interval, flagged if it reaches the edge of the grid.
+
+    Epochs without a finite F1 or a positive rate are skipped.
+    """
+    from scipy.stats import spearmanr
+
+    f1, f1_err, rate = (np.asarray(a, dtype=float) for a in (f1, f1_err, rate))
+    good = np.isfinite(f1) & np.isfinite(f1_err) & np.isfinite(rate) & (rate > 0)
+    f1, f1_err, rate = f1[good], f1_err[good], rate[good]
+    summary = {"n": int(f1.size)}
+    if f1.size < 4:
+        logging.warning(f"Torque-luminosity fit skipped: only {f1.size} epochs")
+        return summary
+    reference = float(np.median(rate))
+    rho, p_value = spearmanr(rate, f1)
+    summary.update(reference_rate=reference, spearman_rho=float(rho), spearman_p=float(p_value))
+
+    def coefficients(fit_coeffs, cov):
+        errors = np.sqrt(np.diag(cov))
+        return {
+            "B": [float(fit_coeffs[0]), float(errors[0])],
+            "A": [float(fit_coeffs[1]), float(errors[1])],
+        }
+
+    fixed = fit_polynomial_with_scatter((rate / reference) ** index, f1, f1_err, degree=1)
+    summary["fixed_index"] = {
+        "index": float(index),
+        **coefficients(fixed.coeffs, fixed.cov),
+        "intrinsic_scatter": float(fixed.scatter),
+    }
+
+    var = f1_err**2 + fixed.scatter**2
+    chi2 = np.array([_weighted_polyfit((rate / reference) ** a, f1, var, 1)[2] for a in index_grid])
+    best = int(np.argmin(chi2))
+    inside = index_grid[chi2 <= chi2[best] + 1]
+    coeffs, cov, _ = _weighted_polyfit((rate / reference) ** index_grid[best], f1, var, 1)
+    summary["free_index"] = {
+        "index": float(index_grid[best]),
+        "index_interval": [float(inside.min()), float(inside.max())],
+        "interval_at_grid_edge": bool(
+            inside.min() <= index_grid[0] or inside.max() >= index_grid[-1]
+        ),
+        **coefficients(coeffs, cov),
+    }
+    return summary
+
+
+def _plot_torque(table, rates, torque, fname):
+    """Local F1 against pulsed rate, with the fixed- and free-index relations."""
+    import matplotlib.pyplot as plt
+
+    from .plotting import GUIDE_COLOR, figure_size, plot_style_context, save_figure
+
+    good = np.isfinite(np.asarray(table["f1"], dtype=float)) & np.isfinite(rates) & (rates > 0)
+    sub = table[good]
+    f1 = np.asarray(sub["f1"], dtype=float)
+    exponent = _power_of_ten(f1)
+    scale = 10.0**exponent
+    rate_smooth = np.linspace(rates[good].min(), rates[good].max(), 200)
+    reference = torque["reference_rate"]
+
+    with plot_style_context():
+        fig, ax = plt.subplots(figsize=figure_size("column"), layout="constrained")
+        ax.axhline(0, color=GUIDE_COLOR, linewidth=0.8, linestyle=":")
+        for key, color, style in (("fixed_index", "C0", "-"), ("free_index", "C3", "--")):
+            fit = torque[key]
+            model = fit["B"][0] + fit["A"][0] * (rate_smooth / reference) ** fit["index"]
+            ax.plot(
+                rate_smooth,
+                model / scale,
+                color=color,
+                ls=style,
+                label=rf"$\alpha = {fit['index']:.2f}$"
+                + (
+                    " (fixed)"
+                    if key == "fixed_index"
+                    else " (free, unconstrained)"
+                    if fit["interval_at_grid_edge"]
+                    else " (free)"
+                ),
+            )
+        _errorbars_by_label(
+            ax,
+            sub,
+            rates[good],
+            f1,
+            np.asarray(sub["f1_err_neg"], dtype=float),
+            np.asarray(sub["f1_err_pos"], dtype=float),
+            scale=scale,
+        )
+        ax.legend(loc="best")
+        ax.set_xlabel(r"pulsed rate (ct s$^{-1}$)")
+        ax.set_ylabel(rf"$\dot\nu$ ($10^{{{exponent}}}$ Hz s$^{{-1}}$)")
+        ax.set_title(
+            rf"Spearman $\rho$ = {torque['spearman_rho']:.2f} (p = {torque['spearman_p']:.2g})"
+        )
+        return save_figure(fig, fname)
+
+
 #: Fewest points a periodicity search is run on: three sinusoid parameters, plus two.
 MIN_POINTS_FOR_PERIODICITY = 5
 
@@ -538,11 +659,20 @@ def _plot_folded(results, fname):
 
 
 def spin_statistics(
-    files, extra_files=(), outroot="ell1stat", degree=1, reference_mjd=None, periodicity=None
+    files,
+    extra_files=(),
+    outroot="ell1stat",
+    degree=1,
+    reference_mjd=None,
+    rate_exclude=(),
+    torque_index=DEFAULT_TORQUE_INDEX,
+    periodicity=None,
 ):
     """Run the analysis, write ``{outroot}_results.json``, ``{outroot}_epochs.ecsv``
     and the figures, and return the summary dict.
 
+    ``rate_exclude`` patterns leave epochs out of everything that uses the
+    pulsed rate (see :func:`~ell1fit.spin_periodicity.rate_values`).
     ``periodicity``, if given, is a dict of keyword arguments for
     :func:`run_periodicity` (at least ``min_period`` and ``max_period``).
     """
@@ -574,9 +704,28 @@ def spin_statistics(
         )
         logging.info(f"Secular minus local mean: {summary['secular_minus_local_sigma']:.1f} sigma")
 
+    rates = rate_values(table, rate_exclude)
+    torque = torque_luminosity(
+        table["f1"], _symmetric_error(table, "f1"), rates, index=torque_index
+    )
+    summary["torque_luminosity"] = torque
+    if "fixed_index" in torque:
+        fixed, free = torque["fixed_index"], torque["free_index"]
+        logging.info(
+            f"F1 vs pulsed rate: Spearman rho = {torque['spearman_rho']:.2f} "
+            f"(p = {torque['spearman_p']:.2g}); at index {fixed['index']:.2f}, "
+            f"F1 = {fixed['B'][0]:.2e} + {fixed['A'][0]:.2e} "
+            f"(R/{torque['reference_rate']:.3g})^index; "
+            f"free index {free['index']:.2f} "
+            f"[{free['index_interval'][0]:.2f}, {free['index_interval'][1]:.2f}]"
+            + (" (interval reaches the grid edge)" if free["interval_at_grid_edge"] else "")
+        )
+
     periodicity_results = {}
     if periodicity is not None:
-        periodicity_results = run_periodicity(table, local, **periodicity)
+        periodicity_results = run_periodicity(
+            table, local, rate_exclude=rate_exclude, **periodicity
+        )
         summary["periodicity"] = {k: _json_ready(r) for k, r in periodicity_results.items()}
 
     table.write(outroot + "_epochs.ecsv", overwrite=True)
@@ -592,6 +741,8 @@ def spin_statistics(
     _plot_trend(table, fit, reference_mjd, outroot + "_trend")
     if local["n"] > 0:
         _plot_f1(table, local, fit, reference_mjd, outroot + "_f1")
+    if "fixed_index" in torque:
+        _plot_torque(table, rates, torque, outroot + "_torque")
     if periodicity_results:
         _plot_periodograms(periodicity_results, outroot + "_periodogram")
         singles = {k: r for k, r in periodicity_results.items() if k != "joint"}
@@ -627,6 +778,23 @@ def main(args=None):
         dest="reference_epoch",
         help="MJD the secular fit is referenced to (default: mean epoch)",
     )
+    parser.add_argument(
+        "--rate-exclude",
+        action="append",
+        default=[],
+        metavar="PATTERN",
+        help=(
+            "Leave epochs whose file name or label matches this shell pattern out of "
+            "everything using the pulsed rate (e.g. 'chandra*', whose count rates are not "
+            "comparable). Can be repeated."
+        ),
+    )
+    parser.add_argument(
+        "--torque-index",
+        type=float,
+        default=DEFAULT_TORQUE_INDEX,
+        help="Fixed index of the F1-pulsed rate relation F1 = B + A R^index (default 6/7)",
+    )
     search = parser.add_argument_group(
         "periodicity search", "Run when both --min-period and --max-period are given"
     )
@@ -649,17 +817,6 @@ def main(args=None):
         "(default 0.01)",
     )
     search.add_argument(
-        "--rate-exclude",
-        action="append",
-        default=[],
-        metavar="PATTERN",
-        help=(
-            "Leave epochs whose file name or label matches this shell pattern out of the "
-            "pulsed-rate search (e.g. 'chandra*', whose count rates are not comparable). "
-            "Can be repeated."
-        ),
-    )
-    search.add_argument(
         "--leave-one-out",
         action="store_true",
         help=(
@@ -679,7 +836,6 @@ def main(args=None):
         periodicity = {
             "min_period": parsed.min_period,
             "max_period": parsed.max_period,
-            "rate_exclude": parsed.rate_exclude,
             "oversample": parsed.oversample,
             "n_shuffle": parsed.n_shuffle,
             "fap_level": parsed.fap_level,
@@ -695,6 +851,8 @@ def main(args=None):
         outroot=parsed.outroot,
         degree=parsed.degree,
         reference_mjd=parsed.reference_epoch,
+        rate_exclude=parsed.rate_exclude,
+        torque_index=parsed.torque_index,
         periodicity=periodicity,
     )
 

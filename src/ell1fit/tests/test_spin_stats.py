@@ -12,7 +12,7 @@ from ..spin_periodicity import (
     search_joint_periodicity,
     search_periodicity,
 )
-from ..spin_stats import fit_polynomial_with_scatter, main
+from ..spin_stats import fit_polynomial_with_scatter, main, torque_luminosity
 
 
 def test_scatter_fit_recovers_line_and_scatter():
@@ -74,6 +74,7 @@ def test_cli_secular_and_local_spin(tmp_path):
     assert summary["secular_minus_local_sigma"] < -3
     assert set(summary["periodicity"]) == {"f1", "pulsed_rate", "joint"}
     assert 50 <= summary["periodicity"]["f1"]["best_period_days"] <= 70
+    assert summary["torque_luminosity"]["n"] == mjd.size
     for suffix in (
         "_epochs.ecsv",
         "_trend.png",
@@ -82,6 +83,7 @@ def test_cli_secular_and_local_spin(tmp_path):
         "_folded.png",
         "_folded_joint.png",
         "_leave_one_out.ecsv",
+        "_torque.png",
     ):
         assert (tmp_path / f"out{suffix}").exists()
 
@@ -172,3 +174,18 @@ def test_leave_one_out_keeps_a_well_supported_period():
     rows = leave_one_out(t, [y], [None], 50, 70, n_shuffle=20, rng=rng)
     assert [r["dropped_mjd"] for r in rows] == list(t)
     assert all(abs(r["best_period_days"] - 61.0) < 0.5 for r in rows)
+
+
+def test_torque_luminosity_recovers_relation():
+    """F1 = B + A (R / R_ref)^(6/7) plus scatter: the fixed-index fit recovers A and B,
+    the free-index interval contains 6/7, and the rank correlation is positive."""
+    rng = np.random.default_rng(10)
+    rate = rng.uniform(0.05, 0.5, 40)
+    ref = np.median(rate)
+    f1 = -5e-11 + 1e-10 * (rate / ref) ** (6 / 7) + rng.normal(0, 1e-11, rate.size)
+    result = torque_luminosity(f1, np.full(rate.size, 2e-12), rate)
+    fixed, free = result["fixed_index"], result["free_index"]
+    assert abs(fixed["A"][0] - 1e-10) < 3 * fixed["A"][1]
+    assert abs(fixed["B"][0] + 5e-11) < 3 * fixed["B"][1]
+    assert free["index_interval"][0] < 6 / 7 < free["index_interval"][1]
+    assert result["spearman_rho"] > 0.5

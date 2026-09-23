@@ -42,7 +42,20 @@ Local ``F1``
     scatter, the plain inverse-variance mean with its chi-squared, and the
     fraction of epochs spinning up.
 
-The two are compared (``secular_minus_local_sigma``). In an accreting source
+Torque and luminosity
+    The Spearman rank correlation between local ``F1`` and the pulsed rate
+    ``R`` (model-free), and a fit of ``F1 = B + A (R / R_ref)^alpha``, with
+    ``R_ref`` the median rate. ``B`` is a rate-independent term, e.g. a
+    spin-down torque, which lets the relation cross zero, as it must for a
+    source seen both spinning up and down. ``alpha`` is fitted both fixed at
+    ``--torque-index`` (default 6/7, disc accretion onto a magnetised star)
+    and free, with the ``Delta chi2 = 1`` interval from a chi-squared profile
+    with the intrinsic scatter held at its fixed-index value. That interval is
+    slightly narrow (61% coverage in simulations, rather than 68%), and is
+    flagged when it reaches the edge of the profiled range (0.05-5), i.e. when
+    ``alpha`` is unconstrained. ``--rate-exclude`` applies here too.
+
+The secular and local ``F1`` are compared (``secular_minus_local_sigma``). In an accreting source
 they need not agree: local ``F1`` follows the torque at the time of each
 observation, while the secular trend integrates every torque episode,
 including the ones no observation caught.
@@ -88,8 +101,9 @@ are each searched for a sinusoid within that range
   candidate carried by one or two epochs moves or fades when they are dropped.
 
 ``--rate-exclude PATTERN`` (repeatable, shell-style, matched against file name
-and label) leaves epochs out of the pulsed-rate search only -- for example
-another instrument's, whose count rates are not comparable.
+and label) leaves epochs out of everything that uses the pulsed rate -- for
+example another instrument's, whose count rates are not comparable -- while
+keeping their ``F0`` and ``F1``.
 
 Caveats
     One sinusoid is fitted across the whole baseline, so the period must be
@@ -126,6 +140,8 @@ Outputs
 ``{outroot}_f1``
     Local ``F1`` against time, with their mean, the intrinsic-scatter band and
     the secular ``F1``.
+``{outroot}_torque``
+    Local ``F1`` against pulsed rate, with the fixed- and free-index relations.
 ``{outroot}_periodogram``
     With a periodicity search: power against period for each quantity, with the
     shuffled-data detection threshold, the joint power, and the spectral windows.
