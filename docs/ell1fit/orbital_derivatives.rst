@@ -308,6 +308,22 @@ a number, and "this is a limit rather than a measurement" is a statement for
 the paper, not for the parameter file. ``M1`` is never adopted into the
 ephemeris regardless of its Bayes factor.
 
+Choosing the reference epoch
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``--reference-epoch MJD`` is only approximate. The reference ephemeris is
+moved to the ascending node closest to it (PINT's ``change_binary_epoch``),
+and the time axis :math:`t` of :math:`\Delta T_{\rm asc}(t)` starts at that
+node, not at the MJD given. This matters because PINT's ELL1 model counts the
+evolution of ``PB`` from ``TASC``: the fitted constant and linear terms at
+:math:`t = 0` become the ``.par`` file's ``TASC`` and ``PB`` only if
+:math:`t = 0` *is* ``TASC``. Starting the axis at the raw MJD instead, up to
+half an orbit away, would bias the written ``PB`` by ``PBDOT`` times that
+distance, many sigma for a strong ``PBDOT``. The default is the mean
+``PEPOCH`` of the input files. ``reference_epoch`` in the results JSON is the
+MJD requested; ``reference_tasc`` is the node the fit was referenced to,
+before the fitted ``TASC`` offset is added.
+
 Orbital-size drift: bounding ``A1DOT``
 --------------------------------------
 
