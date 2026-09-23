@@ -600,10 +600,14 @@ def _write_decay_epochs(directory, pbdot=0.0, pbddot_per_yr=0.0, tasc_err_sec=5.
     rng = np.random.default_rng(seed)
     files = []
     for i, dt in enumerate(np.linspace(-1500.0, 1500.0, 9)):
-        delta_sec = (
-            pbdot * dt**2 / (2 * _PB_DAYS) + (pbddot_per_yr / 365.25) * dt**3 / (6 * _PB_DAYS)
-        ) * 86400.0
+        # The displacement is evaluated at the node itself, not at ``dt``, which
+        # can be up to PB/2 away and would bias TASC by seconds at large PBDOT.
         n_orbits = round(dt / _PB_DAYS)
+        t_node = n_orbits * _PB_DAYS
+        delta_sec = (
+            pbdot * t_node**2 / (2 * _PB_DAYS)
+            + (pbddot_per_yr / 365.25) * t_node**3 / (6 * _PB_DAYS)
+        ) * 86400.0
         tasc = (
             _REF_MJD + n_orbits * _PB_DAYS + (delta_sec + rng.normal(0.0, tasc_err_sec)) / 86400.0
         )
@@ -756,6 +760,37 @@ def test_results_json_carries_the_limits(tmp_path):
     assert "PBDDOT_upper_limit" in stored["M1"]
     assert "PBDDOT_upper_limit_3sigma" in stored["M1"]
     assert "bayes_factor_pbdot" in stored
+
+
+def test_parfile_is_referenced_to_the_tasc_nearest_the_reference_epoch(tmp_path):
+    """A --reference-epoch 0.4 orbits past a node must give a .par whose TASC and
+    PB are the true ones *at the nearest node*, where PINT counts PB from; fitting
+    around the raw MJD instead biases PB by PBDOT*0.4*PB, ~1000 sigma here."""
+    from pint.models import get_model
+
+    pbdot = 3e-8
+    files = _write_decay_epochs(tmp_path, pbdot=pbdot, tasc_err_sec=0.01)
+    outroot = os.path.join(str(tmp_path), "offset_ref")
+    results = fit_orbital_decay(
+        files,
+        outroot=outroot,
+        nlive=200,
+        dlogz=0.5,
+        seeds=1,
+        reference_epoch=_REF_MJD + 0.4 * _PB_DAYS,
+    )
+    model = get_model(results["parfile"])
+    tasc_out = float(model.TASC.value)
+    n_orbits = round((tasc_out - _REF_MJD) / _PB_DAYS)
+    assert n_orbits == 0
+    # Same node as the fit's time origin, which the fitted offset only nudges.
+    assert abs(results["reference_tasc"] - tasc_out) < 0.1 * _PB_DAYS
+    # The injected truth at that node (see _write_decay_epochs).
+    dt = n_orbits * _PB_DAYS
+    tasc_true = _REF_MJD + dt + pbdot * dt**2 / (2 * _PB_DAYS)
+    pb_true = _PB_DAYS + pbdot * dt
+    assert abs(tasc_out - tasc_true) < 5 * float(model.TASC.uncertainty_value)
+    assert abs(float(model.PB.value) - pb_true) < 5 * float(model.PB.uncertainty_value)
 
 
 def test_derivative_scale_matches_physical_from_beta():

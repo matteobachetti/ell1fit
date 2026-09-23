@@ -399,11 +399,14 @@ def build_reference_model(epochs, reference_epoch=None):
     Parameters
     ----------
     reference_epoch : float or None
-        MJD to reference PB/A1/EPS1/EPS2 to. Defaults to the mean PEPOCH
-        across ``epochs``, following :func:`ell1fit.models._load_and_validate_models`'s
-        own precedent, and centers the fit's ``x = t - reference_epoch`` axis
-        on the data -- material here because the fit measures exactly the
-        offset/slope/curvature terms that a centered axis decorrelates.
+        Approximate MJD to reference PB/A1/EPS1/EPS2 to: PINT's
+        ``change_binary_epoch`` moves TASC to the ascending node closest to
+        it, and that TASC (not ``reference_epoch`` itself) is the epoch the
+        orbital elements describe. Defaults to the mean PEPOCH across
+        ``epochs``, following :func:`ell1fit.models._load_and_validate_models`'s
+        own precedent, and so centers the fit's ``x = t - TASC`` axis on the
+        data to within PB/2 -- material here because the fit measures exactly
+        the offset/slope/curvature terms that a centered axis decorrelates.
 
     Returns
     -------

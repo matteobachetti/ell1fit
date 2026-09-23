@@ -16,6 +16,7 @@ import argparse
 import copy
 import json
 import logging
+import os
 
 import astropy.units as u
 import numpy as np
@@ -55,19 +56,23 @@ def _assemble_data(epochs, ref_model):
     ``n`` closest to that epoch's own TASC) -- TASC is only ever defined
     modulo PB, so without this wrap ``y`` would jump by whole multiples of PB
     between epochs instead of tracking the genuine deviation. ``x`` is time
-    since the reference model's own ``PEPOCH`` (which :func:`build_reference_model`
-    sets to the reference epoch used), measured at each epoch's own fitted
-    TASC rather than its (looser, mid-observation) ``PEPOCH``.
+    since the reference model's own ``TASC`` (the ascending node
+    :func:`build_reference_model` picked closest to the requested reference
+    epoch), measured at each epoch's own fitted TASC rather than its (looser,
+    mid-observation) ``PEPOCH``. The origin must be that TASC and not the raw
+    reference epoch: PINT's ELL1 model counts PB's evolution from TASC, so
+    the fitted offset and slope at ``x = 0`` are only the ``.par`` file's
+    TASC and PB if ``x = 0`` *is* TASC. Measuring from the raw epoch, up to
+    PB/2 away, biases the written PB by ``PBDOT`` times that distance.
     """
     ref_tasc = float(ref_model.TASC.value)
     ref_pb = float(ref_model.PB.value)
-    reference_epoch = float(ref_model.PEPOCH.value)
 
     x, y, yerrn, yerrp = [], [], [], []
     for epoch in epochs:
         n_orbits = round((epoch.tasc - ref_tasc) / ref_pb)
         predicted_tasc = ref_tasc + n_orbits * ref_pb
-        x.append(epoch.tasc - reference_epoch)
+        x.append(epoch.tasc - ref_tasc)
         y.append((epoch.tasc - predicted_tasc) * 86400.0)
         yerrn.append(epoch.tasc_err[0] * 86400.0)
         yerrp.append(epoch.tasc_err[1] * 86400.0)
@@ -245,7 +250,10 @@ def _write_parfile(ref_model, m0_result, baseline_days, pb0_days, outroot):
 
     fname = outroot + ".par"
     with open(fname, "w") as fobj:
-        fobj.write(model.as_parfile())
+        # The info header calls getpass.getuser(), which falls back to the
+        # Unix-only ``pwd`` module when no user variable is set (e.g. under tox
+        # on Windows); skip it there, as pipeline.py and create_parfile.py do.
+        fobj.write(model.as_parfile(include_info=os.name != "nt"))
     return fname
 
 
@@ -383,6 +391,7 @@ def fit_orbital_decay(
         "n_epochs": len(epochs),
         "baseline_days": baseline_days,
         "reference_epoch": float(ref_model.PEPOCH.value),
+        "reference_tasc": float(ref_model.TASC.value),
         "PB0_days": pb0_days,
         "MLIN": {
             "log_evidence": mlin_result["log_evidence"],
@@ -476,7 +485,11 @@ def main(args=None):
         type=float,
         default=None,
         dest="reference_epoch",
-        help="MJD to reference the model at (default: mean PEPOCH across input files)",
+        help=(
+            "Approximate MJD to reference the model at: the fit and the output .par "
+            "are referenced to the ascending node (TASC) closest to it, where PINT "
+            "counts PB from (default: mean PEPOCH across input files)"
+        ),
     )
     parser.add_argument(
         "--upper-limit-level",
