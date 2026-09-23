@@ -71,6 +71,8 @@ Reference/API
    :no-inheritance-diagram:
 .. automodapi:: ell1fit.spin_stats_data
    :no-inheritance-diagram:
+.. automodapi:: ell1fit.spin_periodicity
+   :no-inheritance-diagram:
 .. automodapi:: ell1fit.eccentricity
    :no-inheritance-diagram:
 .. automodapi:: ell1fit.orbit_plot

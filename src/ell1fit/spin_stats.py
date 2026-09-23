@@ -6,7 +6,10 @@ extra tables, see :mod:`ell1fit.spin_stats_data`) and reports
 * the **secular** spin trend: a polynomial fit of ``F0`` against time, whose
   slope is the long-term ``F1``;
 * the **local** ``F1`` values measured within each epoch: their mean, their
-  scatter, and the fraction of epochs spinning up.
+  scatter, and the fraction of epochs spinning up;
+* optionally, a search for a coherent periodicity in local ``F1`` and in the
+  pulsed count rate within a given period range (see
+  :mod:`ell1fit.spin_periodicity`).
 
 In an accreting pulsar the two need not agree: local ``F1`` follows the
 instantaneous accretion torque, while the secular trend integrates every
@@ -35,6 +38,7 @@ from scipy.optimize import brentq
 
 from .logging import configure_logging
 from .plotting import add_figure_format_argument, set_figure_format
+from .spin_periodicity import rate_values, search_periodicity
 from .spin_stats_data import load_spin_table
 
 __all__ = [
@@ -42,7 +46,9 @@ __all__ = [
     "fit_polynomial_with_scatter",
     "local_f1_statistics",
     "main",
+    "run_periodicity",
     "secular_spin",
+    "spin_statistics",
 ]
 
 DAY = 86400.0
@@ -292,9 +298,148 @@ def _plot_f1(table, local, secular_fit, reference_mjd, fname):
         return save_figure(fig, fname)
 
 
-def spin_statistics(files, extra_files=(), outroot="ell1stat", degree=1, reference_mjd=None):
+#: Fewest points a periodicity search is run on: three sinusoid parameters, plus two.
+MIN_POINTS_FOR_PERIODICITY = 5
+
+#: Quantities searched for periodicity: key, axis label, unit.
+PERIODICITY_QUANTITIES = (
+    ("f1", r"$\dot\nu$", r"Hz s$^{-1}$"),
+    ("pulsed_rate", "pulsed rate", r"ct s$^{-1}$"),
+)
+
+
+def _periodicity_inputs(table, local, rate_exclude=()):
+    """``{key: (t, y, var, yerr)}`` for each searchable quantity.
+
+    Local F1 is weighted by its error and the intrinsic scatter in quadrature,
+    as in :func:`local_f1_statistics`; the pulsed rate has no error and is
+    unweighted.
+    """
+    mjd = np.asarray(table["mjd"], dtype=float)
+    inputs = {}
+    f1 = np.asarray(table["f1"], dtype=float)
+    good = np.isfinite(f1)
+    if local["n"] > 0:
+        err = np.asarray(_symmetric_error(table, "f1"), dtype=float)[good]
+        var = err**2 + local["intrinsic_scatter"] ** 2
+        inputs["f1"] = (mjd[good], f1[good], var, err)
+    rates = rate_values(table, rate_exclude)
+    good = np.isfinite(rates)
+    inputs["pulsed_rate"] = (mjd[good], rates[good], None, None)
+    return inputs
+
+
+def run_periodicity(table, local, min_period, max_period, rate_exclude=(), **search_kwargs):
+    """:func:`~ell1fit.spin_periodicity.search_periodicity` on local F1 and the pulsed rate.
+
+    Returns
+    -------
+    dict
+        ``{key: result}``, where each result also carries its input ``t``,
+        ``y`` and ``yerr`` for plotting. Quantities with fewer than
+        :data:`MIN_POINTS_FOR_PERIODICITY` points are skipped with a warning.
+    """
+    results = {}
+    for key, (t, y, var, yerr) in _periodicity_inputs(table, local, rate_exclude).items():
+        if t.size < MIN_POINTS_FOR_PERIODICITY:
+            logging.warning(f"Periodicity search skipped for {key}: only {t.size} points")
+            continue
+        result = search_periodicity(t, y, var, min_period, max_period, **search_kwargs)
+        result.update(t=t, y=y, yerr=yerr)
+        results[key] = result
+        logging.info(
+            f"{key}: best period {result['best_period_days']:.2f} d, "
+            f"semi-amplitude {result['best_amplitude']:.3g}, "
+            f"false-alarm probability {result['fap']:.3g}; "
+            f"{result['detection_fraction']:.0%} of sinusoids of semi-amplitude "
+            f">= {result['detectable_amplitude']:.3g} would be detected at "
+            f"false-alarm probability {result['fap_level']:g}"
+        )
+    return results
+
+
+def _json_ready(result):
+    return {k: v for k, v in result.items() if not isinstance(v, np.ndarray)}
+
+
+def _plot_periodograms(results, fname):
+    """Power against period for each searched quantity, with the shuffled-data
+    detection threshold, over the spectral window of each one's sampling."""
+    import matplotlib.pyplot as plt
+
+    from .plotting import GUIDE_COLOR, figure_size, plot_style_context, save_figure
+
+    labels = dict((key, label) for key, label, _ in PERIODICITY_QUANTITIES)
+    with plot_style_context():
+        fig, axes = plt.subplots(
+            len(results) + 1, 1, sharex=True, figsize=figure_size("wide-tall"), layout="constrained"
+        )
+        ax_window = axes[-1]
+        for i, (ax, (key, result)) in enumerate(zip(axes, results.items())):
+            ax.plot(result["periods_days"], result["power"], color=f"C{i}", lw=1)
+            ax.axhline(
+                result["power_threshold"],
+                color=GUIDE_COLOR,
+                ls="--",
+                lw=0.8,
+                label=f"false-alarm prob. {result['fap_level']:g}",
+            )
+            ax.set_ylabel(f"power, {labels[key]}")
+            ax.set_ylim(0, 1)
+            ax.legend(loc="upper right")
+            ax_window.plot(
+                result["periods_days"], result["window"], color=f"C{i}", lw=1, label=labels[key]
+            )
+        ax_window.set_ylabel("spectral window")
+        ax_window.set_ylim(0, 1)
+        ax_window.legend(loc="upper right")
+        ax_window.set_xlabel("period (d)")
+        return save_figure(fig, fname)
+
+
+def _plot_folded(results, fname):
+    """Each searched quantity folded at its own best period, with the best-fit sinusoid."""
+    import matplotlib.pyplot as plt
+
+    from .plotting import DATA_COLOR, figure_size, plot_style_context, save_figure
+
+    labels = {key: (label, unit) for key, label, unit in PERIODICITY_QUANTITIES}
+    with plot_style_context():
+        fig, axes = plt.subplots(
+            1, len(results), figsize=figure_size("wide"), layout="constrained", squeeze=False
+        )
+        for i, (ax, (key, result)) in enumerate(zip(axes[0], results.items())):
+            period = result["best_period_days"]
+            t0 = result["t"].min()
+            exponent = _power_of_ten(result["y"])
+            scale = 10.0**exponent
+            phase = ((result["t"] - t0) / period) % 1
+            yerr = None if result["yerr"] is None else result["yerr"] / scale
+            for shift in (0, 1):
+                ax.errorbar(
+                    phase + shift, result["y"] / scale, yerr=yerr, fmt="o", color=DATA_COLOR, ms=3
+                )
+            model_phase = np.linspace(0, 2, 200)
+            c0, a, b = result["best_coeffs"]
+            arg = 2 * np.pi * (t0 / period + model_phase)
+            ax.plot(model_phase, (c0 + a * np.cos(arg) + b * np.sin(arg)) / scale, color=f"C{i}")
+            label, unit = labels[key]
+            scale_label = "" if exponent == 0 else rf"$10^{{{exponent}}}$ "
+            ax.set_ylabel(f"{label} ({scale_label}{unit})")
+            ax.set_xlabel(f"phase (P = {period:.2f} d, MJD$_0$ = {t0:.1f})")
+            ax.set_title(f"false-alarm probability {result['fap']:.2g}")
+        return save_figure(fig, fname)
+
+
+def spin_statistics(
+    files, extra_files=(), outroot="ell1stat", degree=1, reference_mjd=None, periodicity=None
+):
     """Run the analysis, write ``{outroot}_results.json``, ``{outroot}_epochs.ecsv``
-    and the figures, and return the summary dict."""
+    and the figures, and return the summary dict.
+
+    ``periodicity``, if given, is a dict of keyword arguments for
+    :func:`run_periodicity` (at least ``min_period`` and ``max_period``).
+    """
     table = load_spin_table(files, extra_files)
     if reference_mjd is None:
         reference_mjd = float(np.mean(table["mjd"]))
@@ -323,12 +468,20 @@ def spin_statistics(files, extra_files=(), outroot="ell1stat", degree=1, referen
         )
         logging.info(f"Secular minus local mean: {summary['secular_minus_local_sigma']:.1f} sigma")
 
+    periodicity_results = {}
+    if periodicity is not None:
+        periodicity_results = run_periodicity(table, local, **periodicity)
+        summary["periodicity"] = {k: _json_ready(r) for k, r in periodicity_results.items()}
+
     table.write(outroot + "_epochs.ecsv", overwrite=True)
     with open(outroot + "_results.json", "w") as fobj:
         json.dump(summary, fobj, indent=2)
     _plot_trend(table, fit, reference_mjd, outroot + "_trend")
     if local["n"] > 0:
         _plot_f1(table, local, fit, reference_mjd, outroot + "_f1")
+    if periodicity_results:
+        _plot_periodograms(periodicity_results, outroot + "_periodogram")
+        _plot_folded(periodicity_results, outroot + "_folded")
     return summary
 
 
@@ -357,10 +510,56 @@ def main(args=None):
         dest="reference_epoch",
         help="MJD the secular fit is referenced to (default: mean epoch)",
     )
+    search = parser.add_argument_group(
+        "periodicity search", "Run when both --min-period and --max-period are given"
+    )
+    search.add_argument("--min-period", type=float, default=None, help="Shortest period (days)")
+    search.add_argument("--max-period", type=float, default=None, help="Longest period (days)")
+    search.add_argument(
+        "--oversample", type=int, default=5, help="Frequency steps per 1/baseline (default 5)"
+    )
+    search.add_argument(
+        "--n-shuffle",
+        type=int,
+        default=1000,
+        help="Shuffles calibrating the false-alarm probability (default 1000)",
+    )
+    search.add_argument(
+        "--fap-level",
+        type=float,
+        default=0.01,
+        help="False-alarm probability defining a detection, for the detectable amplitude "
+        "(default 0.01)",
+    )
+    search.add_argument(
+        "--rate-exclude",
+        action="append",
+        default=[],
+        metavar="PATTERN",
+        help=(
+            "Leave epochs whose file name or label matches this shell pattern out of the "
+            "pulsed-rate search (e.g. 'chandra*', whose count rates are not comparable). "
+            "Can be repeated."
+        ),
+    )
+    search.add_argument("--seed", type=int, default=None, help="Random seed for the shuffles")
     add_figure_format_argument(parser)
     parsed = parser.parse_args(args)
     if not parsed.files and not parsed.extra:
         parser.error("give at least one ell1fit result file or --extra table")
+    periodicity = None
+    if (parsed.min_period is None) != (parsed.max_period is None):
+        parser.error("give both --min-period and --max-period, or neither")
+    if parsed.min_period is not None:
+        periodicity = {
+            "min_period": parsed.min_period,
+            "max_period": parsed.max_period,
+            "rate_exclude": parsed.rate_exclude,
+            "oversample": parsed.oversample,
+            "n_shuffle": parsed.n_shuffle,
+            "fap_level": parsed.fap_level,
+            "rng": parsed.seed,
+        }
 
     configure_logging()
     set_figure_format(parsed.figure_format)
@@ -370,6 +569,7 @@ def main(args=None):
         outroot=parsed.outroot,
         degree=parsed.degree,
         reference_mjd=parsed.reference_epoch,
+        periodicity=periodicity,
     )
 
 

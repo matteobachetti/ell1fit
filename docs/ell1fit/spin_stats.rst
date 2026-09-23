@@ -5,7 +5,8 @@ Spin statistics: ``ell1stat``
 ``ell1fit`` results -- the same files ``ell1decay`` takes -- plus, optionally,
 tables of extra epochs that never had a full ``ell1fit`` run::
 
-    ell1stat nu*_results.ecsv --extra literature.csv -o mysource
+    ell1stat nu*_results.ecsv --extra literature.csv -o mysource \
+        --min-period 50 --max-period 70 --rate-exclude 'chandra*'
 
 Inputs
 ------
@@ -46,6 +47,45 @@ they need not agree: local ``F1`` follows the torque at the time of each
 observation, while the secular trend integrates every torque episode,
 including the ones no observation caught.
 
+Periodicity search
+------------------
+Given ``--min-period`` and ``--max-period`` (days), local ``F1`` (a proxy for
+the accretion torque) and the pulsed rate (a proxy for the pulsed luminosity)
+are each searched for a sinusoid within that range
+(:mod:`ell1fit.spin_periodicity`):
+
+* The periodogram fits a sinusoid plus a free constant at each trial period
+  (the "floating-mean" Lomb-Scargle periodogram; ``--oversample`` frequency
+  steps per inverse baseline). ``F1`` is weighted by its error and the
+  intrinsic scatter in quadrature; the pulsed rate is unweighted.
+* The false-alarm probability comes from keeping the observation times and
+  shuffling the values among them (``--n-shuffle``): the fraction of shuffles
+  whose highest peak in the range beats the real one. Analytic false-alarm
+  formulas assume even sampling and white noise, and fail for a few
+  campaigns years apart.
+* The detectable amplitude is the sinusoid semi-amplitude that, injected at a
+  random period in the range and a random phase into shuffled data, produces a
+  peak above the ``--fap-level`` threshold 90% of the time. For sparse data
+  this upper-limit-like number is often the more useful one. A particular
+  sinusoid can still be detected below it, if its period and phase happen to
+  suit the sampling.
+* The spectral window (the periodogram of the sampling alone) is plotted
+  under the data: a data peak where the window peaks is suspect.
+
+``--rate-exclude PATTERN`` (repeatable, shell-style, matched against file name
+and label) leaves epochs out of the pulsed-rate search only -- for example
+another instrument's, whose count rates are not comparable.
+
+Caveats
+    One sinusoid is fitted across the whole baseline, so the period must be
+    stable over it: points ``T`` apart stay in phase only if the period is
+    steady to about ``P**2 / T``. And the shuffling assumes the values are
+    exchangeable between epochs. Epochs a few days apart within one campaign
+    are usually correlated -- a smooth rise within a campaign mimics part of a
+    sinusoid, and shuffling breaks that smoothness -- so the false-alarm
+    probability is optimistic when the data are clustered. Check a candidate
+    by dropping epochs one at a time.
+
 Fitting with extra scatter
 --------------------------
 Accretion-torque noise moves ``F0`` far more than its measurement errors, so a
@@ -71,3 +111,9 @@ Outputs
 ``{outroot}_f1``
     Local ``F1`` against time, with their mean, the intrinsic-scatter band and
     the secular ``F1``.
+``{outroot}_periodogram``
+    With a periodicity search: power against period for each quantity, with the
+    shuffled-data detection threshold, over the spectral windows.
+``{outroot}_folded``
+    With a periodicity search: each quantity folded at its best period, with
+    the best-fit sinusoid.
