@@ -229,7 +229,6 @@ def _collect_parameter_names(parameters, requested_parameter_names, likelihood_f
 
 def _enrich_results_with_observation_metadata(
     results,
-    model,
     times_from_pepoch,
     pepoch,
     files,
@@ -244,15 +243,9 @@ def _enrich_results_with_observation_metadata(
     n_files = len(files)
 
     for i in range(n_files):
-        if getattr(model[i], "START", None) is not None and model[i].START.value is not None:
-            results[f"Start_{i}"] = model[i].START.value
-        else:
-            results[f"Start_{i}"] = times_from_pepoch[i][0] / 86400 + pepoch[i]
-
-        if getattr(model[i], "STOP", None) is not None and model[i].STOP.value is not None:
-            results[f"Stop_{i}"] = model[i].STOP.value
-        else:
-            results[f"Stop_{i}"] = times_from_pepoch[i][-1] / 86400 + pepoch[i]
+        # Always the data span: parfile START/STOP are often inherited from old ephemerides.
+        results[f"Start_{i}"] = np.min(times_from_pepoch[i]) / 86400 + pepoch[i]
+        results[f"Stop_{i}"] = np.max(times_from_pepoch[i]) / 86400 + pepoch[i]
 
         results[f"PEPOCH_{i}"] = pepoch[i]
         results[f"fname_{i}"] = files[i]
@@ -815,7 +808,6 @@ def ell1fit(
 
     results = _enrich_results_with_observation_metadata(
         results,
-        model,
         times_from_pepoch,
         pepoch,
         files,

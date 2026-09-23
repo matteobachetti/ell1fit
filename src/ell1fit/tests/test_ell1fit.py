@@ -660,3 +660,29 @@ def test_jax_posterior_follows_a1dot_like_the_numba_one(tmp_path):
         f"the log-posterior barely moved over the probed A1DOT range ({values}): "
         "this comparison would pass even if both paths ignored A1DOT"
     )
+
+
+def _model_with_stale_start_stop(tmp_path):
+    """The test parfile plus START/STOP far from any data, with STOP before START."""
+    from pint.models import get_model
+
+    datadir = os.path.join(os.path.dirname(__file__), "data")
+    parfile = str(tmp_path / "stale.par")
+    text = open(os.path.join(datadir, "events0.par")).read()
+    open(parfile, "w").write(text + "START 50000\nSTOP 49000\n")
+    return get_model(parfile)
+
+
+def test_results_start_stop_are_the_data_span(tmp_path):
+    """Start/Stop in the results are the first and last event, even when the parfile
+    carries START/STOP inherited from an old ephemeris."""
+    from ..pipeline import _enrich_results_with_observation_metadata
+
+    model = _model_with_stale_start_stop(tmp_path)
+    pepoch = model.PEPOCH.value
+    times = np.array([0.0, -3000.0, 5000.0])  # not sorted
+    results = _enrich_results_with_observation_metadata(
+        {}, [times], [pepoch], ["f.evt"], [1000.0], [0.1], [np.ones(8)], 1, None, 10
+    )
+    assert results["Start_0"] == pytest.approx(pepoch - 3000 / 86400, abs=1e-9)
+    assert results["Stop_0"] == pytest.approx(pepoch + 5000 / 86400, abs=1e-9)
