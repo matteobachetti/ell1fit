@@ -16,6 +16,7 @@ import argparse
 import copy
 import json
 import logging
+import os
 
 import astropy.units as u
 import numpy as np
@@ -249,7 +250,10 @@ def _write_parfile(ref_model, m0_result, baseline_days, pb0_days, outroot):
 
     fname = outroot + ".par"
     with open(fname, "w") as fobj:
-        fobj.write(model.as_parfile())
+        # The info header calls getpass.getuser(), which falls back to the
+        # Unix-only ``pwd`` module when no user variable is set (e.g. under tox
+        # on Windows); skip it there, as pipeline.py and create_parfile.py do.
+        fobj.write(model.as_parfile(include_info=os.name != "nt"))
     return fname
 
 
