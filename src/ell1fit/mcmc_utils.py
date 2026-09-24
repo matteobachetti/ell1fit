@@ -1,5 +1,6 @@
 """MCMC sampling and posterior-summary utilities for ell1fit."""
 
+import hashlib
 import logging
 import os
 
@@ -12,9 +13,14 @@ from .plotting import plot_style_context, save_figure
 from .scaling import TARGET_LOCAL_SIGMA
 
 
+#: HDF5 attribute holding the local frame a stored chain was written in.
+_LOCAL_FRAME_ATTR = "ell1fit_local_frame"
+
+
 __all__ = [
     "calculate_result_array_from_samples",
     "default_moves",
+    "local_frame_key",
     "get_flat_samples",
     "load_flat_samples",
     "save_flat_samples",
@@ -262,6 +268,70 @@ def default_moves():
     return [(emcee.moves.DEMove(), 1.0)]
 
 
+def local_frame_key(parameter_names, factors, initial_values):
+    """Fingerprint the local coordinate frame a chain's samples are written in.
+
+    A stored sample is a *local* coordinate: the physical value is
+    ``sample * factor + initial``. Change either the factor -- which
+    :func:`ell1fit.scaling.get_factors` derives from the data, the parfile and
+    any ``--prior`` -- or the initial value the optimizer started from, and the
+    same stored number now means a different frequency, epoch or axis. A chain
+    resumed across such a change is not a chain of anything, and says so only
+    through an acceptance rate that quietly collapses.
+
+    Nothing else about the run belongs in the key. A different likelihood, move
+    set or event selection still explores the same coordinates, and
+    :func:`safe_run_sampler` already documents that resuming under new moves is
+    allowed.
+
+    Parameters
+    ----------
+    parameter_names : sequence of str
+        Fitted parameter names, in the order the coordinates are stored.
+    factors : sequence of float
+        Local-to-physical scale of each parameter.
+    initial_values : sequence of float
+        Physical value each parameter's local zero corresponds to.
+
+    Returns
+    -------
+    str
+        A short hex digest, stable across runs and machines.
+    """
+    payload = "|".join(
+        f"{name}:{float(factor):.17g}:{float(initial):.17g}"
+        for name, factor, initial in zip(parameter_names, factors, initial_values)
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
+
+
+def _read_local_frame(backend_filename, group):
+    """Return the frame recorded in a backend, or None if there is none to read."""
+    if not os.path.exists(backend_filename):
+        return None
+    try:
+        import h5py
+
+        with h5py.File(backend_filename, "r") as handle:
+            stored = handle[group].attrs.get(_LOCAL_FRAME_ATTR)
+    except (ImportError, OSError, KeyError):
+        return None
+    return stored.decode("utf-8") if isinstance(stored, bytes) else stored
+
+
+def _write_local_frame(backend_filename, group, key):
+    """Record the frame a freshly reset backend is about to be written in."""
+    if key is None:
+        return
+    try:
+        import h5py
+
+        with h5py.File(backend_filename, "a") as handle:
+            handle.require_group(group).attrs[_LOCAL_FRAME_ATTR] = key
+    except (ImportError, OSError) as error:
+        logging.debug(f"Could not record the local frame in {backend_filename}: {error}")
+
+
 def safe_run_sampler(
     func_to_maximize,
     starting_pars,
@@ -271,6 +341,7 @@ def safe_run_sampler(
     corner_labels=None,
     n_autocorr=50,
     moves=None,
+    local_frame=None,
 ):
     """Run emcee with checkpointing, restart support, and convergence checks.
 
@@ -287,6 +358,14 @@ def safe_run_sampler(
         regardless of what produced the stored part; both target the same
         posterior, but an autocorrelation time measured across the join
         describes neither half.
+    local_frame : str or None, optional
+        Key from :func:`local_frame_key` identifying the coordinate frame this
+        run's samples are written in. A stored chain whose recorded frame
+        differs -- or which records none at all, having been written before
+        this was checked -- is discarded rather than resumed, because its
+        coordinates no longer mean what this run means by them. ``None``
+        skips the check and resumes as before, for callers that have no frame
+        to declare.
 
     Returns
     -------
@@ -382,6 +461,25 @@ def safe_run_sampler(
     if os.path.exists(backend_filename):
         initial_size = backend.iteration
 
+    # Resuming is decided on the *meaning* of the stored coordinates, not just
+    # on their number. The file name encodes the parameter names, so a chain
+    # over a different parameter set already lands elsewhere; what it cannot
+    # encode is the scaling, which is exactly what changes underneath a rerun.
+    if local_frame is not None and initial_size > 0:
+        stored_frame = _read_local_frame(backend_filename, backend.name)
+        if stored_frame != local_frame:
+            logging.warning(
+                f"Discarding the {initial_size} stored iterations in {backend_filename}: "
+                + (
+                    "they were written on a different parameter scale"
+                    if stored_frame
+                    else "they record no parameter scale, so they predate this check"
+                )
+                + ". Samples are stored in local units, so resuming across a change of "
+                "scale would continue the chain into different physical values."
+            )
+            initial_size = 0
+
     logging.info("Initial size: {0}".format(initial_size))
     # backend.reset(nwalkers, ndim)
     nwalkers = max(32, starting_pars.size * 2)
@@ -393,6 +491,7 @@ def safe_run_sampler(
         )
         _, ndim = pos.shape
         backend.reset(nwalkers, ndim)
+        _write_local_frame(backend_filename, backend.name, local_frame)
     elif initial_size < max_n:
         logging.info("Starting from where we left")
         reader = emcee.backends.HDFBackend(backend_filename)

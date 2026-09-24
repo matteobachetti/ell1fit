@@ -86,6 +86,31 @@ The reference is a *resolution*, so the cut must be generous: a measurement
 beats :math:`1/T^{k+1}` by roughly its significance, which is two decades for a
 routine detection and more for a bright one.
 
+A stored chain belongs to a coordinate frame
+-------------------------------------------
+
+:func:`ell1fit.mcmc_utils.safe_run_sampler` checkpoints into an HDF5 backend and
+resumes from it on a rerun, which is what makes a long fit interruptible. The
+samples in it are *local* coordinates, though: the physical value is
+``sample * factor + initial``. Change the scaling — a different ``--prior``
+width, a parfile quoting different uncertainties, or a change to
+:func:`ell1fit.scaling.get_factors` itself — and the same stored number now
+means a different frequency, epoch or axis.
+
+Nothing in the file name records that. The name encodes the parameter *names*,
+so a fit over a different parameter set already lands in a different file; a
+rerun of the *same* parameters under a new scaling reuses the same one. The
+chain then resumes into values it never visited, and the only outward sign is an
+acceptance rate that collapses — which reads like a hard posterior rather than
+like a bug.
+
+Each run therefore stamps the backend with
+:func:`ell1fit.mcmc_utils.local_frame_key`, a digest of the parameter names,
+their factors and their initial values. A stored chain whose stamp differs is
+discarded with a warning instead of continued, and so is one carrying no stamp
+at all: those predate the check and cannot be vouched for. Redoing a chain is
+far cheaper than trusting a wrong one.
+
 Times are relative to each file's own PEPOCH
 --------------------------------------------
 

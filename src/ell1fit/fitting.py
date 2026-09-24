@@ -20,7 +20,7 @@ import logging
 import numpy as np
 from scipy.optimize import minimize
 
-from .mcmc_utils import safe_run_sampler
+from .mcmc_utils import local_frame_key, safe_run_sampler
 from .phase_utils import phases_from_zero_to_one
 from .posterior import _build_posterior_functions
 from .scaling import OPTIMIZER_EPS
@@ -253,6 +253,7 @@ def optimize_solution(
             outroot=outroots[-1],
             labels=["d" + par for par in fit_parameter_names],
             corner_labels=corner_labels,
+            local_frame=local_frame_key(fit_parameter_names, factors, values),
         )
     elif sampler == "nuts":
         from .nuts_sampling import run_nuts
