@@ -10,6 +10,7 @@ from .phase_utils import simple_freq_re
 __all__ = [
     "estimate_uncertainties_from_model",
     "get_factors",
+    "MIN_CREDIBLE_UNCERTAINTY_RATIO",
     "OPTIMIZER_EPS",
     "order_of_magnitude",
     "precondition_factors",
@@ -174,6 +175,41 @@ TARGET_LOCAL_SIGMA = 1.0
 #: instead of the slope, and the optimizer would stop wherever it happened to
 #: stand.
 OPTIMIZER_EPS = 1e-2 * TARGET_LOCAL_SIGMA
+
+
+#: How far below the model's own *optimistic* scale a parfile's quoted
+#: uncertainty may fall before :func:`get_factors` stops believing it.
+#:
+#: The guard exists because ``get_factors`` picks the **smallest** candidate
+#: scale, so one nonsense-small number in a parfile drives the step size to
+#: zero and freezes the fit. It is expressed as a ratio, against the scale
+#: :func:`estimate_uncertainties_from_model` derives for that same parameter,
+#: rather than as an absolute number -- and that is the whole point:
+#:
+#: * It carries no units, so it means the same thing for ``TASC`` in days,
+#:   ``A1`` in light-seconds and ``F7`` in :math:`\mathrm{Hz\,s^{-7}}`.
+#: * It tracks the spin order for free. The scale of ``F_k`` goes as
+#:   :math:`1/T^{k+1}`, so any fixed number is wrong for all but one order.
+#: * It cannot be left behind by a change of units, which is exactly how its
+#:   predecessor failed. That was a bare ``max(zoom, 1e-12)``, written when
+#:   one local unit was ``1e-6`` and therefore meaning "reject below 1e-18";
+#:   when :data:`TARGET_LOCAL_SIGMA` became 1 the threshold silently moved by
+#:   :math:`10^6` and began rejecting every scale below ``1e-12`` -- that is,
+#:   every spin derivative of order two and above, on any block long enough to
+#:   need one. The same commit rescaled the line immediately above it.
+#:
+#: The threshold has to be *generous*, and an early draft of it at ``1e-3`` was
+#: caught by ``test_recovery`` throwing away a perfectly good ``sigma(F0)`` of
+#: 1e-8. The reference is a **resolution**, :math:`1/T^{k+1}`, not a bound on
+#: achievable precision: a measurement beats resolution by roughly its
+#: significance, since :math:`\sigma_{F_0} \approx \sqrt{12}\,\sigma_\phi/T`
+#: with :math:`\sigma_\phi = 1/(2\pi\sqrt{Z^2})`. A routine detection already
+#: sits two decades below resolution and a bright one several more. Nine
+#: decades of slack leaves every real measurement alone -- matching the spirit
+#: of the predecessor, which allowed ``sigma(F0)`` down to 1e-18 against a
+#: typical 1e-9 -- while still catching the case this exists for: a value no
+#: fit could have produced, such as a units mix-up or a zero written as 1e-30.
+MIN_CREDIBLE_UNCERTAINTY_RATIO = 1e-9
 
 
 #: A drop smaller than this is rounding noise rather than curvature.
@@ -361,8 +397,28 @@ def get_factors(
         """Convert an uncertainty estimate into a positive local scale."""
         if not np.isfinite(uncertainty) or uncertainty <= 0:
             return None
-        zoom_from_unc = order_of_magnitude(uncertainty * unc_to_factor_scale)
-        return max(zoom_from_unc, 1e-12)
+        return order_of_magnitude(uncertainty * unc_to_factor_scale)
+
+    def _is_credible(uncertainty, source, par):
+        """Reject a parfile sigma far tighter than these data could ever give.
+
+        Only the value *quoted in a parfile* is judged. A ``--prior`` width is
+        a deliberate statement by the user, and the model estimate is the
+        reference itself; both are taken as given.
+        """
+        if source != "uncertainty":
+            return True
+        reference = approximate_uncertainties.get(par)
+        if reference is None or not np.isfinite(reference) or reference <= 0:
+            return True
+        if uncertainty >= reference * MIN_CREDIBLE_UNCERTAINTY_RATIO:
+            return True
+        logging.warning(
+            f"Ignoring the uncertainty quoted for {par} ({uncertainty:.3g}): it is more "
+            f"than {1 / MIN_CREDIBLE_UNCERTAINTY_RATIO:.0f}x tighter than the most "
+            f"optimistic scale these data support ({reference:.3g})."
+        )
+        return False
 
     for par in fit_parameter_names:
         zoom_factor = None
@@ -391,7 +447,7 @@ def get_factors(
         usable = [
             (unc, src)
             for unc, src in zip(possible_uncertainties, sources)
-            if np.isfinite(unc) and unc > 0
+            if np.isfinite(unc) and unc > 0 and _is_credible(unc, src, par)
         ]
         if usable:
             unc, source = min(usable)

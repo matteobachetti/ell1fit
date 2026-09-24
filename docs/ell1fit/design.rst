@@ -55,6 +55,37 @@ Rather than invent a formula for each parameter type,
 actual posterior and rescales. This needs no per-parameter knowledge and adapts
 to the data.
 
+Which uncertainty to believe
+----------------------------
+
+:func:`ell1fit.scaling.get_factors` takes the **smallest** of the candidate
+scales — a ``--prior`` width, the uncertainty quoted in the parfile, and the
+model heuristic — because the narrowest is the one that would otherwise start
+walkers outside its own support. That also lets a single nonsense-small number
+in a parfile drive the step size to zero, so a parfile's sigma is checked
+against the model's own scale for the same parameter and dropped when it falls
+below it by more than
+:data:`ell1fit.scaling.MIN_CREDIBLE_UNCERTAINTY_RATIO`. A ``--prior`` width is
+a deliberate statement by the user and is never filtered; neither is the
+heuristic itself.
+
+The cut is a **ratio**, not an absolute number, and that is the whole point. A
+fixed floor carries hidden units. Its predecessor was written as
+``max(zoom, 1e-12)`` while one local unit was ``1e-6``, so it meant "reject
+below 1e-18" — reasonable for a quoted ``sigma(F0)``. When
+:data:`ell1fit.scaling.TARGET_LOCAL_SIGMA` became 1, the threshold moved by
+:math:`10^6` without the line changing, and began rejecting every scale below
+``1e-12``: that is *every* spin derivative of order two and above, since
+:math:`\sigma_{F_k}` goes as :math:`1/T^{k+1}`. Fitting ``F2`` or higher over a
+long continuous block was impossible until it was replaced — the optimizer
+returned its starting point unchanged and the sampler accepted 4% of proposals.
+A ratio has no units to fall out of step with, and it tracks the spin order for
+free.
+
+The reference is a *resolution*, so the cut must be generous: a measurement
+beats :math:`1/T^{k+1}` by roughly its significance, which is two decades for a
+routine detection and more for a bright one.
+
 Times are relative to each file's own PEPOCH
 --------------------------------------------
 

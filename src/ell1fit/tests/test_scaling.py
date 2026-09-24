@@ -16,6 +16,7 @@ from ell1fit.posterior import _build_posterior_functions
 from ell1fit.scaling import (
     OPTIMIZER_EPS,
     TARGET_LOCAL_SIGMA,
+    get_factors,
     order_of_magnitude,
     precondition_factors,
 )
@@ -265,3 +266,95 @@ def test_preconditioning_keeps_its_factor_when_walls_block_both_sides():
         upper_bound=0.01 * ANALYTIC_SIGMA, lower_bound=-0.01 * ANALYTIC_SIGMA
     )
     assert precondition_factors(narrow, [7.0], 1) == [7.0]
+
+
+# ---------------------------------------------------------------------------
+# Credibility of externally-supplied uncertainties
+# ---------------------------------------------------------------------------
+
+LONG_BLOCK = 16.5 * 86400.0
+"""A continuous block long enough to need spin derivatives above F1, in seconds."""
+
+
+@pytest.fixture(scope="module")
+def long_block_model(tmp_path_factory):
+    """One ELL1 model, read by PINT, standing in for a long continuous block."""
+    from pint.models import get_model
+
+    path = tmp_path_factory.mktemp("credible") / "long_block.par"
+    path.write_text(
+        "PSR                 TESTBLOCK\n"
+        "EPHEM                   DE421\n"
+        "UNITS                     TDB\n"
+        "BINARY                   ELL1\n"
+        "PEPOCH       56693.7544000000\n"
+        "F0      0.72856036422832982 1 1e-9\n"
+        "F1        3.2334432612465e-11 1 1e-16\n"
+        "PB           2.5329748026008 1 1e-6\n"
+        "A1                    22.222 1 1e-3\n"
+        "TASC        56682.0671436726 1 1e-6\n"
+        "EPS1                      0.0\n"
+        "EPS2                      0.0\n"
+    )
+    return [get_model(str(path))]
+
+
+def test_high_spin_derivatives_get_the_scale_the_data_supports(long_block_model):
+    """F2 and up are scaled by 1/T**(order+1), not clipped to a common floor.
+
+    An absolute floor used to clip every derivative above F1 to the same value,
+    which froze the optimizer and the sampler on any block long enough to need
+    them.
+    """
+    names = ["F0_0", "F1_0", "F2_0", "F3_0"]
+    factors = get_factors(names, long_block_model, [LONG_BLOCK])
+    expected = [order_of_magnitude(1 / LONG_BLOCK ** (order + 1)) for order in range(4)]
+    assert factors == pytest.approx(expected, rel=1e-12)
+    assert len(set(factors)) == len(factors), "derivatives must not share one floor"
+
+
+def test_an_incredible_parfile_uncertainty_is_ignored(long_block_model):
+    """A quoted uncertainty far tighter than the data allow is dropped.
+
+    ``get_factors`` takes the *smallest* candidate scale, so a nonsense-small
+    number in a parfile would otherwise drive the step size to zero.
+    """
+    model_scale = order_of_magnitude(1 / LONG_BLOCK)
+    (factor,) = get_factors(
+        ["F0_0"],
+        long_block_model,
+        [LONG_BLOCK],
+        parameters_with_unc={"F0_0": (0.72856, 1e-30)},
+    )
+    assert factor == pytest.approx(model_scale, rel=1e-12)
+
+
+def test_a_credible_parfile_uncertainty_still_wins(long_block_model):
+    """The guard is not over-eager: a tighter-but-plausible sigma is still used.
+
+    Believing the parfile when it is informative is the whole point of reading
+    its uncertainties, so the credibility cut must not swallow that case.
+    """
+    (factor,) = get_factors(
+        ["F0_0"],
+        long_block_model,
+        [LONG_BLOCK],
+        parameters_with_unc={"F0_0": (0.72856, 1e-8)},
+    )
+    assert factor == pytest.approx(order_of_magnitude(1e-8), rel=1e-12)
+
+
+def test_a_sigma_far_below_the_frequency_resolution_is_still_believed(long_block_model):
+    """A strong detection measures F0 far better than 1/T, and that is not nonsense.
+
+    The credibility reference is a resolution, not a precision limit, so the
+    cut has to leave a measurement that beats it by orders of magnitude alone.
+    """
+    sharp = order_of_magnitude(1 / LONG_BLOCK) * 1e-4
+    (factor,) = get_factors(
+        ["F0_0"],
+        long_block_model,
+        [LONG_BLOCK],
+        parameters_with_unc={"F0_0": (0.72856, sharp)},
+    )
+    assert factor == pytest.approx(order_of_magnitude(sharp), rel=1e-12)
