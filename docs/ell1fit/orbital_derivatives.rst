@@ -308,6 +308,60 @@ a number, and "this is a limit rather than a measurement" is a statement for
 the paper, not for the parameter file. ``M1`` is never adopted into the
 ephemeris regardless of its Bayes factor.
 
+Pruning badly determined epochs
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Two optional cuts drop epochs whose fitted ``TASC`` is too poorly determined
+to be worth using. Both are off by default, so a run that asks for neither is
+exactly the run ``ell1decay`` performs without them.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 66
+
+   * - Option
+     - Cut
+   * - ``--max-tasc-error SEC``
+     - Drop any epoch whose ``TASC`` uncertainty exceeds ``SEC`` seconds.
+   * - ``--max-tasc-error-ratio R``
+     - Drop any epoch whose ``TASC`` uncertainty exceeds ``R`` times the
+       *median* uncertainty across all the input epochs.
+
+The ratio cut is the one to reach for first: it is scale-free, so it needs no
+per-target number, and taking the median rather than the mean stops the
+outliers being cut from inflating the threshold that judges them. An epoch is
+judged on the *wider* of its two asymmetric error bars — a posterior with one
+long tail is precisely the badly determined case these cuts exist for. (The
+cross-file compatibility check in the same module uses the *narrower* side
+instead, but it is asking a different question: how much room a systematic
+has to hide inside the statistical uncertainty, where the narrow side is the
+conservative choice.)
+
+It is worth being clear about what pruning does and does not buy, because the
+obvious motivation is the wrong one. The likelihood weights each epoch by
+:math:`1/\sigma^2`, so an epoch ten times wider than its neighbours already
+carries a hundredth of their weight and is close to inert; removing it will
+usually not move ``PBDOT`` much, and that is not a reason to be disappointed
+in the cut. The real reason to drop such a point is that a ``TASC`` posterior
+which comes back very much wider than its siblings' has usually failed to
+converge onto a single mode, so its quoted one-sigma is not a one-sigma and
+its central value is not trustworthy either — at any weight.
+
+Pruning happens before anything else looks at the epochs, so a bad one cannot
+trip the cross-file compatibility checks or drag the default reference epoch
+(the mean ``PEPOCH``) around. Every dropped epoch is logged by name and
+recorded in the results JSON under ``pruned_epochs``, alongside
+``n_input_epochs``, so a pruned run documents its own cut. A cut that would
+leave fewer than four epochs — ``M1``'s own number of free parameters — is
+refused outright rather than producing an unconstrained fit.
+
+Neither cut is a general quality filter. In particular it will not catch an
+epoch that is bad for a reason unconnected to its error bar: one that locked
+onto the wrong spin candidate, or one built from photons that another epoch
+in the list already uses (a merged pointing is not an independent
+measurement, and including it double-counts the same data). Those still have
+to be left out of the input list by hand.
+
 Choosing the reference epoch
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

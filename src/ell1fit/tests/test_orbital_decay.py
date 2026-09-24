@@ -10,6 +10,7 @@ hand-built ``.ecsv`` fixtures, since its job is entirely about what that file
 format can and cannot represent.
 """
 
+import json
 import os
 
 import numpy as np
@@ -21,12 +22,14 @@ pytest.importorskip("dynesty")
 from ..mcmc_utils import plot_mcmc_comparison
 from ..orbital_decay import _write_diagnostic_plot, fit_orbital_decay
 from ..orbital_decay_data import (
+    EpochPruningError,
     OrbitalModelCompatibilityError,
     _build_models,
     _float128_to_float64_header,
     build_reference_model,
     check_compatibility,
     load_epochs,
+    prune_large_errors,
     read_result_table,
 )
 from ..orbital_decay_model import (
@@ -799,3 +802,106 @@ def test_derivative_scale_matches_physical_from_beta():
     physical = physical_from_beta(beta, 3000.0, 1.7)
     assert beta[2] * derivative_scale(2, 3000.0, 1.7) == pytest.approx(physical["PBDOT"])
     assert beta[3] * derivative_scale(3, 3000.0, 1.7) == pytest.approx(physical["PBDDOT"])
+
+
+# ---------------------------------------------------------------------------
+# orbital_decay_data.prune_large_errors: the TASC error-bar cuts
+# ---------------------------------------------------------------------------
+
+
+def _epochs_with_errors(tmp_path, errors_sec):
+    """Epochs identical but for their TASC uncertainties, in seconds."""
+    files = [
+        _write_ecsv(
+            tmp_path / f"prune{i}.ecsv",
+            pepoch=57000.0 + 100.0 * i,
+            pb=1.7 * 86400.0,
+            tasc=57000.0 + 100.0 * i,
+            tasc_spread_days=error / 86400.0,
+        )
+        for i, error in enumerate(errors_sec)
+    ]
+    return load_epochs(files)
+
+
+def test_no_cut_requested_keeps_every_epoch(tmp_path):
+    """With neither cut asked for, pruning is a no-op -- an unpruned run must
+    stay bit-for-bit the run ell1decay did before the option existed."""
+    epochs = _epochs_with_errors(tmp_path, [5.0, 5.0, 5.0, 5.0, 5000.0])
+    kept, pruned = prune_large_errors(epochs)
+    assert len(kept) == 5
+    assert pruned == []
+
+
+def test_ratio_cut_drops_only_the_epoch_far_wider_than_the_median(tmp_path):
+    """The scale-free cut isolates the one badly determined epoch and leaves
+    the merely-less-precise ones alone."""
+    epochs = _epochs_with_errors(tmp_path, [5.0, 10.0, 15.0, 20.0, 500.0])
+    kept, pruned = prune_large_errors(epochs, max_tasc_error_ratio=5.0)
+    assert [e.fname for e in kept] == [e.fname for e in epochs[:4]]
+    assert len(pruned) == 1
+    assert pruned[0]["tasc_error_sec"] == pytest.approx(500.0)
+    # median of [5, 10, 15, 20, 500] is 15 s
+    assert pruned[0]["tasc_error_ratio"] == pytest.approx(500.0 / 15.0)
+
+
+def test_absolute_cut_drops_by_seconds_regardless_of_the_median(tmp_path):
+    """--max-tasc-error cuts on the stated number, so a set whose errors are
+    all comparable can still be cut (which the ratio cut alone could not do)."""
+    epochs = _epochs_with_errors(tmp_path, [100.0, 110.0, 120.0, 130.0, 900.0])
+    kept, pruned = prune_large_errors(epochs, max_tasc_error=200.0)
+    assert len(kept) == 4
+    assert pruned[0]["tasc_error_sec"] == pytest.approx(900.0)
+    assert "--max-tasc-error" in pruned[0]["reason"]
+
+
+def test_the_wider_asymmetric_side_decides(tmp_path):
+    """An epoch is judged on its wider error bar: a posterior with one long
+    tail is exactly the badly determined case the cut is for."""
+    fname = _write_ecsv(tmp_path / "lopsided.ecsv", pepoch=57000.0, pb=1.7 * 86400.0, tasc=57000.0)
+    table = Table.read(fname, format="ascii.ecsv")
+    table["dTASC_16"] = [-1.0 / 86400.0]
+    table["dTASC_84"] = [900.0 / 86400.0]
+    table.write(fname, format="ascii.ecsv", overwrite=True)
+    (epoch,) = load_epochs([fname])
+    _, pruned = prune_large_errors([epoch], max_tasc_error=100.0, min_epochs=0)
+    assert len(pruned) == 1
+    assert pruned[0]["tasc_error_sec"] == pytest.approx(900.0)
+
+
+def test_a_cut_leaving_too_few_epochs_is_refused(tmp_path):
+    """Pruning below M1's four free parameters is an error in the cut, not a
+    fit to attempt anyway."""
+    epochs = _epochs_with_errors(tmp_path, [5.0, 5.0, 500.0, 600.0, 700.0])
+    with pytest.raises(EpochPruningError, match="would keep only 2 of 5"):
+        prune_large_errors(epochs, max_tasc_error=100.0)
+
+
+def test_pruning_is_reported_in_the_results_json(tmp_path):
+    """An end-to-end run records which epochs it dropped and why, so a pruned
+    result documents its own cut."""
+    files = _write_decay_epochs(tmp_path, pbdot=3e-8)
+    files.append(
+        _write_ecsv(
+            tmp_path / "wide.ecsv",
+            pepoch=_REF_MJD,
+            pb=_PB_DAYS * 86400.0,
+            tasc=_REF_MJD + 0.01,
+            tasc_spread_days=2000.0 / 86400.0,
+        )
+    )
+    results = fit_orbital_decay(
+        files,
+        outroot=os.path.join(str(tmp_path), "pruned"),
+        nlive=200,
+        dlogz=0.5,
+        seeds=2,
+        reference_epoch=_REF_MJD,
+        write_parfile=False,
+        max_tasc_error_ratio=10.0,
+    )
+    assert results["n_input_epochs"] == 10
+    assert results["n_epochs"] == 9
+    assert [os.path.basename(p["file"]) for p in results["pruned_epochs"]] == ["wide.ecsv"]
+    with open(os.path.join(str(tmp_path), "pruned_results.json")) as fobj:
+        assert json.load(fobj)["pruned_epochs"][0]["tasc_error_sec"] == pytest.approx(2000.0)
