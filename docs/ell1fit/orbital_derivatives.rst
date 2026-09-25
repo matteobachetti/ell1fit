@@ -635,14 +635,15 @@ Recipe
 4. Read the half-width at :math:`\Delta \log p = 0.5`. For the 95% one-sided
    bound, read the crossing at :math:`\Delta \log p = 1.92`.
 
-The M82 X-2 dataset
-~~~~~~~~~~~~~~~~~~~
+A worked dataset
+~~~~~~~~~~~~~~~~
 
-Fifteen NuSTAR epochs, :math:`2.67\times10^{6}` events, spanning MJD 56683 to
-60659 (10.9 yr), fitting ``F0_i``, ``F1_i`` and ``Phase_i`` per epoch plus a
-global ``A1``, ``TASC`` and ``A1DOT`` — 48 free parameters, flat priors
-throughout, three template passes. The profile is smooth and very nearly
-parabolic over :math:`\pm 8\times10^{-10}` lt-s/s:
+The numbers below come from one real multi-epoch dataset, kept as a worked
+example of the whole procedure. Fifteen epochs, :math:`2.67\times10^{6}`
+events, spanning MJD 56683 to 60659 (10.9 yr), fitting ``F0_i``, ``F1_i`` and
+``Phase_i`` per epoch plus a global ``A1``, ``TASC`` and ``A1DOT`` — 48 free
+parameters, flat priors throughout, three template passes. The profile is
+smooth and very nearly parabolic over :math:`\pm 8\times10^{-10}` lt-s/s:
 
 .. list-table::
    :header-rows: 1
@@ -676,9 +677,9 @@ in 2036 by 1.7.
 
 *It is the photons.* With the lever arm doing its best, closing a factor of 52
 needs roughly :math:`(52/1.7)^2 \approx 900` times the effective pulsed counts
-:math:`N\,f_p^2`. M82 X-2's pulsed fraction over these epochs runs from 1% to
-30% and the source is at 3.5 Mpc; no realistic amount of further NuSTAR time
-gets there.
+:math:`N\,f_p^2`. The pulsed fraction over these epochs runs from 1% to 30%,
+and the source is faint enough that no realistic amount of further time on the
+same instrument gets there.
 
 So the honest use of ``A1DOT`` on this source is as a bound, not a
 confirmation. What the bound *does* exclude is a pathological orbital-size
@@ -706,7 +707,7 @@ run.
 .. warning::
 
    Do **not** read :math:`\sigma_{A1}` from a fit with ``A1DOT`` held at zero
-   as the drift sensitivity. On the M82 X-2 set that fit reports
+   as the drift sensitivity. On the dataset above that fit reports
    :math:`\sigma_{A1} = 5.8` ms, but the drift the same data can resolve over
    its own 12.35-yr span is :math:`\sigma_{\dot{x}} \times T_{\rm span} = 68`
    ms — twelve times larger. The gap is the price of the ``A1``/``A1DOT``
@@ -738,7 +739,7 @@ pipeline actually reported for that dataset.
 **One constant absorbs everything the model ignores** — the curved
 ``A1``/``A1DOT`` degeneracy, the per-epoch ``F0``/``F1``/``Phase`` covariance,
 the template smearing. Fit :math:`\kappa` by running the model on the same
-epochs a profile likelihood has already been run on. On the M82 X-2 dataset
+epochs a profile likelihood has already been run on. On the dataset above
 :math:`\kappa = 3.0`; the uncalibrated model is three times too optimistic,
 which is the same disease as the Fisher matrix and the same reason not to
 trust either raw. :math:`\kappa` is **not** universal — re-derive it against
@@ -760,16 +761,16 @@ What the scalings say
 with :math:`A` the effective area and :math:`T_{\rm rms}` the weighted spread
 of the epochs. Collecting area enters under a square root and the baseline
 enters linearly, which sets the terms of trade: **a mission with ten times
-NuSTAR's area buys a factor of 3.2, and nothing more.** Monitoring at a fixed
+the collecting area buys a factor of 3.2, and nothing more.** Monitoring at a fixed
 cadence makes :math:`N_{\rm ep} \propto T`, so time is worth
-:math:`T^{3/2}` — closing the remaining factor of 14 on M82 X-2 needs six times
+:math:`T^{3/2}` — closing the remaining factor of 14 here needs six times
 the present baseline, about seventy years. Two epochs a year from 2032 with a
 10x instrument crosses one sigma around 2100.
 
 Angular resolution is the underrated axis. :math:`Z^2_1` is the squared pulsed
 counts over the *total* counts in the aperture, so resolving the target out of
-its neighbours cuts the denominator directly. If M82 X-2 is a third of what
-NuSTAR's aperture collects, separating it is worth another :math:`\sqrt{3}` —
+its neighbours cuts the denominator directly. If the target is a third of what
+the aperture collects, separating it is worth another :math:`\sqrt{3}` —
 comparable to a factor of three in area, for free.
 
 The anchor floor
@@ -783,7 +784,7 @@ downstream:
 
    \sigma_{\dot{x}} \;\geq\; \kappa\, \frac{\sigma_{A1}^{\rm (anchor)}}{T_{\rm span}}.
 
-The 2014 NuSTAR block — seven epochs inside one month — reaches
+The earliest block — seven epochs inside one month — reaches
 :math:`\sigma_{A1} = 6.5` ms together, and that number is now permanent:
 
 .. list-table::
@@ -825,8 +826,8 @@ of 2.99.
 
 Taking the rms of :math:`\sin(2\pi t/P_b)` orthogonalised against
 :math:`\{1, t, t^2\}` over a window of length :math:`\Delta T`, averaged over
-the starting orbital phase, and normalising to a NuSTAR pointing spanning a
-full 2.53-d orbit:
+the starting orbital phase, and normalising to a pointing spanning a full
+2.53-d orbit:
 
 .. list-table::
    :header-rows: 1
@@ -864,7 +865,7 @@ matters far more than how many counts it collected, and no amount of effective
 area compensates.
 
 The gain, when the epoch does qualify, is real but bounded. Adding one epoch in
-2001 to the M82 X-2 set — 13.4 yr before the 2014 block — gives:
+2001 to the set above — 13.4 yr before its earliest block — gives:
 
 .. list-table::
    :header-rows: 1
@@ -895,8 +896,8 @@ Even an infinitely good 2001 epoch stops at 4.6x, because the *other* end of
 the lever arm then becomes the anchor. A 4.6x tighter published bound is a
 result worth having; a detection is not on the table.
 
-One last thing such an epoch must clear: the pulse has to be findable. M82
-X-2's spin is not extrapolatable backwards — ``F0`` runs from 0.72876 Hz in
+One last thing such an epoch must clear: the pulse has to be findable. This
+source's spin is not extrapolatable backwards — ``F0`` runs from 0.72876 Hz in
 2014 to 0.71166 Hz in 2026, a mean :math:`\dot{F_0}` of
 :math:`-4.3\times10^{-11}` Hz/s, but wandering by :math:`\sim 3\times10^{-3}`
 Hz about any smooth trend, and spinning *up* between 2020 and 2021. Reaching

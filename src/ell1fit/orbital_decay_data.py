@@ -199,7 +199,7 @@ class EpochOrbit:
         # parameter parser (floatParameter._set_quantity) silently multiplies any
         # PBDOT magnitude above 1e-7 by 1e-12, assuming it was written in the
         # "x1e-12" pulsar-timing convention -- corrupting a real PBDOT by 12
-        # orders of magnitude with no error raised. Real M82 X-2 values
+        # orders of magnitude with no error raised. Realistic values
         # (~5.7e-8) happen to stay under that threshold, but nothing here should
         # rely on that. Instead PBDOT is carried separately and applied to the
         # parsed model via ``.quantity`` in _build_models, the same fix already
@@ -391,7 +391,7 @@ def _build_models(epochs):
 #: zero -- PB is a plain linear function of PBDOT under change_binary_epoch,
 #: nothing approximate about it. In practice a few milliseconds of residual
 #: shows up even between files from the same consistent processing batch
-#: (observed: ~13 ms on real M82 X-2 data), presumably from whatever rounding
+#: (observed: ~13 ms on real data), presumably from whatever rounding
 #: the upstream process that generated each file's fixed PB input used. This
 #: is generous enough to absorb that and still catch a genuinely different
 #: orbital model (PB0 itself wrong, or files from different targets/BINARY

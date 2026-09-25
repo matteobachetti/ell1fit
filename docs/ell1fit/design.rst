@@ -87,7 +87,7 @@ beats :math:`1/T^{k+1}` by roughly its significance, which is two decades for a
 routine detection and more for a bright one.
 
 A stored chain belongs to a coordinate frame
--------------------------------------------
+--------------------------------------------
 
 :func:`ell1fit.mcmc_utils.safe_run_sampler` checkpoints into an HDF5 backend and
 resumes from it on a rerun, which is what makes a long fit interruptible. The
