@@ -75,6 +75,7 @@ ell1updatebinary = "ell1fit.update_binary:main"
 ell1decay = "ell1fit.orbital_decay:main"
 ell1stat = "ell1fit.spin_stats:main"
 ell1ecc = "ell1fit.eccentricity:main"
+ell1info = "ell1fit.information_report:main"
 
 [project.urls]
 Homepage = "http://github.com/matteobachetti/ell1fit"

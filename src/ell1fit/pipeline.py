@@ -540,6 +540,152 @@ def _prepare_fit_setup(
     )
 
 
+@dataclasses.dataclass(frozen=True)
+class FitState:
+    """Everything :func:`ell1fit` assembles before it starts optimizing.
+
+    Split out so that tools which only want to *look* at the problem -- the
+    information budget of :mod:`ell1fit.observed_information`, say -- can build
+    exactly the same state the fit would, from the same parfiles and the same
+    flags, without reimplementing the preamble and drifting away from it.
+    """
+
+    observations: object
+    setup: object
+    parameters: dict
+    models: object
+    get_outroot: object
+    nbin: int
+    requested_parameter_names: list
+    profile: object
+    pulsed_frac: object
+
+
+def prepare_fit_state(
+    files,
+    parfiles,
+    nharm=1,
+    tolerance=1e-8,
+    energy_range=None,
+    fit_parameters=("F0",),
+    general_outroot=None,
+    likelihood_func=pletsch_clarke_likelihood,
+    use_weight=False,
+    use_pi=False,
+    ignore_uncertainties=False,
+    priors=None,
+):
+    """Load models and events, fold, build templates and assemble the fit setup.
+
+    This is the first half of :func:`ell1fit`, up to but not including the
+    ``Phase_i`` trace and the preconditioning. See :class:`FitState`.
+    """
+    n_files = len(files)
+    model, pepoch, ref_model = _load_and_validate_models(parfiles)
+
+    nbin = max(32, nharm * 8)
+
+    requested_parameter_names = sorted(fit_parameters)
+    _reject_unfittable_parameters(requested_parameter_names)
+    get_outroot = _make_outroot_getter(
+        files,
+        requested_parameter_names,
+        energy_range,
+        nharm,
+        likelihood_func,
+        use_weight,
+        use_pi=use_pi,
+        general_outroot=general_outroot,
+    )
+
+    times_from_pepoch, observation_length, energies, expo = _load_events_for_all_files(
+        files,
+        energy_range,
+        pepoch,
+        get_outroot,
+        use_pi=use_pi,
+    )
+
+    observations = ObservationSet(
+        files=files,
+        models=model,
+        ref_model=ref_model,
+        pepoch=pepoch,
+        times_from_pepoch=times_from_pepoch,
+        energies=energies,
+        exposures=expo,
+        observation_length=observation_length,
+    )
+
+    parameters_with_unc, parameters = _build_parameters_from_models(
+        model,
+        ref_model,
+        observation_length,
+        ignore_uncertainties=ignore_uncertainties,
+    )
+
+    profile, profile_weight, weights = _build_profiles_and_weights(
+        times_from_pepoch,
+        parameters,
+        energies,
+        n_files,
+        get_outroot,
+        use_weight,
+        nbin,
+        tolerance,
+    )
+
+    # Needs the folded profiles: how much eccentricity ELL1 can carry depends on
+    # the precision the data support, not on a fixed threshold.
+    _warn_on_eccentric_orbit(parameters, profile, nharm)
+
+    # Must run before _prepare_fit_setup: it writes each file's real Phase_i
+    # offset into parameters/parameters_with_unc, which assign_logpriors then
+    # centers that parameter's prior on.
+    (
+        template_func,
+        pulsed_frac,
+        parameters,
+        parameters_with_unc,
+    ) = _prepare_templates_and_phase_priors(
+        profile,
+        profile_weight,
+        use_weight,
+        nharm,
+        get_outroot,
+        files,
+        weights,
+        nbin,
+        parameters,
+        parameters_with_unc,
+    )
+
+    setup = _prepare_fit_setup(
+        parameters,
+        requested_parameter_names,
+        likelihood_func,
+        parameters_with_unc,
+        observation_length,
+        model,
+        template_funcs=template_func,
+        weights=weights if use_weight else None,
+        tolerance=tolerance,
+        user_priors=parse_prior_specs(priors),
+    )
+
+    return FitState(
+        observations=observations,
+        setup=setup,
+        parameters=parameters,
+        models=model,
+        get_outroot=get_outroot,
+        nbin=nbin,
+        requested_parameter_names=requested_parameter_names,
+        profile=profile,
+        pulsed_frac=pulsed_frac,
+    )
+
+
 def ell1fit(
     files,
     parfiles,
@@ -652,97 +798,32 @@ def ell1fit(
                 "harmonic. It still sets the binning of the diagnostic profiles.",
                 stacklevel=2,
             )
-    model, pepoch, ref_model = _load_and_validate_models(parfiles)
-
-    nbin = max(32, nharm * 8)
-
-    requested_parameter_names = sorted(fit_parameters)
-    _reject_unfittable_parameters(requested_parameter_names)
-    get_outroot = _make_outroot_getter(
+    state = prepare_fit_state(
         files,
-        requested_parameter_names,
-        energy_range,
-        nharm,
-        likelihood_func,
-        use_weight,
-        use_pi=use_pi,
-        general_outroot=general_outroot,
-    )
-
-    times_from_pepoch, observation_length, energies, expo = _load_events_for_all_files(
-        files,
-        energy_range,
-        pepoch,
-        get_outroot,
-        use_pi=use_pi,
-    )
-
-    observations = ObservationSet(
-        files=files,
-        models=model,
-        ref_model=ref_model,
-        pepoch=pepoch,
-        times_from_pepoch=times_from_pepoch,
-        energies=energies,
-        exposures=expo,
-        observation_length=observation_length,
-    )
-
-    parameters_with_unc, parameters = _build_parameters_from_models(
-        model,
-        ref_model,
-        observation_length,
-        ignore_uncertainties=ignore_uncertainties,
-    )
-
-    profile, profile_weight, weights = _build_profiles_and_weights(
-        times_from_pepoch,
-        parameters,
-        energies,
-        n_files,
-        get_outroot,
-        use_weight,
-        nbin,
-        tolerance,
-    )
-
-    # Needs the folded profiles: how much eccentricity ELL1 can carry depends on
-    # the precision the data support, not on a fixed threshold.
-    _warn_on_eccentric_orbit(parameters, profile, nharm)
-
-    # Must run before _prepare_fit_setup: it writes each file's real Phase_i
-    # offset into parameters/parameters_with_unc, which assign_logpriors then
-    # centers that parameter's prior on.
-    (
-        template_func,
-        pulsed_frac,
-        parameters,
-        parameters_with_unc,
-    ) = _prepare_templates_and_phase_priors(
-        profile,
-        profile_weight,
-        use_weight,
-        nharm,
-        get_outroot,
-        files,
-        weights,
-        nbin,
-        parameters,
-        parameters_with_unc,
-    )
-
-    setup = _prepare_fit_setup(
-        parameters,
-        requested_parameter_names,
-        likelihood_func,
-        parameters_with_unc,
-        observation_length,
-        model,
-        template_funcs=template_func,
-        weights=weights if use_weight else None,
+        parfiles,
+        nharm=nharm,
         tolerance=tolerance,
-        user_priors=parse_prior_specs(priors),
+        energy_range=energy_range,
+        fit_parameters=fit_parameters,
+        general_outroot=general_outroot,
+        likelihood_func=likelihood_func,
+        use_weight=use_weight,
+        use_pi=use_pi,
+        ignore_uncertainties=ignore_uncertainties,
+        priors=priors,
     )
+    observations = state.observations
+    setup = state.setup
+    parameters = state.parameters
+    model = state.models
+    get_outroot = state.get_outroot
+    nbin = state.nbin
+    requested_parameter_names = state.requested_parameter_names
+    profile = state.profile
+    pulsed_frac = state.pulsed_frac
+    times_from_pepoch = observations.times_from_pepoch
+    pepoch = observations.pepoch
+    expo = observations.exposures
 
     outroots = _get_outroots(get_outroot, n_files)
 
