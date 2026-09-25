@@ -19,6 +19,7 @@ what it is, then :doc:`pipeline` for how a fit actually proceeds.
    examples
    orbital_derivatives
    eccentricity
+   information
    spin_stats
 
 .. toctree::
@@ -74,6 +75,12 @@ Reference/API
 .. automodapi:: ell1fit.spin_periodicity
    :no-inheritance-diagram:
 .. automodapi:: ell1fit.eccentricity
+   :no-inheritance-diagram:
+.. automodapi:: ell1fit.information
+   :no-inheritance-diagram:
+.. automodapi:: ell1fit.observed_information
+   :no-inheritance-diagram:
+.. automodapi:: ell1fit.information_report
    :no-inheritance-diagram:
 .. automodapi:: ell1fit.orbit_plot
    :no-inheritance-diagram:

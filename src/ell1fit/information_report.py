@@ -269,3 +269,7 @@ def main(args=None):
     budget = InformationBudget(names, segments)
     print(format_budget(budget, parameter=args.report, seed=args.seed))
     return budget
+
+
+if __name__ == "__main__":
+    main()
