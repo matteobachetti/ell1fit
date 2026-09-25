@@ -9,7 +9,7 @@ import emcee
 import numpy as np
 from astropy.time import Time
 
-from .plotting import corner_figure_format, plot_style_context, save_figure
+from .plotting import corner_plot_kwargs, plot_style_context, save_figure
 from .scaling import TARGET_LOCAL_SIGMA
 
 
@@ -168,9 +168,15 @@ def plot_mcmc_results(
 
         flat_samples, _ = get_flat_samples(sampler)
 
+    ndim = np.shape(flat_samples)[1]
     with plot_style_context():
-        fig = corner.corner(flat_samples, labels=labels, quantiles=[0.16, 0.5, 0.84], **plot_kwargs)
-        return save_figure(fig, fname, fmt=corner_figure_format(np.shape(flat_samples)[1]))
+        fig = corner.corner(
+            flat_samples,
+            labels=labels,
+            quantiles=[0.16, 0.5, 0.84],
+            **{**corner_plot_kwargs(ndim), **plot_kwargs},
+        )
+        return save_figure(fig, fname)
 
 
 def plot_mcmc_comparison(samples_list, labels_list, names, fname, colors=None, **corner_kwargs):
@@ -205,6 +211,8 @@ def plot_mcmc_comparison(samples_list, labels_list, names, fname, colors=None, *
     if colors is None:
         colors = [f"C{i}" for i in range(len(samples_list))]
 
+    # Hoisted out of the loop: it is one decision about one figure, and it logs.
+    shared_kwargs = {**corner_plot_kwargs(len(shared_labels)), **corner_kwargs}
     with plot_style_context():
         fig = None
         for i, (samples, labels) in enumerate(zip(samples_list, labels_list)):
@@ -216,7 +224,7 @@ def plot_mcmc_comparison(samples_list, labels_list, names, fname, colors=None, *
                 color=colors[i % len(colors)],
                 fig=fig,
                 quantiles=[0.16, 0.5, 0.84] if i == 0 else None,
-                **corner_kwargs,
+                **shared_kwargs,
             )
         fig.legend(
             handles=[
@@ -225,7 +233,7 @@ def plot_mcmc_comparison(samples_list, labels_list, names, fname, colors=None, *
             ],
             loc="upper right",
         )
-        return save_figure(fig, fname, fmt=corner_figure_format(len(shared_labels)))
+        return save_figure(fig, fname)
 
 
 def default_moves():

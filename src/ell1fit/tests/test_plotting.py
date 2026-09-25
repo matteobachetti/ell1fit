@@ -17,17 +17,19 @@ import pytest
 
 from ..plotting import (
     COLUMN_WIDTH,
-    CORNER_RASTER_NDIM,
+    CORNER_SCATTER_NDIM,
     DEFAULT_FIGURE_FORMAT,
-    FIGURE_FORMATS,
     FIGURE_SIZES,
-    LARGE_FIGURE_FORMAT,
+    MAX_CANVAS_PX,
+    MIN_RASTER_DPI,
     PLOT_RC_PARAMS,
+    RASTER_DPI,
     TEXT_WIDTH,
-    corner_figure_format,
+    corner_plot_kwargs,
     current_figure_format,
     figure_path,
     figure_size,
+    fitted_raster_dpi,
     image_axes,
     plot_style_context,
     save_figure,
@@ -111,49 +113,82 @@ class TestFigurePath:
         assert figure_path("nu30401_v1.2_corner") == "nu30401_v1.2_corner.pdf"
 
 
-class TestCornerFigureFormat:
-    """Corner plots are the one figure whose size is not chosen by anybody.
+class TestFittedRasterDpi:
+    """The ceiling on a canvas whose size nobody chose."""
 
-    It grows with the number of fitted parameters -- which, with a per-file
-    ``Phase_i``, grows with the number of observations -- until the vector
-    back-ends cannot write it.
-    """
+    def test_an_ordinary_figure_is_untouched(self):
+        """Every figure built from a preset is orders of magnitude under the cap."""
+        for name in FIGURE_SIZES:
+            fig = plt.figure(figsize=figure_size(name))
+            assert fitted_raster_dpi(fig) == RASTER_DPI
+            plt.close(fig)
 
-    def test_a_small_corner_plot_is_left_to_the_runs_own_format(self, clean_format):
-        """Nothing changes for a fit of the size anyone would put in a paper."""
-        assert corner_figure_format(CORNER_RASTER_NDIM) is None
-        assert corner_figure_format(2) is None
+    def test_an_oversized_figure_is_held_at_the_canvas_limit(self):
+        """Past the cap the resolution drops continuously, not in one step."""
+        side = 2 * MAX_CANVAS_PX / RASTER_DPI  # twice the largest full-resolution figure
+        fig = plt.figure(figsize=(side, side))
+        assert fitted_raster_dpi(fig) == pytest.approx(MAX_CANVAS_PX / side)
+        assert fitted_raster_dpi(fig) < RASTER_DPI
+        plt.close(fig)
 
-    def test_a_large_corner_plot_is_written_as_a_raster(self, clean_format):
-        """Past the limit the format is forced, whatever the run was asked for."""
-        set_figure_format("pdf")
-        assert corner_figure_format(CORNER_RASTER_NDIM + 1) == LARGE_FIGURE_FORMAT
-        assert corner_figure_format(30) == LARGE_FIGURE_FORMAT
+    def test_the_resolution_never_falls_below_the_legibility_floor(self):
+        """A figure nobody can read is not a cheaper figure, it is a wasted one."""
+        fig = plt.figure(figsize=(400, 400))
+        assert fitted_raster_dpi(fig) == MIN_RASTER_DPI
+        plt.close(fig)
 
-    def test_the_forced_format_is_one_the_package_endorses(self):
-        # It is handed straight to ``figure_path``, which refuses anything else.
-        assert LARGE_FIGURE_FORMAT in FIGURE_FORMATS
+    def test_a_degenerate_size_does_not_divide_by_zero(self):
+        fig = plt.figure(figsize=(0, 0))
+        assert fitted_raster_dpi(fig) == RASTER_DPI
+        plt.close(fig)
 
-    @pytest.mark.parametrize(
-        "ndim, suffix", [(4, "." + DEFAULT_FIGURE_FORMAT), (12, "." + LARGE_FIGURE_FORMAT)]
-    )
-    def test_the_corner_writer_actually_asks(
-        self, ndim, suffix, tmp_path, clean_format, monkeypatch
-    ):
-        """``plot_mcmc_results`` sizes its format by the width of the samples.
 
-        The limit above is worth nothing if the writer that blows up forgets to
-        consult it, so the wiring is pinned rather than the policy. ``corner``
-        is stubbed out because drawing the real 26-inch figure is the expensive
-        thing this whole change exists to avoid.
+class TestCornerPlotKwargs:
+    """Dropping the per-sample scatter, which is what every panel rasterizes."""
+
+    def test_a_small_corner_plot_still_shows_its_samples(self):
+        """A fit of the size anyone would put in a paper is untouched."""
+        assert corner_plot_kwargs(CORNER_SCATTER_NDIM) == {}
+        assert corner_plot_kwargs(2) == {}
+
+    def test_a_large_corner_plot_drops_them(self):
+        """Past the limit the scatter goes, which is what needed a pixel canvas."""
+        assert corner_plot_kwargs(CORNER_SCATTER_NDIM + 1) == {"plot_datapoints": False}
+        assert corner_plot_kwargs(40) == {"plot_datapoints": False}
+
+    def test_a_large_corner_plot_still_comes_out_vector(self, tmp_path, clean_format, monkeypatch):
+        """Removing the scatter is what lets the format stay PDF at any size.
+
+        Measured on a twelve-parameter figure: 0.45 GB and 0.53 MB as PDF
+        without the scatter, against 6.7 GB with it, and 0.91 GB and 3.3 MB for
+        the same figure written as JPEG instead.
         """
         from .. import mcmc_utils
 
         monkeypatch.setattr(mcmc_utils.corner, "corner", lambda *a, **k: plt.figure())
         path = mcmc_utils.plot_mcmc_results(
-            flat_samples=np.zeros((10, ndim)), fname=os.path.join(str(tmp_path), "corner")
+            flat_samples=np.zeros((10, CORNER_SCATTER_NDIM + 4)),
+            fname=os.path.join(str(tmp_path), "corner"),
         )
-        assert path.endswith(suffix)
+        assert path.endswith("." + DEFAULT_FIGURE_FORMAT)
+
+    def test_a_caller_can_ask_for_them_back(self, tmp_path, clean_format, monkeypatch):
+        """These are defaults, applied before the caller's own keywords."""
+        from .. import mcmc_utils
+
+        seen = {}
+
+        def fake_corner(*args, **kwargs):
+            seen.update(kwargs)
+            return plt.figure()
+
+        monkeypatch.setattr(mcmc_utils.corner, "corner", fake_corner)
+        mcmc_utils.plot_mcmc_results(
+            flat_samples=np.zeros((10, CORNER_SCATTER_NDIM)),
+            fname=os.path.join(str(tmp_path), "corner"),
+            plot_datapoints=True,
+        )
+        assert seen["plot_datapoints"] is True
 
 
 class TestSaveFigure:
