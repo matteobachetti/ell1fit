@@ -9,7 +9,7 @@ import emcee
 import numpy as np
 from astropy.time import Time
 
-from .plotting import plot_style_context, save_figure
+from .plotting import corner_figure_format, plot_style_context, save_figure
 from .scaling import TARGET_LOCAL_SIGMA
 
 
@@ -170,7 +170,7 @@ def plot_mcmc_results(
 
     with plot_style_context():
         fig = corner.corner(flat_samples, labels=labels, quantiles=[0.16, 0.5, 0.84], **plot_kwargs)
-        return save_figure(fig, fname)
+        return save_figure(fig, fname, fmt=corner_figure_format(np.shape(flat_samples)[1]))
 
 
 def plot_mcmc_comparison(samples_list, labels_list, names, fname, colors=None, **corner_kwargs):
@@ -225,7 +225,7 @@ def plot_mcmc_comparison(samples_list, labels_list, names, fname, colors=None, *
             ],
             loc="upper right",
         )
-        return save_figure(fig, fname)
+        return save_figure(fig, fname, fmt=corner_figure_format(len(shared_labels)))
 
 
 def default_moves():

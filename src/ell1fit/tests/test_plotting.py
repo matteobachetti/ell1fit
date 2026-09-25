@@ -12,14 +12,19 @@ name.
 import os
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pytest
 
 from ..plotting import (
     COLUMN_WIDTH,
+    CORNER_RASTER_NDIM,
     DEFAULT_FIGURE_FORMAT,
+    FIGURE_FORMATS,
     FIGURE_SIZES,
+    LARGE_FIGURE_FORMAT,
     PLOT_RC_PARAMS,
     TEXT_WIDTH,
+    corner_figure_format,
     current_figure_format,
     figure_path,
     figure_size,
@@ -106,6 +111,51 @@ class TestFigurePath:
         assert figure_path("nu30401_v1.2_corner") == "nu30401_v1.2_corner.pdf"
 
 
+class TestCornerFigureFormat:
+    """Corner plots are the one figure whose size is not chosen by anybody.
+
+    It grows with the number of fitted parameters -- which, with a per-file
+    ``Phase_i``, grows with the number of observations -- until the vector
+    back-ends cannot write it.
+    """
+
+    def test_a_small_corner_plot_is_left_to_the_runs_own_format(self, clean_format):
+        """Nothing changes for a fit of the size anyone would put in a paper."""
+        assert corner_figure_format(CORNER_RASTER_NDIM) is None
+        assert corner_figure_format(2) is None
+
+    def test_a_large_corner_plot_is_written_as_a_raster(self, clean_format):
+        """Past the limit the format is forced, whatever the run was asked for."""
+        set_figure_format("pdf")
+        assert corner_figure_format(CORNER_RASTER_NDIM + 1) == LARGE_FIGURE_FORMAT
+        assert corner_figure_format(30) == LARGE_FIGURE_FORMAT
+
+    def test_the_forced_format_is_one_the_package_endorses(self):
+        # It is handed straight to ``figure_path``, which refuses anything else.
+        assert LARGE_FIGURE_FORMAT in FIGURE_FORMATS
+
+    @pytest.mark.parametrize(
+        "ndim, suffix", [(4, "." + DEFAULT_FIGURE_FORMAT), (12, "." + LARGE_FIGURE_FORMAT)]
+    )
+    def test_the_corner_writer_actually_asks(
+        self, ndim, suffix, tmp_path, clean_format, monkeypatch
+    ):
+        """``plot_mcmc_results`` sizes its format by the width of the samples.
+
+        The limit above is worth nothing if the writer that blows up forgets to
+        consult it, so the wiring is pinned rather than the policy. ``corner``
+        is stubbed out because drawing the real 26-inch figure is the expensive
+        thing this whole change exists to avoid.
+        """
+        from .. import mcmc_utils
+
+        monkeypatch.setattr(mcmc_utils.corner, "corner", lambda *a, **k: plt.figure())
+        path = mcmc_utils.plot_mcmc_results(
+            flat_samples=np.zeros((10, ndim)), fname=os.path.join(str(tmp_path), "corner")
+        )
+        assert path.endswith(suffix)
+
+
 class TestSaveFigure:
     def test_writes_the_file_and_returns_its_path(self, tmp_path, clean_format):
         fig = plt.figure()
@@ -125,6 +175,46 @@ class TestSaveFigure:
         path = save_figure(fig, os.path.join(str(tmp_path), "fig"), fmt="png")
         assert path.endswith(".png")
         assert os.path.getsize(path) > 0
+
+    def test_a_figure_too_large_for_its_format_falls_back_to_a_raster(self, tmp_path, clean_format):
+        """A save that runs out of memory writes a JPEG instead of taking the run down.
+
+        A whole fit used to be lost at the last step, after the chain was safely
+        on disk, because the final corner plot could not be drawn.
+        """
+        fig = plt.figure()
+        real_savefig = fig.savefig
+        attempted = []
+
+        def savefig(fname, *args, **kwargs):
+            attempted.append(fname)
+            if fname.endswith(".pdf"):
+                raise MemoryError("std::bad_alloc")
+            return real_savefig(fname, *args, **kwargs)
+
+        fig.savefig = savefig
+        path = save_figure(fig, os.path.join(str(tmp_path), "fig"))
+
+        assert path == os.path.join(str(tmp_path), "fig.jpg")
+        assert os.path.getsize(path) > 0
+        assert [os.path.basename(p) for p in attempted] == ["fig.pdf", "fig.jpg"]
+        # A half-written PDF is not a figure, and anything globbing the output
+        # directory would treat it as one.
+        assert not os.path.exists(os.path.join(str(tmp_path), "fig.pdf"))
+
+    def test_a_raster_that_runs_out_of_memory_is_not_retried(self, tmp_path, clean_format):
+        """Falling back from JPEG to JPEG would only fail again, more slowly."""
+        fig = plt.figure()
+
+        def savefig(fname, *args, **kwargs):
+            raise MemoryError("std::bad_alloc")
+
+        fig.savefig = savefig
+        with pytest.raises(MemoryError):
+            save_figure(fig, os.path.join(str(tmp_path), "fig"), fmt="jpg")
+        # A save that fails for good must still not leak the figure -- and a
+        # figure this large is the one that can least afford to be held.
+        assert fig.number not in plt.get_fignums()
 
     def test_keeps_the_figure_exactly_the_size_it_was_built(self, tmp_path, clean_format):
         # The whole point of the presets: a figure declared 3.5 inches wide has

@@ -51,6 +51,7 @@ should follow too:
 * a figure destined for a paper carries no title. A diagnostic may.
 """
 
+import logging
 import os
 
 import matplotlib as mpl
@@ -60,17 +61,20 @@ __all__ = [
     "BAND_ALPHA",
     "COLUMN_WIDTH",
     "CORNER_LABEL_SIZE",
+    "CORNER_RASTER_NDIM",
     "DATA_COLOR",
     "DEFAULT_FIGURE_FORMAT",
     "FIGURE_FORMATS",
     "FIGURE_SIZES",
     "GUIDE_COLOR",
+    "LARGE_FIGURE_FORMAT",
     "PLOT_RC_PARAMS",
     "RASTER_DPI",
     "SUMMARY_TITLE_SIZE",
     "TEXT_WIDTH",
     "WIDE_BAND_ALPHA",
     "add_figure_format_argument",
+    "corner_figure_format",
     "current_figure_format",
     "figure_path",
     "figure_size",
@@ -118,6 +122,25 @@ SUMMARY_TITLE_SIZE = BASE_FONT_SIZE - 2.0
 
 #: Resolution used whenever a figure is written in a raster format.
 RASTER_DPI = 300
+
+#: Number of parameters above which a corner plot is written as a raster image
+#: rather than a vector one. A corner plot grows by about 2.1 inches per
+#: parameter in each direction, and :func:`corner.corner` marks the scatter of
+#: individual samples in every one of its ``n(n-1)/2`` panels as rasterized. A
+#: vector back-end honours that by allocating one *whole-canvas* pixel buffer
+#: per panel at :data:`RASTER_DPI`, so the cost grows as the square of the
+#: parameter count: measured peak memory for 20000 samples was 3.4 GB at 8
+#: parameters and 6.2 GB at 10, against 0.6 and 0.8 GB for the same figures
+#: written as JPEG. Eight is where a corner plot also stops being a figure
+#: anyone would place in a paper -- it is 18 inches on a side -- so the vector
+#: format is no longer buying anything that is being paid for.
+CORNER_RASTER_NDIM = 8
+
+#: What a figure too large to be written as vector falls back to. JPEG rather
+#: than PNG because these are diagnostics read by zooming in, where a file half
+#: the size matters more than the artifacts described under "Output format" in
+#: ``docs/ell1fit/figures.rst``.
+LARGE_FIGURE_FORMAT = "jpg"
 
 #: Measurements.
 DATA_COLOR = "black"
@@ -324,6 +347,62 @@ def figure_path(path, fmt=None):
     return f"{path}.{fmt}"
 
 
+#: Formats there is no point retrying a failed save in: JPEG is what the
+#: fallback writes, and PNG holds the same uncompressed canvas in memory.
+_NO_CHEAPER_FALLBACK = frozenset({".jpg", ".jpeg", ".png"})
+
+
+def _save_smaller(fig, fname, dpi, kwargs):
+    """Rewrite a figure that ran out of memory as :data:`LARGE_FIGURE_FORMAT`.
+
+    Called only from :func:`save_figure`'s ``except MemoryError`` branch, so a
+    bare ``raise`` here re-raises that error with its original traceback.
+    """
+    root, ext = os.path.splitext(fname)
+    if ext.lower() in _NO_CHEAPER_FALLBACK:
+        raise
+    fallback = f"{root}.{LARGE_FIGURE_FORMAT}"
+    logging.warning(
+        f"Ran out of memory writing {fname}: a vector canvas needs one whole-figure "
+        f"pixel buffer per rasterized element. Falling back to {fallback}. It stays "
+        f"readable zoomed in, and `img2pdf {os.path.basename(fallback)} -o "
+        f"{os.path.basename(root)}.pdf` wraps it back into a PDF if one is needed."
+    )
+    # The partial file is not a figure and must not be left looking like one:
+    # anything downstream globbing for the output would pick it up.
+    if os.path.exists(fname):
+        os.remove(fname)
+    fig.savefig(fallback, dpi=RASTER_DPI if dpi is None else dpi, **kwargs)
+    return fallback
+
+
+def corner_figure_format(ndim):
+    """The format a corner plot of ``ndim`` parameters should be written in.
+
+    ``None`` means "nothing special" -- the run's own format decides, exactly
+    as for every other figure. Above :data:`CORNER_RASTER_NDIM` the answer is
+    :data:`LARGE_FIGURE_FORMAT`, because the vector back-ends cannot write a
+    figure that size without the memory blow-up documented on that constant.
+
+    Parameters
+    ----------
+    ndim : int
+        Number of parameters the corner plot covers.
+
+    Returns
+    -------
+    str or None
+        A format name, or ``None`` to leave the choice alone.
+    """
+    if ndim <= CORNER_RASTER_NDIM:
+        return None
+    logging.info(
+        f"Corner plot has {ndim} parameters (over {CORNER_RASTER_NDIM}): writing it as "
+        f"{LARGE_FIGURE_FORMAT.upper()}, since a vector canvas this size needs several GB."
+    )
+    return LARGE_FIGURE_FORMAT
+
+
 def save_figure(fig, path, fmt=None, dpi=None, **kwargs):
     """Write a figure and close it.
 
@@ -335,6 +414,13 @@ def save_figure(fig, path, fmt=None, dpi=None, **kwargs):
     saved outside :func:`plot_style_context` still comes out at
     :data:`RASTER_DPI` instead of matplotlib's 100. It is ignored by the vector
     formats.
+
+    A figure large enough to exhaust memory while being written falls back to
+    :data:`LARGE_FIGURE_FORMAT` rather than taking the run down with it. A
+    whole fit used to be lost at the last step, after the sampling was over and
+    the chain was safely on disk, because the final corner plot could not be
+    drawn. :func:`corner_figure_format` is meant to keep that from arising; this
+    is the net underneath it, for the figure nobody predicted.
 
     Parameters
     ----------
@@ -350,13 +436,22 @@ def save_figure(fig, path, fmt=None, dpi=None, **kwargs):
     Returns
     -------
     str
-        The path written, for logging and for tests.
+        The path written -- which is not always the path asked for, if the
+        fallback above fired. Callers log it rather than reconstructing it.
     """
     import matplotlib.pyplot as plt
 
     fname = figure_path(path, fmt=fmt)
-    fig.savefig(fname, dpi=RASTER_DPI if dpi is None else dpi, **kwargs)
-    plt.close(fig)
+    try:
+        fig.savefig(fname, dpi=RASTER_DPI if dpi is None else dpi, **kwargs)
+    except MemoryError:
+        fname = _save_smaller(fig, fname, dpi, kwargs)
+    finally:
+        # In ``finally`` rather than after the ``try``: a save that fails for
+        # good would otherwise leak the very figure this function closes on
+        # everyone's behalf, and a figure that large is the one that can least
+        # afford to be held.
+        plt.close(fig)
     return fname
 
 

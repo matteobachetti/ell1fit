@@ -143,6 +143,42 @@ public plotting functions take an ``fname`` argument, and
 :func:`ell1fit.plotting.figure_path` leaves a path that already carries an image
 extension alone; only a bare output root picks up the run's format.
 
+Large corner plots are the exception
+------------------------------------
+
+Every other figure in the package is a size somebody chose. A corner plot is
+not: it grows by about 2.1 inches per parameter in each direction, and with a
+per-file ``Phase_i`` nuisance parameter the parameter count grows with the
+number of observations. A twenty-epoch fit is a fifty-inch figure.
+
+That is not merely large, it is unwritable as vector. :func:`corner.corner`
+marks the scatter of individual samples in each of its ``n(n-1)/2`` panels as
+rasterized, and the PDF and SVG back-ends honour that by allocating one
+*whole-canvas* pixel buffer per panel at 300 dpi — so the cost grows as the
+square of the parameter count. Measured, for 20000 samples:
+
+==========  ================  ================
+Parameters  Peak RAM, PDF     Peak RAM, JPEG
+==========  ================  ================
+8           3.4 GB            0.6 GB
+10          6.2 GB            0.8 GB
+12          6.2 GB            1.0 GB
+16          6.9 GB            1.5 GB
+==========  ================  ================
+
+So above :data:`ell1fit.plotting.CORNER_RASTER_NDIM` parameters a corner plot is
+written as JPEG, whatever the run's format is, and the JPEG artifacts described
+above are accepted: at this size the figure is a diagnostic read by zooming in,
+never something placed in a paper, and the vector format has stopped buying
+anything that is being paid for. ``img2pdf`` wraps one back into a PDF if a PDF
+is really wanted.
+
+Underneath that, :func:`ell1fit.plotting.save_figure` catches a ``MemoryError``
+from any save and retries in JPEG. The threshold is meant to keep the case from
+arising; the fallback is there because a whole fit was once lost at the very
+last step, after the sampling was over and the chain was safely on disk, purely
+because the final corner plot could not be drawn.
+
 Adding a figure
 ---------------
 
