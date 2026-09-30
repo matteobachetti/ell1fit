@@ -85,8 +85,11 @@ def _load_and_format_events(
     return times_from_pepoch, gtis_from_pepoch
 
 
-def _load_events_for_all_files(files, energy_range, pepoch, get_outroot, use_pi=False):
-    """Load all event files and compute per-file exposure and duration."""
+def _load_events_for_all_files(files, energy_range, pepoch, get_outroot, use_pi=False, plotlc=True):
+    """Load all event files and compute per-file exposure and duration.
+
+    ``plotlc=False`` skips the quick-look light curve of each file.
+    """
     n_files = len(files)
     times_from_pepoch = [[] for _ in range(n_files)]
     observation_length = np.zeros(n_files, dtype=float)
@@ -99,6 +102,7 @@ def _load_events_for_all_files(files, energy_range, pepoch, get_outroot, use_pi=
             fname,
             energy_range,
             pepoch[i],
+            plotlc=plotlc,
             plotfile=get_outroot(i) + f"_lightcurve_{i}",
             return_energy=True,
             use_pi=use_pi,

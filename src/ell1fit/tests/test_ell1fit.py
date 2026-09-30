@@ -7,6 +7,7 @@ import pytest
 import numpy as np
 from astropy.table import Table
 from ..phase_utils import NonInvertibleOrbitError, _calculate_phases
+from ..phase_utils import _calculate_absolute_phases
 from ..phase_utils import add_circular_orbit_numba, add_ell1_orbit_numba
 from ..phase_utils import orbit_is_invertible
 from ..phase_utils import simple_circular_deorbit_numba, simple_ell1_deorbit_numba
@@ -299,6 +300,31 @@ def test_phases_are_flat_in_pbdot():
         assert np.array_equal(perturbed, reference), (
             f"PBDOT={pbdot} changed the phases: it is no longer an inert parameter"
         )
+
+
+def test_absolute_phases_wrap_to_the_fitted_phases():
+    """The unwrapped phase ``ell1fold`` saves must be exactly what the fit folds with.
+
+    Also pins the orbital phase: zero at ``TASC`` and advancing by one per ``PB``.
+    """
+    parameters = {
+        "PB": 30000.0,
+        "A1": 1.0,
+        "TASC": 57000.1,
+        "EPS1": 1e-4,
+        "EPS2": -2e-4,
+        "PEPOCH_0": 57000.0,
+        "F0_0": 100.0,
+        "F1_0": -1e-10,
+        "Phase_0": 0.3,
+    }
+    tasc = 0.1 * 86400
+    times = [np.array([tasc, tasc + 7500.0, tasc + 30000.0 * 3.5, 1e6])]
+
+    pulse, orbit = _calculate_absolute_phases(times, parameters)
+    assert np.array_equal(pulse[0] - np.floor(pulse[0]), _calculate_phases(times, parameters)[0])
+    assert np.ptp(pulse[0]) > 1e7  # genuinely unwrapped
+    assert np.allclose(orbit[0][:3], [0.0, 0.25, 0.5])
 
 
 def _kepler_delay_over_x(phi, e, om):
