@@ -17,6 +17,7 @@ what it is, then :doc:`pipeline` for how a fit actually proceeds.
    motivation
    pipeline
    examples
+   fold
    orbital_derivatives
    eccentricity
    information
@@ -81,6 +82,8 @@ Reference/API
 .. automodapi:: ell1fit.observed_information
    :no-inheritance-diagram:
 .. automodapi:: ell1fit.information_report
+   :no-inheritance-diagram:
+.. automodapi:: ell1fit.fold
    :no-inheritance-diagram:
 .. automodapi:: ell1fit.orbit_plot
    :no-inheritance-diagram:
