@@ -71,24 +71,36 @@ def normalize_dyn_profile(dynprof, norm):
     return dynprof
 
 
-def _plot_phaseogram(phases, times, ax0, ax1, norm="meansub_smooth", weights=None):
+def _plot_phaseogram(
+    phases,
+    times,
+    ax0,
+    ax1,
+    norm="meansub_smooth",
+    weights=None,
+    nbin=16,
+    pepoch=None,
+    ntimebins=32,
+):
     """Plot folded profile and phaseogram for one event list.
 
-    ``weights``, if given, weights each event in both histograms.
+    ``weights``, if given, weights each event in both histograms. ``nbin`` is
+    the number of phase bins per pulse cycle (two cycles are drawn), and
+    ``ntimebins`` the number of rows of the phaseogram. ``pepoch`` (MJD), if
+    given, is written into the time-axis label.
     """
     ph = np.concatenate((phases, phases + 1)).astype(float)
     tm = np.concatenate((times, times)).astype(float) / 86400
     if weights is not None:
         weights = np.concatenate((weights, weights)).astype(float)
 
-    nbin = 32
-    bins = np.linspace(0, 2, nbin + 1)
+    bins = np.linspace(0, 2, 2 * nbin + 1)
     prof, _ = np.histogram(ph, bins=bins, weights=weights)
 
-    ax0.plot(bins[:-1] + 0.5 / nbin, prof, color="k", alpha=0.5)
+    ax0.plot((bins[:-1] + bins[1:]) / 2, prof, color="k", alpha=0.5)
     for num in (0.5, 1, 1.5):
         ax1.axvline(num, color="grey", lw=2, ls="--")
-    H, xedges, yedges = np.histogram2d(ph, tm, bins=(bins, nbin), weights=weights)
+    H, xedges, yedges = np.histogram2d(ph, tm, bins=(bins, ntimebins), weights=weights)
     X, Y = np.meshgrid(xedges, yedges)
     H = normalize_dyn_profile(H.T, norm)
     ax1.pcolormesh(X, Y, H, cmap="cubehelix")
@@ -97,7 +109,10 @@ def _plot_phaseogram(phases, times, ax0, ax1, norm="meansub_smooth", weights=Non
         ax1.axvline(num, color="grey", lw=2, ls="--")
 
     ax1.set_xlabel("Phase")
-    ax1.set_ylabel("Time from pepoch (d)")
+    if pepoch is None:
+        ax1.set_ylabel("Time from PEPOCH (d)")
+    else:
+        ax1.set_ylabel(f"Time from PEPOCH = MJD {pepoch:.5f} (d)")
     ax1.set_xlim([0, 2])
 
 
@@ -119,19 +134,20 @@ def _compare_phaseograms(phase1, phase2, times, fname):
         return _save_figure(fig, fname)
 
 
-def plot_phaseogram(phases, times, fname, weights=None):
+def plot_phaseogram(phases, times, fname, weights=None, nbin=32, pepoch=None):
     """Plot the folded profile over the phaseogram of one event list.
 
     The single-solution counterpart of :func:`_compare_phaseograms`, used by
-    ``ell1fold``. ``phases`` in [0, 1), ``times`` in seconds from ``PEPOCH``.
-    Returns the path written.
+    ``ell1fold``. ``phases`` in [0, 1), ``times`` in seconds from ``PEPOCH``;
+    ``nbin`` phase bins per pulse cycle; ``pepoch`` (MJD) goes into the time
+    label. Returns the path written.
     """
     with _plot_style_context():
         fig = plt.figure(figsize=_figure_size("column-tall"), layout="constrained")
         gs = fig.add_gridspec(2, 1, height_ratios=(1, 3))
         ax0 = fig.add_subplot(gs[0])
         ax1 = fig.add_subplot(gs[1], sharex=ax0)
-        _plot_phaseogram(phases, times, ax0, ax1, weights=weights)
+        _plot_phaseogram(phases, times, ax0, ax1, weights=weights, nbin=nbin, pepoch=pepoch)
         ax0.set_ylabel("Weighted counts" if weights is not None else "Counts")
         plt.setp(ax0.get_xticklabels(), visible=False)
         return _save_figure(fig, fname)

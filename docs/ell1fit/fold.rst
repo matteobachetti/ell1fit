@@ -23,8 +23,10 @@ What it writes
 ``<name>_phaseogram.pdf``
    The folded profile over the phaseogram, two cycles wide. The phaseogram is
    mean-subtracted and smoothed, exactly as in the diagnostic plots ``ell1fit``
-   draws after a fit. The energy selection (``-e``) and the good time
-   intervals apply here. ``--figure-format`` picks another format.
+   draws after a fit, with ``-b/--nbin`` phase bins per pulse cycle (32 by
+   default). The time axis is in days from the parfile's ``PEPOCH``, which the
+   label quotes. The energy selection (``-e``) and the good time intervals
+   apply here. ``--figure-format`` picks another format.
 
 ``<name>_phase.<ext>`` (with ``--save-phases``)
    A copy of the event file in the same format, with three columns added:

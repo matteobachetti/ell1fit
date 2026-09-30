@@ -63,8 +63,10 @@ def phase_file_name(fname):
     return root + "_phase" + ext
 
 
-def fold_events(files, parfiles, energy_range=None, weight_column=None, tolerance=1e-8):
+def fold_events(files, parfiles, energy_range=None, weight_column=None, nbin=32, tolerance=1e-8):
     """Fold each event file with its parfile and plot profile and phaseogram.
+
+    ``nbin`` is the number of phase bins per pulse cycle.
 
     Returns
     -------
@@ -97,7 +99,11 @@ def fold_events(files, parfiles, energy_range=None, weight_column=None, toleranc
     for i, root in enumerate(roots):
         fname = f"{root}{suffix}_phaseogram"
         logging.info(f"Writing phaseogram of {files[i]} to {fname}")
-        figures.append(plot_phaseogram(phases[i], times[i], fname, weights=weights[i]))
+        figures.append(
+            plot_phaseogram(
+                phases[i], times[i], fname, weights=weights[i], nbin=nbin, pepoch=pepoch[i]
+            )
+        )
     return figures
 
 
@@ -168,6 +174,9 @@ def _parser():
         "-e", "--energy-range", type=float, nargs=2, default=None, help="Energy range (keV)"
     )
     parser.add_argument(
+        "-b", "--nbin", type=int, default=32, help="Phase bins per pulse cycle (default 32)"
+    )
+    parser.add_argument(
         "--weight-column",
         default=None,
         help="Per-event column used to weight the profile and phaseogram",
@@ -196,6 +205,7 @@ def main(args=None):
         args.parfiles,
         energy_range=args.energy_range,
         weight_column=args.weight_column,
+        nbin=args.nbin,
     )
     if args.save_phases:
         save_phase_columns(args.files, args.parfiles)

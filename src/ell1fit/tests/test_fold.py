@@ -72,7 +72,7 @@ def _write_ogip_copy(nc_file, outfile):
 def test_ell1fold_cli_writes_phaseogram_and_phase_file(nc_event_file):
     """The CLI's two products appear, and the saved phase columns are consistent."""
     event_file, parfile = nc_event_file
-    main([event_file, "-p", parfile, "--save-phases"])
+    main([event_file, "-p", parfile, "--save-phases", "--nbin", "20"])
 
     root = event_file.replace(".nc", "")
     assert os.path.exists(figure_path(root + "_phaseogram"))
@@ -129,13 +129,21 @@ def test_missing_weight_column_is_reported(nc_event_file):
 
 
 def test_unit_weights_leave_the_profile_unchanged():
-    """Weighting is a pure extension: all-ones weights reproduce the plain profile."""
+    """Weighting is a pure extension: all-ones weights reproduce the plain profile.
+
+    Also checks ``nbin`` counts bins per cycle, the points sit at bin centres,
+    and ``pepoch`` reaches the time label.
+    """
     rng = np.random.default_rng(0)
     phases, times = rng.uniform(0, 1, 500), rng.uniform(0, 1e4, 500)
     profiles = []
     for weights in (None, np.ones(500)):
         fig, (ax0, ax1) = plt.subplots(2)
-        _plot_phaseogram(phases, times, ax0, ax1, weights=weights)
+        _plot_phaseogram(phases, times, ax0, ax1, weights=weights, nbin=24, pepoch=57000.25)
         profiles.append(ax0.lines[0].get_ydata())
+        centres = ax0.lines[0].get_xdata()
+        label = ax1.get_ylabel()
         plt.close(fig)
     assert np.array_equal(*profiles)
+    assert np.allclose(centres, (np.arange(48) + 0.5) / 24)
+    assert "MJD 57000.25000" in label
