@@ -20,7 +20,7 @@ from astropy.table import Table
 pytest.importorskip("dynesty")
 
 from ..mcmc_utils import plot_mcmc_comparison
-from ..orbital_decay import _write_diagnostic_plot, fit_orbital_decay
+from ..orbital_decay import _derivative_summary, _write_diagnostic_plot, fit_orbital_decay
 from ..orbital_decay_data import (
     EpochPruningError,
     OrbitalModelCompatibilityError,
@@ -639,10 +639,40 @@ def _run_decay(directory, **kwargs):
 
 
 @pytest.fixture(scope="module")
-def strong_pbdot_run(tmp_path_factory):
+def strong_pbdot_dir(tmp_path_factory):
+    return tmp_path_factory.mktemp("strong_pbdot")
+
+
+@pytest.fixture(scope="module")
+def strong_pbdot_run(strong_pbdot_dir):
     """A large injected PBDOT and no PBDDOT: one run exercising both branches,
-    a measurement for PBDOT and an upper limit for PBDDOT."""
-    return _run_decay(tmp_path_factory.mktemp("strong_pbdot"), pbdot=3e-8)
+    a measurement for PBDOT and an upper limit for PBDDOT.
+
+    It also carries a tenth epoch with a 2000 s TASC error and asks for a
+    ratio cut, so the same run covers pruning and the results JSON. The cut
+    removes that epoch before anything else reads the list, so the fit sees
+    exactly the nine clean epochs, in the same order, as without it.
+    """
+    files = _write_decay_epochs(strong_pbdot_dir, pbdot=3e-8)
+    files.append(
+        _write_ecsv(
+            strong_pbdot_dir / "wide.ecsv",
+            pepoch=_REF_MJD,
+            pb=_PB_DAYS * 86400.0,
+            tasc=_REF_MJD + 0.01,
+            tasc_spread_days=2000.0 / 86400.0,
+        )
+    )
+    return fit_orbital_decay(
+        files,
+        outroot=os.path.join(str(strong_pbdot_dir), "decay"),
+        nlive=200,
+        dlogz=0.5,
+        seeds=2,
+        reference_epoch=_REF_MJD,
+        write_parfile=False,
+        max_tasc_error_ratio=10.0,
+    )
 
 
 @pytest.fixture(scope="module")
@@ -709,55 +739,41 @@ def test_three_sigma_limit_is_reported_alongside_the_headline_one(flat_run):
     assert "3 sigma" in flat_run["M0"]["PBDOT_summary"]
 
 
-def test_upper_limit_level_is_honoured(tmp_path):
-    """A more demanding credible level has to give a larger limit."""
-    files = _write_decay_epochs(tmp_path, seed=SEED + 4)
-    common = dict(nlive=200, dlogz=0.5, seeds=1, reference_epoch=_REF_MJD, write_parfile=False)
-    loose = fit_orbital_decay(
-        files, outroot=os.path.join(str(tmp_path), "loose"), upper_limit_level=0.68, **common
+def _summary_of(samples_scale, ln_bf, **kwargs):
+    """``_derivative_summary`` of a fixed synthetic M0 chain, for PBDOT."""
+    rng = np.random.default_rng(SEED)
+    result = {"flat_samples": rng.normal(0.0, samples_scale, size=(4000, 3))}
+    return _derivative_summary(
+        result, 2, 3000.0, _PB_DAYS, "PBDOT", {"ln_bf": ln_bf, "ln_bf_err": 0.1}, **kwargs
     )
-    tight = fit_orbital_decay(
-        files, outroot=os.path.join(str(tmp_path), "tight"), upper_limit_level=0.99, **common
-    )
-    assert tight["M1"]["PBDDOT_upper_limit"] > loose["M1"]["PBDDOT_upper_limit"]
-    assert loose["M1"]["PBDDOT_upper_limit_level"] == 0.68
 
 
-def test_detection_threshold_is_honoured(strong_pbdot_run, tmp_path):
-    """An absurdly high threshold must turn even the strong PBDOT into a limit,
-    proving the Bayes factor is what drives the switch."""
-    files = _write_decay_epochs(tmp_path, pbdot=3e-8)
-    strict = fit_orbital_decay(
-        files,
-        outroot=os.path.join(str(tmp_path), "strict"),
-        nlive=200,
-        dlogz=0.5,
-        seeds=1,
-        reference_epoch=_REF_MJD,
-        write_parfile=False,
-        detection_ln_bf=1e9,
-    )
-    assert strong_pbdot_run["M0"]["PBDOT_detected"] is True
-    assert strict["M0"]["PBDOT_detected"] is False
-    assert np.isfinite(strict["M0"]["PBDOT_upper_limit"])
+def test_upper_limit_level_is_honoured():
+    """A more demanding credible level has to give a larger limit.
+
+    Both limits come from the same samples, so sampler noise cannot decide
+    the comparison.
+    """
+    loose = _summary_of(1e-3, ln_bf=-1.0, threshold=1.0, upper_limit_level=0.68)
+    tight = _summary_of(1e-3, ln_bf=-1.0, threshold=1.0, upper_limit_level=0.99)
+    assert tight["PBDOT_upper_limit"] > loose["PBDOT_upper_limit"]
+    assert loose["PBDOT_upper_limit_level"] == 0.68
 
 
-def test_results_json_carries_the_limits(tmp_path):
+def test_detection_threshold_is_honoured():
+    """The Bayes factor against the threshold, and nothing else, decides
+    between a measurement and a limit."""
+    detected = _summary_of(1e-3, ln_bf=50.0, threshold=1.0)
+    strict = _summary_of(1e-3, ln_bf=50.0, threshold=1e9)
+    assert detected["PBDOT_detected"] is True
+    assert strict["PBDOT_detected"] is False
+    assert np.isfinite(strict["PBDOT_upper_limit"])
+    assert strict["PBDOT_detection_ln_bf"] == 1e9
+
+
+def test_results_json_carries_the_limits(strong_pbdot_run, strong_pbdot_dir):
     """The summaries have to survive the trip through json.dump."""
-    import json
-
-    files = _write_decay_epochs(tmp_path, pbdot=3e-8)
-    outroot = os.path.join(str(tmp_path), "json")
-    fit_orbital_decay(
-        files,
-        outroot=outroot,
-        nlive=200,
-        dlogz=0.5,
-        seeds=1,
-        reference_epoch=_REF_MJD,
-        write_parfile=False,
-    )
-    with open(outroot + "_results.json") as fobj:
+    with open(os.path.join(str(strong_pbdot_dir), "decay_results.json")) as fobj:
         stored = json.load(fobj)
     assert "PBDOT_summary" in stored["M0"]
     assert "PBDDOT_upper_limit" in stored["M1"]
@@ -768,7 +784,12 @@ def test_results_json_carries_the_limits(tmp_path):
 def test_parfile_is_referenced_to_the_tasc_nearest_the_reference_epoch(tmp_path):
     """A --reference-epoch 0.4 orbits past a node must give a .par whose TASC and
     PB are the true ones *at the nearest node*, where PINT counts PB from; fitting
-    around the raw MJD instead biases PB by PBDOT*0.4*PB, ~1000 sigma here."""
+    around the raw MJD instead biases PB by PBDOT*0.4*PB, ~1000 sigma here.
+
+    Also checks that a non-default detection threshold and limit level reach
+    the summaries through ``fit_orbital_decay``; the parfile is built from the
+    raw samples, so neither affects the rest of this test.
+    """
     from pint.models import get_model
 
     pbdot = 3e-8
@@ -781,7 +802,13 @@ def test_parfile_is_referenced_to_the_tasc_nearest_the_reference_epoch(tmp_path)
         dlogz=0.5,
         seeds=1,
         reference_epoch=_REF_MJD + 0.4 * _PB_DAYS,
+        # Far above any real ln BF: with 0.01 s TASC errors this one is ~1e10.
+        detection_ln_bf=1e30,
+        upper_limit_level=0.68,
     )
+    assert results["M0"]["PBDOT_detection_ln_bf"] == 1e30
+    assert results["M0"]["PBDOT_detected"] is False
+    assert results["M1"]["PBDDOT_upper_limit_level"] == 0.68
     model = get_model(results["parfile"])
     tasc_out = float(model.TASC.value)
     n_orbits = round((tasc_out - _REF_MJD) / _PB_DAYS)
@@ -877,31 +904,11 @@ def test_a_cut_leaving_too_few_epochs_is_refused(tmp_path):
         prune_large_errors(epochs, max_tasc_error=100.0)
 
 
-def test_pruning_is_reported_in_the_results_json(tmp_path):
+def test_pruning_is_reported_in_the_results_json(strong_pbdot_run, strong_pbdot_dir):
     """An end-to-end run records which epochs it dropped and why, so a pruned
     result documents its own cut."""
-    files = _write_decay_epochs(tmp_path, pbdot=3e-8)
-    files.append(
-        _write_ecsv(
-            tmp_path / "wide.ecsv",
-            pepoch=_REF_MJD,
-            pb=_PB_DAYS * 86400.0,
-            tasc=_REF_MJD + 0.01,
-            tasc_spread_days=2000.0 / 86400.0,
-        )
-    )
-    results = fit_orbital_decay(
-        files,
-        outroot=os.path.join(str(tmp_path), "pruned"),
-        nlive=200,
-        dlogz=0.5,
-        seeds=2,
-        reference_epoch=_REF_MJD,
-        write_parfile=False,
-        max_tasc_error_ratio=10.0,
-    )
-    assert results["n_input_epochs"] == 10
-    assert results["n_epochs"] == 9
-    assert [os.path.basename(p["file"]) for p in results["pruned_epochs"]] == ["wide.ecsv"]
-    with open(os.path.join(str(tmp_path), "pruned_results.json")) as fobj:
+    assert strong_pbdot_run["n_input_epochs"] == 10
+    assert strong_pbdot_run["n_epochs"] == 9
+    assert [os.path.basename(p["file"]) for p in strong_pbdot_run["pruned_epochs"]] == ["wide.ecsv"]
+    with open(os.path.join(str(strong_pbdot_dir), "decay_results.json")) as fobj:
         assert json.load(fobj)["pruned_epochs"][0]["tasc_error_sec"] == pytest.approx(2000.0)
