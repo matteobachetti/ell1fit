@@ -90,7 +90,7 @@ Two refinements matter in practice, and both are supported:
 photon energy. Photons from a band where the pulse is strong carry more timing
 information than photons from a band where it is weak, and weighting them
 accordingly recovers signal that an unweighted fit discards. See
-:mod:`ell1fit.weighting`.
+:doc:`weighting`.
 
 **Self-consistent templates.** The template has to come from the data, by
 folding it — but folding requires a timing solution, which is what we are trying
