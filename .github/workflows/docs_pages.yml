@@ -1,0 +1,59 @@
+# GitHub Actions workflow that publishes the HTML documentation to GitHub Pages.
+#
+# It builds with the same tox environment as the "Documentation build" job in
+# ci_tests.yml, so what gets published is exactly what CI checked. Publishing
+# needs a one-time repository setting: Settings -> Pages -> Source: GitHub Actions.
+
+name: Publish documentation
+
+on:
+  push:
+    branches:
+    - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; a newer push supersedes a queued one, but a
+# deployment already running is allowed to finish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: 3.12
+    - name: Install base dependencies
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install tox
+    - name: Build the documentation
+      run: |
+        tox -e build_docs
+    - name: Upload the HTML
+      uses: actions/upload-pages-artifact@v3
+      with:
+        path: docs/_build/html
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+    - name: Deploy to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v4

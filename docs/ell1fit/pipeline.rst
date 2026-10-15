@@ -66,21 +66,13 @@ binary_dt_i`` on every likelihood evaluation. See
 ----------------------------
 
 Events are folded into pulse profiles using the current solution. With
-``--use-weight``, :mod:`ell1fit.weighting` additionally estimates a per-event
-weight from how the pulsed amplitude varies with energy. Each event's phase is
-projected onto the harmonic model of that observation's own pulse profile,
-which gives an unbiased per-event estimate of the local pulsed amplitude, and
-those estimates are fit against :math:`\log E` with a penalised cubic spline
-whose smoothing strength is chosen by generalised cross-validation. Nothing is
-binned in energy: energy bands hold wildly different numbers of counts, so any
-fixed binning either smears real structure where counts are plentiful or reports
-noise as signal where they are scarce.
-
-Weights are normalised into :math:`[0, 1]`, which the weighted likelihood
-requires — 1 means "trust this event's phase fully", 0 means "treat it as
-unmodulated background". Only the *shape* of the curve matters: the weighted
-profile and its noise level both scale linearly with the weights, so the peak
-normalisation is free to serve the :math:`[0, 1]` constraint alone.
+``--use-weight``, :mod:`ell1fit.weighting` additionally gives each event a
+weight in :math:`[0, 1]` that follows the pulsed amplitude at its energy. The
+amplitude is measured per event, without energy binning, and smoothed with a
+penalised spline in :math:`\log E`. The template built from the weighted fold
+is then undiluted, so that the fit's uncertainties do not depend on the overall
+scale of the weights. :doc:`weighting` explains both steps, what they gain, and
+how to read the diagnostic figures they write.
 
 3. Building templates
 ---------------------

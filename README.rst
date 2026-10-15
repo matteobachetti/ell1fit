@@ -5,6 +5,12 @@ Fit an ELL1 orbital model to pulsar data, accounting for spin derivatives
     :target: http://www.astropy.org
     :alt: Powered by Astropy Badge
 
+Documentation
+-------------
+
+The documentation is published at https://matteobachetti.github.io/ell1fit/,
+rebuilt from ``main`` on every push.
+
 
 Development
 -----------
