@@ -49,7 +49,11 @@ from ..orbital_decay_sampling import (
 #: Small enough for test runtime, per this package's convention for sampler
 #: tests; large enough that the peak-shortfall gate reports convergence.
 NLIVE = 250
-N_SEEDS = 2
+#: One nested-sampling run per fit. Every Bayes factor these tests check is
+#: several nats from its threshold, against a seed-to-seed scatter below one nat,
+#: and the samples come from the first seed either way; the multi-seed path is
+#: tested on its own, on a trivial likelihood.
+N_SEEDS = 1
 SEED = 20260824
 
 
@@ -207,6 +211,22 @@ def test_pbddot_case_bayes_factor_favors_m1(pbddot_case):
     bf = bayes_factor(pbddot_case["m0"], pbddot_case["m1"])
     assert bf["ln_bf"] > 0
     assert "M1" in bf["interpretation"]
+
+
+def test_seed_scatter_is_the_quoted_evidence_error():
+    """With several seeds the quoted log Z error is the scatter across them, not
+    dynesty's own; the fixtures above use one seed, so this is the only check."""
+
+    def loglikelihood(beta):
+        return -0.5 * beta[0] ** 2 - 0.5 * np.log(2 * np.pi)
+
+    result = run_seed_scatter(loglikelihood, [(-10.0, 10.0)], ["b0"], n_seeds=2, nlive=50)
+    evidences = [run["log_evidence"] for run in result["runs"]]
+    assert len(evidences) == 2
+    assert result["log_evidence"] == pytest.approx(np.mean(evidences))
+    assert result["log_evidence_err"] == pytest.approx(np.std(evidences, ddof=1))
+    # A unit Gaussian under a flat prior of width 20: Z = 1/20.
+    assert result["log_evidence"] == pytest.approx(-np.log(20.0), abs=0.5)
 
 
 def test_physical_from_beta_recovers_injected_pbdot_and_pbddot():
@@ -641,7 +661,7 @@ def _run_decay(directory, **kwargs):
         outroot=os.path.join(str(directory), "decay"),
         nlive=200,
         dlogz=0.5,
-        seeds=2,
+        seeds=1,
         reference_epoch=_REF_MJD,
         write_parfile=False,
     )
@@ -677,7 +697,7 @@ def strong_pbdot_run(strong_pbdot_dir):
         outroot=os.path.join(str(strong_pbdot_dir), "decay"),
         nlive=200,
         dlogz=0.5,
-        seeds=2,
+        seeds=1,
         reference_epoch=_REF_MJD,
         write_parfile=False,
         max_tasc_error_ratio=10.0,
