@@ -11,6 +11,7 @@ from ._numba_compat import float32, float64, int64, njit, prange, vectorize
 #: (``dF0``, ``dF1``, ...).
 __all__ = [
     "NonInvertibleOrbitError",
+    "_calculate_absolute_phases",
     "_calculate_phases",
     "_mjd_to_sec",
     "_second_order_coefficients",
@@ -500,9 +501,31 @@ def fast_phase(times, frequency_derivatives):
 
 
 def _calculate_phases(times_from_pepoch, parameters, tolerance=1e-8):
-    """Compute pulse phases for each file given spin and ELL1 orbital parameters."""
+    """Compute pulse phases for each file given spin and ELL1 orbital parameters.
+
+    Returns the fractional phase in [0, 1); see
+    :func:`_calculate_absolute_phases` for the unwrapped phase and the orbital
+    phase.
+    """
+    pulse_phases, _ = _calculate_absolute_phases(times_from_pepoch, parameters, tolerance)
+    return [phases_from_zero_to_one(phases) for phases in pulse_phases]
+
+
+def _calculate_absolute_phases(times_from_pepoch, parameters, tolerance=1e-8):
+    """Compute unwrapped pulse phases and orbital phases for each file.
+
+    Returns
+    -------
+    pulse_phases : list of arrays
+        Pulse phase in cycles, counted from ``PEPOCH_i`` and offset by
+        ``Phase_i``; not wrapped.
+    orbital_phases : list of arrays
+        ``(t - TASC_i) / PB_i`` wrapped to [0, 1), in the observed (not
+        deorbited) time, with the per-file epoch offsets applied.
+    """
     n_files = len(times_from_pepoch)
-    list_phases_from_zero_to_one = []
+    pulse_phases = []
+    orbital_phases = []
     pb = parameters["PB"]
 
     if not orbit_is_invertible(pb, parameters["A1"], parameters["EPS1"], parameters["EPS2"]):
@@ -579,8 +602,9 @@ def _calculate_phases(times_from_pepoch, parameters, tolerance=1e-8):
             - phase_pepoch
             + fast_phase(deorbit_times_from_pepoch.astype(float), freq_ders)
         )
-        list_phases_from_zero_to_one.append(phases_from_zero_to_one(phases.astype(float)))
-    return list_phases_from_zero_to_one
+        pulse_phases.append(phases.astype(float))
+        orbital_phases.append(np.mod((np.asarray(times_from_pepoch[i]) - tasc) / pb_i, 1.0))
+    return pulse_phases, orbital_phases
 
 
 def folded_profile(times, parameters, weights=None, nbin=16, tolerance=1e-8):

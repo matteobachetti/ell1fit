@@ -12,17 +12,24 @@ name.
 import os
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pytest
 
 from ..plotting import (
     COLUMN_WIDTH,
+    CORNER_SCATTER_NDIM,
     DEFAULT_FIGURE_FORMAT,
     FIGURE_SIZES,
+    MAX_CANVAS_PX,
+    MIN_RASTER_DPI,
     PLOT_RC_PARAMS,
+    RASTER_DPI,
     TEXT_WIDTH,
+    corner_plot_kwargs,
     current_figure_format,
     figure_path,
     figure_size,
+    fitted_raster_dpi,
     image_axes,
     plot_style_context,
     save_figure,
@@ -106,6 +113,84 @@ class TestFigurePath:
         assert figure_path("nu30401_v1.2_corner") == "nu30401_v1.2_corner.pdf"
 
 
+class TestFittedRasterDpi:
+    """The ceiling on a canvas whose size nobody chose."""
+
+    def test_an_ordinary_figure_is_untouched(self):
+        """Every figure built from a preset is orders of magnitude under the cap."""
+        for name in FIGURE_SIZES:
+            fig = plt.figure(figsize=figure_size(name))
+            assert fitted_raster_dpi(fig) == RASTER_DPI
+            plt.close(fig)
+
+    def test_an_oversized_figure_is_held_at_the_canvas_limit(self):
+        """Past the cap the resolution drops continuously, not in one step."""
+        side = 2 * MAX_CANVAS_PX / RASTER_DPI  # twice the largest full-resolution figure
+        fig = plt.figure(figsize=(side, side))
+        assert fitted_raster_dpi(fig) == pytest.approx(MAX_CANVAS_PX / side)
+        assert fitted_raster_dpi(fig) < RASTER_DPI
+        plt.close(fig)
+
+    def test_the_resolution_never_falls_below_the_legibility_floor(self):
+        """A figure nobody can read is not a cheaper figure, it is a wasted one."""
+        fig = plt.figure(figsize=(400, 400))
+        assert fitted_raster_dpi(fig) == MIN_RASTER_DPI
+        plt.close(fig)
+
+    def test_a_degenerate_size_does_not_divide_by_zero(self):
+        fig = plt.figure(figsize=(0, 0))
+        assert fitted_raster_dpi(fig) == RASTER_DPI
+        plt.close(fig)
+
+
+class TestCornerPlotKwargs:
+    """Dropping the per-sample scatter, which is what every panel rasterizes."""
+
+    def test_a_small_corner_plot_still_shows_its_samples(self):
+        """A fit of the size anyone would put in a paper is untouched."""
+        assert corner_plot_kwargs(CORNER_SCATTER_NDIM) == {}
+        assert corner_plot_kwargs(2) == {}
+
+    def test_a_large_corner_plot_drops_them(self):
+        """Past the limit the scatter goes, which is what needed a pixel canvas."""
+        assert corner_plot_kwargs(CORNER_SCATTER_NDIM + 1) == {"plot_datapoints": False}
+        assert corner_plot_kwargs(40) == {"plot_datapoints": False}
+
+    def test_a_large_corner_plot_still_comes_out_vector(self, tmp_path, clean_format, monkeypatch):
+        """Removing the scatter is what lets the format stay PDF at any size.
+
+        Measured on a twelve-parameter figure: 0.45 GB and 0.53 MB as PDF
+        without the scatter, against 6.7 GB with it, and 0.91 GB and 3.3 MB for
+        the same figure written as JPEG instead.
+        """
+        from .. import mcmc_utils
+
+        monkeypatch.setattr(mcmc_utils.corner, "corner", lambda *a, **k: plt.figure())
+        path = mcmc_utils.plot_mcmc_results(
+            flat_samples=np.zeros((10, CORNER_SCATTER_NDIM + 4)),
+            fname=os.path.join(str(tmp_path), "corner"),
+        )
+        assert path.endswith("." + DEFAULT_FIGURE_FORMAT)
+
+    def test_a_caller_can_ask_for_them_back(self, tmp_path, clean_format, monkeypatch):
+        """These are defaults, applied before the caller's own keywords."""
+        from .. import mcmc_utils
+
+        seen = {}
+
+        def fake_corner(*args, **kwargs):
+            seen.update(kwargs)
+            return plt.figure()
+
+        monkeypatch.setattr(mcmc_utils.corner, "corner", fake_corner)
+        mcmc_utils.plot_mcmc_results(
+            flat_samples=np.zeros((10, CORNER_SCATTER_NDIM)),
+            fname=os.path.join(str(tmp_path), "corner"),
+            plot_datapoints=True,
+        )
+        assert seen["plot_datapoints"] is True
+
+
 class TestSaveFigure:
     def test_writes_the_file_and_returns_its_path(self, tmp_path, clean_format):
         fig = plt.figure()
@@ -125,6 +210,46 @@ class TestSaveFigure:
         path = save_figure(fig, os.path.join(str(tmp_path), "fig"), fmt="png")
         assert path.endswith(".png")
         assert os.path.getsize(path) > 0
+
+    def test_a_figure_too_large_for_its_format_falls_back_to_a_raster(self, tmp_path, clean_format):
+        """A save that runs out of memory writes a JPEG instead of taking the run down.
+
+        A whole fit used to be lost at the last step, after the chain was safely
+        on disk, because the final corner plot could not be drawn.
+        """
+        fig = plt.figure()
+        real_savefig = fig.savefig
+        attempted = []
+
+        def savefig(fname, *args, **kwargs):
+            attempted.append(fname)
+            if fname.endswith(".pdf"):
+                raise MemoryError("std::bad_alloc")
+            return real_savefig(fname, *args, **kwargs)
+
+        fig.savefig = savefig
+        path = save_figure(fig, os.path.join(str(tmp_path), "fig"))
+
+        assert path == os.path.join(str(tmp_path), "fig.jpg")
+        assert os.path.getsize(path) > 0
+        assert [os.path.basename(p) for p in attempted] == ["fig.pdf", "fig.jpg"]
+        # A half-written PDF is not a figure, and anything globbing the output
+        # directory would treat it as one.
+        assert not os.path.exists(os.path.join(str(tmp_path), "fig.pdf"))
+
+    def test_a_raster_that_runs_out_of_memory_is_not_retried(self, tmp_path, clean_format):
+        """Falling back from JPEG to JPEG would only fail again, more slowly."""
+        fig = plt.figure()
+
+        def savefig(fname, *args, **kwargs):
+            raise MemoryError("std::bad_alloc")
+
+        fig.savefig = savefig
+        with pytest.raises(MemoryError):
+            save_figure(fig, os.path.join(str(tmp_path), "fig"), fmt="jpg")
+        # A save that fails for good must still not leak the figure -- and a
+        # figure this large is the one that can least afford to be held.
+        assert fig.number not in plt.get_fignums()
 
     def test_keeps_the_figure_exactly_the_size_it_was_built(self, tmp_path, clean_format):
         # The whole point of the presets: a figure declared 3.5 inches wide has

@@ -41,11 +41,14 @@ from .models import ORBITAL_DERIVATIVES, _load_and_validate_models, _orbital_epo
 from .orbital_decay_model import spurious_tasc_from_pbdot_mismatch
 
 __all__ = [
+    "MIN_EPOCHS_AFTER_PRUNING",
     "EpochOrbit",
+    "EpochPruningError",
     "OrbitalModelCompatibilityError",
     "build_reference_model",
     "check_compatibility",
     "load_epochs",
+    "prune_large_errors",
     "read_result_table",
     "retrieve_value_and_error",
 ]
@@ -54,6 +57,10 @@ __all__ = [
 class OrbitalModelCompatibilityError(RuntimeError):
     """An input file is not a valid single-epoch TASC result, or its stored
     orbital model is inconsistent with the other input files'."""
+
+
+class EpochPruningError(RuntimeError):
+    """The requested error-bar cut would leave too few epochs to fit."""
 
 
 #: Columns every input file must carry, unsuffixed, to be a valid single-epoch
@@ -192,7 +199,7 @@ class EpochOrbit:
         # parameter parser (floatParameter._set_quantity) silently multiplies any
         # PBDOT magnitude above 1e-7 by 1e-12, assuming it was written in the
         # "x1e-12" pulsar-timing convention -- corrupting a real PBDOT by 12
-        # orders of magnitude with no error raised. Real M82 X-2 values
+        # orders of magnitude with no error raised. Realistic values
         # (~5.7e-8) happen to stay under that threshold, but nothing here should
         # rely on that. Instead PBDOT is carried separately and applied to the
         # parsed model via ``.quantity`` in _build_models, the same fix already
@@ -230,6 +237,126 @@ def load_epochs(files):
     return epochs
 
 
+#: Fewest epochs an error-bar cut may leave behind. M1, the widest model
+#: ``ell1decay`` fits, has four free parameters, so four points is already the
+#: degenerate case of an exact interpolation with no degrees of freedom left;
+#: cutting below it cannot produce a meaningful fit and is treated as an error
+#: in the cut, not as something to warn about and continue past.
+MIN_EPOCHS_AFTER_PRUNING = 4
+
+
+def _tasc_error_seconds(epoch):
+    """The *wider* of an epoch's two asymmetric TASC error bars, in seconds.
+
+    The wider side, not the narrower one :func:`check_compatibility` uses:
+    that function is asking how much room a systematic has to hide inside the
+    statistical uncertainty, where the narrow side is the conservative
+    choice, whereas this one is asking how badly determined the epoch is
+    overall, where it is the wide side that says so.
+    """
+    return max(epoch.tasc_err) * 86400.0
+
+
+def prune_large_errors(
+    epochs,
+    max_tasc_error=None,
+    max_tasc_error_ratio=None,
+    min_epochs=MIN_EPOCHS_AFTER_PRUNING,
+):
+    """Drop epochs whose fitted TASC is too poorly determined to be worth using.
+
+    Both cuts are off unless asked for, so a run without either is bit-for-bit
+    the run ell1decay did before this existed.
+
+    The point of cutting at all is *not* that a wide error bar drags the fit
+    around -- the likelihood weights by ``1/sigma**2``, so an epoch ten times
+    worse than its neighbours already carries a hundredth of their weight and
+    is close to inert. It is that a TASC posterior which comes back hundreds
+    of times wider than its siblings' has usually not converged onto a single
+    mode, and its quoted 1-sigma is then not a 1-sigma at all -- neither the
+    width nor the central value can be trusted, at any weight.
+
+    Parameters
+    ----------
+    epochs : list of EpochOrbit
+    max_tasc_error : float or None
+        Absolute cut: drop any epoch whose TASC uncertainty exceeds this many
+        seconds.
+    max_tasc_error_ratio : float or None
+        Relative cut: drop any epoch whose TASC uncertainty exceeds this
+        multiple of the *median* TASC uncertainty across all the input
+        epochs. Scale-free, so it needs no per-target tuning; the median (not
+        the mean) so that the outliers being cut do not set the threshold
+        that judges them.
+    min_epochs : int
+        Refuse the cut if it would leave fewer than this many epochs.
+
+    Returns
+    -------
+    (kept, pruned) : (list of EpochOrbit, list of dict)
+        ``pruned`` records one dict per dropped epoch -- ``file``,
+        ``pepoch``, ``tasc_error_sec``, ``tasc_error_ratio`` and a
+        human-readable ``reason`` -- for the caller to write into its results
+        file, so a pruned run documents its own cut.
+
+    Raises
+    ------
+    EpochPruningError
+        If the cut would leave fewer than ``min_epochs`` epochs.
+    """
+    if max_tasc_error is None and max_tasc_error_ratio is None:
+        return list(epochs), []
+
+    errors = np.array([_tasc_error_seconds(e) for e in epochs])
+    median_error = float(np.median(errors)) if errors.size else 0.0
+
+    kept, pruned = [], []
+    for epoch, error in zip(epochs, errors):
+        ratio = error / median_error if median_error > 0 else np.inf
+        reasons = []
+        if max_tasc_error is not None and error > max_tasc_error:
+            reasons.append(
+                f"TASC error {error:.4g} s exceeds --max-tasc-error {max_tasc_error:g} s"
+            )
+        if max_tasc_error_ratio is not None and median_error > 0 and ratio > max_tasc_error_ratio:
+            reasons.append(
+                f"TASC error {error:.4g} s is {ratio:.3g}x the median {median_error:.4g} s, "
+                f"over --max-tasc-error-ratio {max_tasc_error_ratio:g}"
+            )
+        if reasons:
+            pruned.append(
+                {
+                    "file": epoch.fname,
+                    "pepoch": float(epoch.pepoch),
+                    "tasc_error_sec": float(error),
+                    "tasc_error_ratio": float(ratio) if np.isfinite(ratio) else None,
+                    "reason": "; ".join(reasons),
+                }
+            )
+        else:
+            kept.append(epoch)
+
+    if len(kept) < min_epochs:
+        raise EpochPruningError(
+            f"The requested TASC error-bar cut would keep only {len(kept)} of {len(epochs)} "
+            f"epochs, fewer than the {min_epochs} needed to fit M1's four parameters. "
+            "Loosen --max-tasc-error/--max-tasc-error-ratio, or drop the bad epochs from the "
+            "input list by hand."
+        )
+
+    for record in pruned:
+        logging.warning("Pruning %s: %s", record["file"], record["reason"])
+    if pruned:
+        logging.info(
+            "Kept %d of %d epochs after the TASC error-bar cut (median error %.4g s)",
+            len(kept),
+            len(epochs),
+            median_error,
+        )
+
+    return kept, pruned
+
+
 def _build_models(epochs):
     """``ell1fit.models._load_and_validate_models`` on every epoch's synthetic
     parfile -- reused, not reimplemented -- plus each epoch's PBDOT, applied via
@@ -264,7 +391,7 @@ def _build_models(epochs):
 #: zero -- PB is a plain linear function of PBDOT under change_binary_epoch,
 #: nothing approximate about it. In practice a few milliseconds of residual
 #: shows up even between files from the same consistent processing batch
-#: (observed: ~13 ms on real M82 X-2 data), presumably from whatever rounding
+#: (observed: ~13 ms on real data), presumably from whatever rounding
 #: the upstream process that generated each file's fixed PB input used. This
 #: is generous enough to absorb that and still catch a genuinely different
 #: orbital model (PB0 itself wrong, or files from different targets/BINARY

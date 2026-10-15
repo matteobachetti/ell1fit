@@ -26,10 +26,12 @@ from .logging import configure_logging
 from .plotting import add_figure_format_argument, set_figure_format
 from .mcmc_utils import plot_mcmc_comparison
 from .orbital_decay_data import (
+    EpochPruningError,
     OrbitalModelCompatibilityError,
     build_reference_model,
     check_compatibility,
     load_epochs,
+    prune_large_errors,
 )
 from .orbital_decay_model import (
     delta_tasc_model,
@@ -265,6 +267,8 @@ def fit_orbital_decay(
     seeds=3,
     compat_tolerance=1e-9,
     pbdot_impact_fraction=1.0,
+    max_tasc_error=None,
+    max_tasc_error_ratio=None,
     reference_epoch=None,
     write_parfile=True,
     upper_limit_level=DEFAULT_UPPER_LIMIT_LEVEL,
@@ -274,6 +278,11 @@ def fit_orbital_decay(
 
     Parameters
     ----------
+    max_tasc_error, max_tasc_error_ratio : float or None
+        Error-bar cuts applied before anything else looks at the epochs, so a
+        badly determined one cannot trip the compatibility checks or drag the
+        reference epoch around either. Both off by default. See
+        :func:`ell1fit.orbital_decay_data.prune_large_errors`.
     upper_limit_level : float
         Credible level of the magnitude upper limit quoted for a derivative
         that is not detected. See :mod:`ell1fit.limits`.
@@ -288,6 +297,10 @@ def fit_orbital_decay(
         Also written to ``{outroot}_results.json``.
     """
     epochs = load_epochs(files)
+    n_input_epochs = len(epochs)
+    epochs, pruned_epochs = prune_large_errors(
+        epochs, max_tasc_error=max_tasc_error, max_tasc_error_ratio=max_tasc_error_ratio
+    )
     check_compatibility(
         epochs, tolerance=compat_tolerance, pbdot_impact_fraction=pbdot_impact_fraction
     )
@@ -389,6 +402,8 @@ def fit_orbital_decay(
 
     results = {
         "n_epochs": len(epochs),
+        "n_input_epochs": n_input_epochs,
+        "pruned_epochs": pruned_epochs,
         "baseline_days": baseline_days,
         "reference_epoch": float(ref_model.PEPOCH.value),
         "reference_tasc": float(ref_model.TASC.value),
@@ -481,6 +496,27 @@ def main(args=None):
         ),
     )
     parser.add_argument(
+        "--max-tasc-error",
+        type=float,
+        default=None,
+        dest="max_tasc_error",
+        help=(
+            "Drop any epoch whose fitted TASC uncertainty exceeds this many seconds "
+            "(default: no cut)"
+        ),
+    )
+    parser.add_argument(
+        "--max-tasc-error-ratio",
+        type=float,
+        default=None,
+        dest="max_tasc_error_ratio",
+        help=(
+            "Drop any epoch whose fitted TASC uncertainty exceeds this multiple of the "
+            "median across all input epochs -- a scale-free way to cut the few badly "
+            "determined ones without looking up an absolute number (default: no cut)"
+        ),
+    )
+    parser.add_argument(
         "--reference-epoch",
         type=float,
         default=None,
@@ -533,12 +569,14 @@ def main(args=None):
             seeds=parsed.seeds,
             compat_tolerance=parsed.compat_tolerance,
             pbdot_impact_fraction=parsed.pbdot_impact_fraction,
+            max_tasc_error=parsed.max_tasc_error,
+            max_tasc_error_ratio=parsed.max_tasc_error_ratio,
             reference_epoch=parsed.reference_epoch,
             write_parfile=parsed.write_parfile,
             upper_limit_level=parsed.upper_limit_level,
             detection_ln_bf=parsed.detection_ln_bf,
         )
-    except OrbitalModelCompatibilityError as exc:
+    except (OrbitalModelCompatibilityError, EpochPruningError) as exc:
         logging.error(str(exc))
         raise SystemExit(1) from exc
 

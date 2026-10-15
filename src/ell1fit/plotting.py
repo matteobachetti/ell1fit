@@ -51,6 +51,7 @@ should follow too:
 * a figure destined for a paper carries no title. A diagnostic may.
 """
 
+import logging
 import os
 
 import matplotlib as mpl
@@ -60,20 +61,26 @@ __all__ = [
     "BAND_ALPHA",
     "COLUMN_WIDTH",
     "CORNER_LABEL_SIZE",
+    "CORNER_SCATTER_NDIM",
     "DATA_COLOR",
     "DEFAULT_FIGURE_FORMAT",
     "FIGURE_FORMATS",
     "FIGURE_SIZES",
     "GUIDE_COLOR",
+    "LARGE_FIGURE_FORMAT",
+    "MAX_CANVAS_PX",
+    "MIN_RASTER_DPI",
     "PLOT_RC_PARAMS",
     "RASTER_DPI",
     "SUMMARY_TITLE_SIZE",
     "TEXT_WIDTH",
     "WIDE_BAND_ALPHA",
     "add_figure_format_argument",
+    "corner_plot_kwargs",
     "current_figure_format",
     "figure_path",
     "figure_size",
+    "fitted_raster_dpi",
     "image_axes",
     "plot_style_context",
     "save_figure",
@@ -118,6 +125,45 @@ SUMMARY_TITLE_SIZE = BASE_FONT_SIZE - 2.0
 
 #: Resolution used whenever a figure is written in a raster format.
 RASTER_DPI = 300
+
+
+#: What a figure too large to be written as vector falls back to. JPEG rather
+#: than PNG because these are diagnostics read by zooming in, where a file half
+#: the size matters more than the artifacts described under "Output format" in
+#: ``docs/ell1fit/figures.rst``.
+LARGE_FIGURE_FORMAT = "jpg"
+
+#: Longest side, in pixels, a raster canvas is allowed to reach before the
+#: resolution is reduced to fit. It is what bounds the cost of a figure whose
+#: size nobody chose; at :data:`RASTER_DPI` it leaves every ordinary figure --
+#: and every corner plot up to about twelve parameters -- untouched.
+MAX_CANVAS_PX = 8000
+
+#: The resolution :func:`fitted_raster_dpi` will not go below, whatever
+#: :data:`MAX_CANVAS_PX` would ask for. The smallest text in these figures is
+#: 7 pt, which at 150 dpi renders about 15 pixels tall -- the size of ordinary
+#: screen text, and checked by eye to be clearly legible. Below that the axis
+#: labels start to go, and an illegible diagnostic is not worth the memory it
+#: saves.
+MIN_RASTER_DPI = 150
+
+#: Number of parameters above which a corner plot stops drawing the individual
+#: samples behind its contours.
+#:
+#: This is the whole of the size problem. A corner plot grows by about 2.1
+#: inches per parameter in each direction, and :func:`corner.corner` marks the
+#: scatter of individual samples in every one of its ``n(n-1)/2`` panels as
+#: rasterized. A vector back-end honours that by allocating one *whole-canvas*
+#: pixel buffer per panel, so the cost grows as the square of the parameter
+#: count: measured peak memory for a twelve-parameter fit was 6.7 GB, which is
+#: what a cluster run died of. Without the scatter the same figure has no
+#: rasterized element at all, needs no canvas, and costs 0.45 GB.
+#:
+#: Eight is where a corner plot also stops being a figure anyone would place in
+#: a paper -- it is 18 inches on a side -- and where the point cloud stops
+#: being readable anyway: each panel is by then small enough that the samples
+#: are a grey smudge under the contours that already describe them.
+CORNER_SCATTER_NDIM = 8
 
 #: Measurements.
 DATA_COLOR = "black"
@@ -324,6 +370,98 @@ def figure_path(path, fmt=None):
     return f"{path}.{fmt}"
 
 
+#: Formats there is no point retrying a failed save in: JPEG is what the
+#: fallback writes, and PNG holds the same uncompressed canvas in memory.
+_NO_CHEAPER_FALLBACK = frozenset({".jpg", ".jpeg", ".png"})
+
+
+def _save_smaller(fig, fname, dpi, kwargs):
+    """Rewrite a figure that ran out of memory as :data:`LARGE_FIGURE_FORMAT`.
+
+    Called only from :func:`save_figure`'s ``except MemoryError`` branch, so a
+    bare ``raise`` here re-raises that error with its original traceback.
+    """
+    root, ext = os.path.splitext(fname)
+    if ext.lower() in _NO_CHEAPER_FALLBACK:
+        raise
+    fallback = f"{root}.{LARGE_FIGURE_FORMAT}"
+    logging.warning(
+        f"Ran out of memory writing {fname}: a vector canvas needs one whole-figure "
+        f"pixel buffer per rasterized element. Falling back to {fallback}. It stays "
+        f"readable zoomed in, and `img2pdf {os.path.basename(fallback)} -o "
+        f"{os.path.basename(root)}.pdf` wraps it back into a PDF if one is needed."
+    )
+    # The partial file is not a figure and must not be left looking like one:
+    # anything downstream globbing for the output would pick it up.
+    if os.path.exists(fname):
+        os.remove(fname)
+    fig.savefig(fallback, dpi=dpi, **kwargs)
+    return fallback
+
+
+def fitted_raster_dpi(fig):
+    """The resolution ``fig`` can be rasterized at without an unbounded canvas.
+
+    :data:`RASTER_DPI` for anything of a size somebody chose -- every figure
+    built from :func:`figure_size` is orders of magnitude below the ceiling.
+    It only bites on a figure whose size is a consequence rather than a
+    decision, which in this package means a corner plot: it grows by about
+    2.1 inches per parameter in each direction, so a twenty-epoch fit asks for
+    a canvas 13000 pixels on a side.
+
+    The resolution is then reduced continuously to hold the canvas at
+    :data:`MAX_CANVAS_PX`, and never below :data:`MIN_RASTER_DPI` -- past that
+    point the labels stop being legible, and a figure nobody can read is not a
+    cheaper figure but a wasted one.
+
+    Parameters
+    ----------
+    fig : matplotlib.figure.Figure
+        The figure about to be written.
+
+    Returns
+    -------
+    float
+        Resolution in dots per inch.
+    """
+    side = max(fig.get_size_inches())
+    if side <= 0:
+        return RASTER_DPI
+    dpi = min(RASTER_DPI, max(MIN_RASTER_DPI, MAX_CANVAS_PX / side))
+    if dpi < RASTER_DPI:
+        logging.info(
+            f"Figure is {side:.0f} inches on its longer side: writing it at {dpi:.0f} dpi "
+            f"instead of {RASTER_DPI:.0f}, to hold the canvas near {MAX_CANVAS_PX} pixels."
+        )
+    return dpi
+
+
+def corner_plot_kwargs(ndim):
+    """Extra arguments :func:`corner.corner` should be called with for ``ndim``.
+
+    Empty up to :data:`CORNER_SCATTER_NDIM`. Above it the per-sample scatter
+    is turned off, for the reasons on that constant. A caller's own keywords
+    are applied after these, so an explicit choice still wins.
+
+    Parameters
+    ----------
+    ndim : int
+        Number of parameters the corner plot covers.
+
+    Returns
+    -------
+    dict
+        Keywords to pass before the caller's own.
+    """
+    if ndim <= CORNER_SCATTER_NDIM:
+        return {}
+    logging.info(
+        f"Corner plot has {ndim} parameters (over {CORNER_SCATTER_NDIM}): not drawing "
+        "the individual samples behind the contours, which is what makes it expensive."
+    )
+    return {"plot_datapoints": False}
+
+
 def save_figure(fig, path, fmt=None, dpi=None, **kwargs):
     """Write a figure and close it.
 
@@ -333,8 +471,19 @@ def save_figure(fig, path, fmt=None, dpi=None, **kwargs):
 
     ``dpi`` is passed explicitly rather than left to the rc, so that a figure
     saved outside :func:`plot_style_context` still comes out at
-    :data:`RASTER_DPI` instead of matplotlib's 100. It is ignored by the vector
-    formats.
+    :data:`RASTER_DPI` instead of matplotlib's 100. Left unset it comes from
+    :func:`fitted_raster_dpi`, which is :data:`RASTER_DPI` for every figure of
+    a size somebody chose and lower only for one that outgrew the ceiling. It
+    is *not* ignored by the vector formats: a rasterized element inside a PDF
+    is rendered at this resolution too.
+
+    A figure large enough to exhaust memory while being written falls back to
+    :data:`LARGE_FIGURE_FORMAT` rather than taking the run down with it. A
+    whole fit used to be lost at the last step, after the sampling was over and
+    the chain was safely on disk, because the final corner plot could not be
+    drawn. :func:`corner_plot_kwargs` and :func:`fitted_raster_dpi` are meant
+    to keep that from arising; this is the net underneath them, for the figure
+    nobody predicted.
 
     Parameters
     ----------
@@ -350,13 +499,23 @@ def save_figure(fig, path, fmt=None, dpi=None, **kwargs):
     Returns
     -------
     str
-        The path written, for logging and for tests.
+        The path written -- which is not always the path asked for, if the
+        fallback above fired. Callers log it rather than reconstructing it.
     """
     import matplotlib.pyplot as plt
 
     fname = figure_path(path, fmt=fmt)
-    fig.savefig(fname, dpi=RASTER_DPI if dpi is None else dpi, **kwargs)
-    plt.close(fig)
+    dpi = fitted_raster_dpi(fig) if dpi is None else dpi
+    try:
+        fig.savefig(fname, dpi=dpi, **kwargs)
+    except MemoryError:
+        fname = _save_smaller(fig, fname, dpi, kwargs)
+    finally:
+        # In ``finally`` rather than after the ``try``: a save that fails for
+        # good would otherwise leak the very figure this function closes on
+        # everyone's behalf, and a figure that large is the one that can least
+        # afford to be held.
+        plt.close(fig)
     return fname
 
 

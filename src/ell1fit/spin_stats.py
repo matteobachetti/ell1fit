@@ -707,6 +707,7 @@ def spin_statistics(
             difference / np.hypot(secular["F1"][1], local["mean"][1])
         )
 
+    logging.info(f"Reference F0 = {fit(0):.5e} Hz at MJD {reference_mjd:.1f}, ")
     logging.info(
         f"Secular F1 = {secular['F1'][0]:.3e} +- {secular['F1'][1]:.1e} Hz/s "
         f"(F0 scatter {secular['scatter_hz']:.2e} Hz around the degree-{degree} trend)"

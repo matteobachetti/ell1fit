@@ -7,6 +7,7 @@ import pytest
 import numpy as np
 from astropy.table import Table
 from ..phase_utils import NonInvertibleOrbitError, _calculate_phases
+from ..phase_utils import _calculate_absolute_phases
 from ..phase_utils import add_circular_orbit_numba, add_ell1_orbit_numba
 from ..phase_utils import orbit_is_invertible
 from ..phase_utils import simple_circular_deorbit_numba, simple_ell1_deorbit_numba
@@ -299,6 +300,31 @@ def test_phases_are_flat_in_pbdot():
         assert np.array_equal(perturbed, reference), (
             f"PBDOT={pbdot} changed the phases: it is no longer an inert parameter"
         )
+
+
+def test_absolute_phases_wrap_to_the_fitted_phases():
+    """The unwrapped phase ``ell1fold`` saves must be exactly what the fit folds with.
+
+    Also pins the orbital phase: zero at ``TASC`` and advancing by one per ``PB``.
+    """
+    parameters = {
+        "PB": 30000.0,
+        "A1": 1.0,
+        "TASC": 57000.1,
+        "EPS1": 1e-4,
+        "EPS2": -2e-4,
+        "PEPOCH_0": 57000.0,
+        "F0_0": 100.0,
+        "F1_0": -1e-10,
+        "Phase_0": 0.3,
+    }
+    tasc = 0.1 * 86400
+    times = [np.array([tasc, tasc + 7500.0, tasc + 30000.0 * 3.5, 1e6])]
+
+    pulse, orbit = _calculate_absolute_phases(times, parameters)
+    assert np.array_equal(pulse[0] - np.floor(pulse[0]), _calculate_phases(times, parameters)[0])
+    assert np.ptp(pulse[0]) > 1e7  # genuinely unwrapped
+    assert np.allclose(orbit[0][:3], [0.0, 0.25, 0.5])
 
 
 def _kepler_delay_over_x(phi, e, om):
@@ -660,3 +686,45 @@ def test_jax_posterior_follows_a1dot_like_the_numba_one(tmp_path):
         f"the log-posterior barely moved over the probed A1DOT range ({values}): "
         "this comparison would pass even if both paths ignored A1DOT"
     )
+
+
+def _model_with_stale_start_stop(tmp_path):
+    """The test parfile plus START/FINISH far from any data, with FINISH before START."""
+    from pint.models import get_model
+
+    datadir = os.path.join(os.path.dirname(__file__), "data")
+    parfile = str(tmp_path / "stale.par")
+    text = open(os.path.join(datadir, "events0.par")).read()
+    open(parfile, "w").write(text + "START 50000\nFINISH 49000\n")
+    return get_model(parfile)
+
+
+def test_results_start_stop_are_the_data_span(tmp_path):
+    """Start/Stop in the results are the first and last event, even when the parfile
+    carries START/FINISH inherited from an old ephemeris."""
+    from ..pipeline import _enrich_results_with_observation_metadata
+
+    model = _model_with_stale_start_stop(tmp_path)
+    pepoch = model.PEPOCH.value
+    times = np.array([0.0, -3000.0, 5000.0])  # not sorted
+    results = _enrich_results_with_observation_metadata(
+        {}, [times], [pepoch], ["f.evt"], [1000.0], [0.1], [np.ones(8)], 1, None, 10
+    )
+    assert results["Start_0"] == pytest.approx(pepoch - 3000 / 86400, abs=1e-9)
+    assert results["Stop_0"] == pytest.approx(pepoch + 5000 / 86400, abs=1e-9)
+
+
+def test_parfile_start_stop_follow_the_results(tmp_path):
+    """The written parfile's START/FINISH (PINT's name for the stop time) are the results'
+    data span, so a stale span in the input parfile is not carried forward to the next fit."""
+    from pint.models import get_model
+    from ..create_parfile import update_model
+
+    model = _model_with_stale_start_stop(tmp_path)
+    row = {"PEPOCH": model.PEPOCH.value, "Start": 56356.5, "Stop": 56357.5}
+    written = str(tmp_path / "out.par")
+    with open(written, "w") as fobj:
+        fobj.write(update_model(model, row, include_info=False).as_parfile(include_info=False))
+    reread = get_model(written)
+    assert reread.START.value == pytest.approx(56356.5, abs=1e-9)
+    assert reread.FINISH.value == pytest.approx(56357.5, abs=1e-9)

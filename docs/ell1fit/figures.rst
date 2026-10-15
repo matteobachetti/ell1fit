@@ -143,39 +143,52 @@ public plotting functions take an ``fname`` argument, and
 :func:`ell1fit.plotting.figure_path` leaves a path that already carries an image
 extension alone; only a bare output root picks up the run's format.
 
-Adding a figure
----------------
+Large corner plots are the exception
+------------------------------------
 
-.. code-block:: python
+Every other figure in the package is a size somebody chose. A corner plot is
+not: it grows by about 2.1 inches per parameter in each direction, and with a
+per-file ``Phase_i`` nuisance parameter the parameter count grows with the
+number of observations. A twenty-epoch fit is a fifty-inch figure.
 
-    import matplotlib.pyplot as plt
+That is not merely large. :func:`corner.corner` marks the scatter of individual
+samples in each of its ``n(n-1)/2`` panels as rasterized, and a vector back-end
+honours that by allocating one *whole-canvas* pixel buffer per panel at 300 dpi
+— so the cost grows as the square of the parameter count. A twelve-parameter
+fit needs 6.7 GB to write a PDF, which is what a cluster run once died of, at
+the very last step, after the sampling was over and the chain was safely on
+disk.
 
-    from ell1fit.plotting import DATA_COLOR, figure_size, plot_style_context, save_figure
+So above :data:`ell1fit.plotting.CORNER_SCATTER_NDIM` parameters the scatter is
+not drawn. That is the whole fix: with no rasterized element left, the figure
+needs no canvas, and the vector back-end goes back to being the cheapest option
+as well as the most readable one. Measured, for 10000 samples:
 
+==========  ==============  ==============  ==============
+Parameters  PDF, scatter    PDF, no         JPEG, no
+            on              scatter         scatter
+==========  ==============  ==============  ==============
+12          6.7 GB          0.45 GB         0.91 GB
+20          —               0.67 GB         1.14 GB
+28          —               0.98 GB         1.60 GB
+==========  ==============  ==============  ==============
 
-    def plot_something(x, y, yerr, fname="something"):
-        with plot_style_context():
-            fig, ax = plt.subplots(figsize=figure_size("column"), layout="constrained")
-            ax.errorbar(x, y, yerr=yerr, fmt="o", color=DATA_COLOR, label="data")
-            ax.set_xlabel("days since reference epoch")
-            ax.set_ylabel("something (s)")
-            ax.legend()
-            return save_figure(fig, fname)
+Nothing is lost by it. At this many parameters each panel is small enough that
+the point cloud is a grey smudge under the contours that already describe it,
+and the figure has long stopped being something anyone would place in a paper.
 
-:func:`ell1fit.plotting.save_figure` writes the file, closes the figure and
-returns the path it wrote. Closing there rather than at the call site is not
-tidiness: two of the corner-plot writers used to leak a figure per call, and one
-of them fires every thousand sampler iterations.
+Two guards sit underneath, for the figure nobody predicted:
 
-What is and is not checked
---------------------------
+* :func:`ell1fit.plotting.fitted_raster_dpi` holds any raster canvas at
+  :data:`ell1fit.plotting.MAX_CANVAS_PX` pixels on its longer side, lowering the
+  resolution continuously to fit but never below
+  :data:`ell1fit.plotting.MIN_RASTER_DPI`. The floor is where legibility goes:
+  the smallest text here is 7 pt, which at 150 dpi renders about 15 pixels tall,
+  the size of ordinary screen text. It is a no-op for every figure built from a
+  preset, and bites only on a raster-format run of an oversized figure.
+* :func:`ell1fit.plotting.save_figure` catches a ``MemoryError`` from any save,
+  warns, and retries in JPEG rather than taking the run down. ``img2pdf`` wraps
+  the result back into a PDF if one is needed.
 
-``src/ell1fit/tests/test_plotting.py`` checks the conventions themselves — that
-every preset is one of the two journal widths, that the grid is behind the data,
-that the style carries no fixed margins and does not crop what it saves, that
-fonts embed as TrueType. A figure whose size is part of its contract also
-asserts it directly, by capturing ``Figure.savefig`` and reading back
-``get_size_inches``.
-
-What none of this checks is whether a figure still *shows* anything. See
-:doc:`limitations`.
+One limit neither guard covers: a PDF page cannot exceed 200 inches, which a
+corner plot reaches at about 94 parameters.

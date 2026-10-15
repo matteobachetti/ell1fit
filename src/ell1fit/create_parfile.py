@@ -83,6 +83,12 @@ def update_model(model, value_dict, include_info=True):
     if PEPOCH != new_model.PEPOCH.value:
         new_model.PEPOCH.value = PEPOCH
 
+    # The fitted data span replaces any START/FINISH inherited from the input parfile.
+    # FINISH is PINT's name for the stop time; a STOP line is ignored on reading.
+    for par, key in (("START", "Start"), ("FINISH", "Stop")):
+        if key in value_dict:
+            getattr(new_model, par).value = value_dict[key]
+
     for par in pars:
         if f"d{par}_mean" not in value_dict:
             continue
