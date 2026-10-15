@@ -17,6 +17,11 @@ import os
 # anywhere, which is why it lives in conftest and not in a fixture.
 os.environ.setdefault("MPLBACKEND", "agg")
 
+# Tests marked ``@pytest.mark.slow`` are skipped unless pytest gets
+# ``--run-slow``. Both the marker and the option come from the pytest-astropy
+# plugin (in the ``test`` extras), as in Stingray; CI runs them in jobs of their
+# own with ``-m slow --run-slow``.
+
 
 try:
     from pytest_astropy_header.display import PYTEST_HEADER_MODULES, TESTED_VERSIONS

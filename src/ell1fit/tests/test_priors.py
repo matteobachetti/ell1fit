@@ -211,6 +211,7 @@ def test_cli_reports_a_malformed_prior_as_a_usage_error():
         main_ell1fit(["nonexistent.nc", "--prior", "F1:lorentzian:0,1"])
 
 
+@pytest.mark.slow
 def test_end_to_end_a_narrow_prior_constrains_the_chain(dataset, tmp_path):
     """The whole path: a ``--prior`` on the command line bounds the posterior.
 

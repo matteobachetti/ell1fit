@@ -443,6 +443,7 @@ def _write_run(tmp_path):
     return root, flat_chain, initial, factor
 
 
+@pytest.mark.slow
 def test_load_eps_samples_round_trip(tmp_path):
     """The loader finds the chain beside the table and undoes the scaling."""
     root, flat_chain, initial, factor = _write_run(tmp_path)

@@ -132,6 +132,7 @@ def test_weights_are_flat_when_the_pulsed_fraction_is():
     assert weights.min() > 0.3
 
 
+@pytest.mark.slow
 def test_weighting_recovers_pulsed_signal():
     """Weighting must raise the weighted Z^2 above the unweighted one."""
     from ..phase_utils import _calculate_phases
