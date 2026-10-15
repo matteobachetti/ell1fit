@@ -103,6 +103,7 @@ def test_preconditioning_equalises_the_scales(state):
 SAME_OPTIMUM = 0.01
 
 
+@pytest.mark.slow
 def test_preconditioning_helps_the_optimizer_find_the_best_optimum(state):
     """The point of the exercise: every start should reach the same optimum.
 

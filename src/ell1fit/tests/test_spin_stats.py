@@ -3,6 +3,7 @@
 import json
 
 import numpy as np
+import pytest
 from astropy.table import Table
 
 from ..spin_periodicity import (
@@ -39,6 +40,7 @@ def test_scatter_fit_is_weighted_least_squares_when_consistent():
     assert np.isclose(fit.errors[0], w.sum() ** -0.5)
 
 
+@pytest.mark.slow
 def test_cli_secular_and_local_spin(tmp_path):
     """End to end on an extra table: a spin-down secular trend with local spin-up
     episodes is reported as such, the periodicity search runs on F1 and the pulsed

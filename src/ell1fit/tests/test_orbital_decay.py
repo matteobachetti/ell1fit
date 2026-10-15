@@ -138,6 +138,7 @@ def pbddot_case():
     }
 
 
+@pytest.mark.slow
 def test_null_case_recovers_beta_within_3sigma(null_case):
     beta_16, beta_84 = np.percentile(null_case["m0"]["flat_samples"], [16, 84], axis=0)
     sigma = (beta_84 - beta_16) / 2
@@ -145,6 +146,7 @@ def test_null_case_recovers_beta_within_3sigma(null_case):
     assert np.all(np.abs(pull) < 3), f"pulls too large: {pull}"
 
 
+@pytest.mark.slow
 def test_null_case_bayes_factor_favors_m0(null_case):
     bf = bayes_factor(null_case["m0"], null_case["m1"])
     assert bf["ln_bf"] < 0
@@ -164,6 +166,7 @@ def test_bayes_factor_labels_are_configurable():
     )
 
 
+@pytest.mark.slow
 def test_pbdot_bayes_factor_favors_the_quadratic_when_pbdot_is_present(null_case):
     """null_case's data carries a large quadratic term, so dropping PBDOT
     entirely must be strongly disfavoured."""
@@ -172,6 +175,7 @@ def test_pbdot_bayes_factor_favors_the_quadratic_when_pbdot_is_present(null_case
     assert "M0" in bf["interpretation"]
 
 
+@pytest.mark.slow
 def test_pbdot_bayes_factor_favors_the_linear_model_when_pbdot_is_absent(no_pbdot_case):
     bf = bayes_factor(
         no_pbdot_case["mlin"], no_pbdot_case["m0"], lower_label="MLIN", higher_label="M0"
@@ -180,6 +184,7 @@ def test_pbdot_bayes_factor_favors_the_linear_model_when_pbdot_is_absent(no_pbdo
     assert "MLIN" in bf["interpretation"]
 
 
+@pytest.mark.slow
 def test_linear_fit_recovers_its_own_beta_within_3sigma(no_pbdot_case):
     beta_16, beta_84 = np.percentile(no_pbdot_case["mlin"]["flat_samples"], [16, 84], axis=0)
     sigma = (beta_84 - beta_16) / 2
@@ -189,6 +194,7 @@ def test_linear_fit_recovers_its_own_beta_within_3sigma(no_pbdot_case):
     assert np.all(np.abs(pull) < 3), f"pulls too large: {pull}"
 
 
+@pytest.mark.slow
 def test_pbddot_case_recovers_beta3_within_3sigma(pbddot_case):
     beta_16, beta_84 = np.percentile(pbddot_case["m1"]["flat_samples"], [16, 84], axis=0)
     sigma = (beta_84 - beta_16) / 2
@@ -196,6 +202,7 @@ def test_pbddot_case_recovers_beta3_within_3sigma(pbddot_case):
     assert np.all(np.abs(pull) < 3), f"pulls too large: {pull}"
 
 
+@pytest.mark.slow
 def test_pbddot_case_bayes_factor_favors_m1(pbddot_case):
     bf = bayes_factor(pbddot_case["m0"], pbddot_case["m1"])
     assert bf["ln_bf"] > 0
@@ -243,6 +250,7 @@ def test_physical_from_beta_recovers_injected_pbdot_and_pbddot():
     assert physical["PBDDOT"] == pytest.approx(pbdot * 0 + pbddot * 365.25, rel=2e-3)
 
 
+@pytest.mark.slow
 def test_laplace_cross_check_agrees_with_seed_scatter(null_case):
     m0 = null_case["m0"]
     baseline_days = null_case["baseline_days"]
@@ -256,6 +264,7 @@ def test_laplace_cross_check_agrees_with_seed_scatter(null_case):
     assert abs(laplace - m0["log_evidence"]) < 5.0
 
 
+@pytest.mark.slow
 def test_plot_mcmc_comparison_smoke(null_case, tmp_path):
     fname = str(tmp_path / "comparison.jpg")
     plot_mcmc_comparison(
@@ -681,12 +690,14 @@ def flat_run(tmp_path_factory):
     return _run_decay(tmp_path_factory.mktemp("flat"), seed=SEED + 3)
 
 
+@pytest.mark.slow
 def test_injected_pbdot_is_recovered(strong_pbdot_run):
     """Guards the whole chain of unit conversions between the .ecsv files and
     the reported PBDOT, not just the summary formatting."""
     assert strong_pbdot_run["M0"]["PBDOT"] == pytest.approx(3e-8, rel=1e-2)
 
 
+@pytest.mark.slow
 def test_detected_pbdot_is_quoted_as_a_measurement(strong_pbdot_run):
     m0 = strong_pbdot_run["M0"]
     assert m0["PBDOT_detected"] is True
@@ -695,6 +706,7 @@ def test_detected_pbdot_is_quoted_as_a_measurement(strong_pbdot_run):
     assert m0["PBDOT_significance_sigma"] > 10
 
 
+@pytest.mark.slow
 def test_absent_pbddot_is_quoted_as_a_limit(strong_pbdot_run):
     m1 = strong_pbdot_run["M1"]
     assert m1["PBDDOT_detected"] is False
@@ -704,6 +716,7 @@ def test_absent_pbddot_is_quoted_as_a_limit(strong_pbdot_run):
     assert "1/yr" in m1["PBDDOT_summary"]
 
 
+@pytest.mark.slow
 def test_both_derivatives_are_limits_when_the_data_is_flat(flat_run):
     assert flat_run["M0"]["PBDOT_detected"] is False
     assert flat_run["M1"]["PBDDOT_detected"] is False
@@ -711,12 +724,14 @@ def test_both_derivatives_are_limits_when_the_data_is_flat(flat_run):
     assert np.isfinite(flat_run["M1"]["PBDDOT_upper_limit"])
 
 
+@pytest.mark.slow
 def test_limit_brackets_the_injected_zero(flat_run):
     """A limit that did not contain the truth would be a wrong limit."""
     assert flat_run["M0"]["PBDOT_2sigma_lo"] < 0 < flat_run["M0"]["PBDOT_2sigma_hi"]
     assert flat_run["M1"]["PBDDOT_2sigma_lo"] < 0 < flat_run["M1"]["PBDDOT_2sigma_hi"]
 
 
+@pytest.mark.slow
 def test_intervals_are_properly_nested(flat_run):
     for model, name in (("M0", "PBDOT"), ("M1", "PBDDOT")):
         block = flat_run[model]
@@ -730,6 +745,7 @@ def test_intervals_are_properly_nested(flat_run):
         )
 
 
+@pytest.mark.slow
 def test_three_sigma_limit_is_reported_alongside_the_headline_one(flat_run):
     """A three-sigma bound is what a non-detection is often quoted as."""
     for model, name in (("M0", "PBDOT"), ("M1", "PBDDOT")):
@@ -771,6 +787,7 @@ def test_detection_threshold_is_honoured():
     assert strict["PBDOT_detection_ln_bf"] == 1e9
 
 
+@pytest.mark.slow
 def test_results_json_carries_the_limits(strong_pbdot_run, strong_pbdot_dir):
     """The summaries have to survive the trip through json.dump."""
     with open(os.path.join(str(strong_pbdot_dir), "decay_results.json")) as fobj:
@@ -781,6 +798,7 @@ def test_results_json_carries_the_limits(strong_pbdot_run, strong_pbdot_dir):
     assert "bayes_factor_pbdot" in stored
 
 
+@pytest.mark.slow
 def test_parfile_is_referenced_to_the_tasc_nearest_the_reference_epoch(tmp_path):
     """A --reference-epoch 0.4 orbits past a node must give a .par whose TASC and
     PB are the true ones *at the nearest node*, where PINT counts PB from; fitting
@@ -904,6 +922,7 @@ def test_a_cut_leaving_too_few_epochs_is_refused(tmp_path):
         prune_large_errors(epochs, max_tasc_error=100.0)
 
 
+@pytest.mark.slow
 def test_pruning_is_reported_in_the_results_json(strong_pbdot_run, strong_pbdot_dir):
     """An end-to-end run records which epochs it dropped and why, so a pruned
     result documents its own cut."""

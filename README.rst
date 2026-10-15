@@ -26,6 +26,20 @@ documentation, so they cannot drift out of step with the code::
 
     tox -e py311-test
 
+Tests that take several seconds or more each — end-to-end fits, sampler runs —
+are marked ``@pytest.mark.slow`` and skipped by default, which keeps the run
+above to about a minute. Add ``--run-slow`` to include them, or select only
+them with ``-m slow``::
+
+    tox -e py311-test -- --run-slow
+    tox -e py311-test -- -m slow --run-slow
+
+CI runs the slow tests in two jobs of their own, in parallel with the fast
+ones, split with ``-k orbital_decay`` and ``-k 'not orbital_decay'``. Mark a new
+test slow when it takes more than a few seconds; if it reads a module-level
+fixture that other slow tests share, mark those together so that one job builds
+the fixture once.
+
 Build the HTML documentation. Warnings are treated as errors, so a malformed
 docstring or a broken cross-reference fails the build rather than quietly
 producing degraded pages. The result lands in ``docs/_build/html``::

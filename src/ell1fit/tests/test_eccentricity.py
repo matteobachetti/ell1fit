@@ -124,6 +124,7 @@ def ell1_fit(tmp_path_factory):
     return _fit(tmp_path_factory.mktemp("ell1"), exact_kepler=False)
 
 
+@pytest.mark.slow
 def test_eps_recovered_from_an_exact_keplerian_orbit(kepler_fit):
     """``EPS1``/``EPS2`` must come back at ``e sin(omega)``/``e cos(omega)``.
 
@@ -141,6 +142,7 @@ def test_eps_recovered_from_an_exact_keplerian_orbit(kepler_fit):
         )
 
 
+@pytest.mark.slow
 def test_ecc_and_om_recovered_from_an_exact_keplerian_orbit(kepler_fit):
     """The same statement in the Blandford--Teukolsky variables.
 
@@ -168,6 +170,7 @@ def test_ecc_and_om_recovered_from_an_exact_keplerian_orbit(kepler_fit):
     )
 
 
+@pytest.mark.slow
 def test_ell1_and_exact_orbits_agree_at_this_eccentricity(kepler_fit, ell1_fit):
     """Paired check that the truncation is negligible where it is claimed to be.
 
@@ -191,6 +194,7 @@ def test_ell1_and_exact_orbits_agree_at_this_eccentricity(kepler_fit, ell1_fit):
         )
 
 
+@pytest.mark.slow
 def test_exact_and_expanded_generators_differ_at_all(kepler_fit, ell1_fit):
     """Guard against the paired test above passing for the wrong reason.
 

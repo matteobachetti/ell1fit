@@ -39,6 +39,7 @@ class TestExecution:
         cls.event_files = sorted(glob.glob(os.path.join(datadir, "events[01].nc")))
         cls.param_files = sorted(glob.glob(os.path.join(datadir, "events[01].par")))
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("likelihood", ["PC", "Rayleigh"])
     def test_ell1fit_and_ell1par(self, likelihood):
         cmdlines = (
@@ -97,6 +98,7 @@ class TestExecution:
                     continue
                 raise AssertionError(f"Comparison failed: {line}")
 
+    @pytest.mark.slow
     def test_ell1fit_minimize_first(self):
         cmdline = (
             self.event_files

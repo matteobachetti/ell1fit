@@ -164,6 +164,7 @@ def test_injected_signal_is_detectable_at_the_truth(rich_dataset):
     assert np.all(at_truth > 4 * wrong_tasc), f"{at_truth} vs {wrong_tasc}"
 
 
+@pytest.mark.slow
 def test_pipeline_recovers_injected_solution(dataset, tmp_path):
     """The fit must pull back to the truth from a deliberately wrong parfile."""
     solution = dataset["solution"]
@@ -321,6 +322,7 @@ def a1dot_dataset(tmp_path_factory):
     )
 
 
+@pytest.mark.slow
 def test_pipeline_recovers_injected_a1dot(a1dot_dataset, tmp_path):
     """``-P F0,A1,A1DOT`` must measure an injected orbital-size drift.
 
